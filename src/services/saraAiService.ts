@@ -309,6 +309,115 @@ export interface StreamBuildCallbacks {
   onReplyProgress?: (reply: string) => void;
 }
 
+async function postJsonWithFallback(
+  urls: string[],
+  payload: Record<string, unknown>,
+  headers: Record<string, string>,
+  defaultError: string
+): Promise<any> {
+  let lastError: Error | null = null;
+
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i];
+    const hasNext = i < urls.length - 1;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+      });
+
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('text/html')) {
+        lastError = new Error(`Endpoint ${url} devolveu HTML em vez de JSON.`);
+        if (hasNext) continue;
+        throw lastError;
+      }
+
+      if ((response.status === 404 || response.status === 405) && hasNext) {
+        lastError = new Error(`Endpoint ${url} indisponível (HTTP ${response.status}).`);
+        continue;
+      }
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const err = new Error(data.error || `${defaultError} (HTTP ${response.status})`);
+        if (hasNext && response.status >= 500) {
+          lastError = err;
+          continue;
+        }
+        throw err;
+      }
+
+      return data;
+    } catch (err: any) {
+      lastError = err instanceof Error ? err : new Error(defaultError);
+      if (!hasNext) throw lastError;
+    }
+  }
+
+  throw lastError || new Error(defaultError);
+}
+
+function buildResultFromJsonFallback(
+  data: any,
+  customKey: string,
+  callbacks?: StreamBuildCallbacks
+): SaraBuilderResult {
+  const files: ProjectFiles | undefined =
+    data?.files && typeof data.files === 'object' && Object.keys(data.files).length > 0
+      ? data.files
+      : undefined;
+  const hasFiles = Boolean(files);
+  const modelUsed = data?.modelUsed || 'gemini-4-hydrogen';
+
+  const meta: StreamMeta = {
+    mode: hasFiles ? 'builder' : data?.mode === 'conversation' ? 'conversation' : 'builder',
+    projectName: data?.projectName,
+    projectType: data?.projectType,
+    plan: data?.planSentence || data?.plan || 'Construção concluída via API.',
+    steps: Array.isArray(data?.steps) ? data.steps : undefined,
+    nextStep: data?.nextStep,
+    missingFeatures: Array.isArray(data?.missingFeatures) ? data.missingFeatures : undefined,
+    suggestion: data?.proactiveSuggestion,
+  };
+
+  callbacks?.onMeta?.(meta, modelUsed);
+
+  if (files) {
+    callbacks?.onFileProgress?.(files, undefined, Object.keys(files));
+  }
+
+  const reply =
+    data?.reply ||
+    (hasFiles
+      ? `Pronto, Eletro-Jr! Construí ${Object.keys(files!).length} ficheiro(s) completo(s) para o teu projeto.`
+      : 'Entendido, Eletro-Jr!');
+  callbacks?.onReplyProgress?.(reply);
+
+  return {
+    mode: hasFiles ? 'builder' : data?.mode === 'conversation' ? 'conversation' : 'builder',
+    reply,
+    updateFiles: Boolean(hasFiles || (data?.updateFiles && data?.files)),
+    files,
+    projectName: data?.projectName,
+    projectType: data?.projectType,
+    planSentence: meta.plan,
+    nextStep: data?.nextStep,
+    missingFeatures: meta.missingFeatures,
+    proactiveSuggestion: data?.proactiveSuggestion,
+    assumedNotes: Array.isArray(data?.assumedNotes) ? data.assumedNotes : [],
+    engineLabel: `${modelUsed}${customKey ? ' + TXT' : ''}`,
+    modelUsed,
+    codeBlocks: files ? filesToCodeBlocks(files) : undefined,
+    steps: (meta.steps || []).map((label, idx) => ({
+      id: idx + 1,
+      label,
+      status: 'done',
+    })),
+  };
+}
+
 export async function runSaraStream(params: {
   prompt: string;
   files: ProjectFiles;
@@ -341,11 +450,23 @@ export async function runSaraStream(params: {
     .filter((a) => typeof a.content === 'string')
     .map((a) => ({ name: a.name, content: a.content! }));
 
+  const requestPayload = {
+    prompt,
+    files,
+    consoleLogs: consoleLogs.slice(-15),
+    history: history.slice(-10).map((m) => ({ sender: m.sender, text: m.text })),
+    imageBase64: image?.data,
+    imageMimeType: image?.mimeType,
+    attachedFiles: textAttachments,
+    agentMode,
+    pastProjects,
+    projectState,
+  };
+
   if (isPureConversationIntent(prompt, Boolean(image), textAttachments.length > 0)) {
-    const saraRes = await fetch('/api/sara', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
+    const saraData = await postJsonWithFallback(
+      ['/api/sara', '/api/build'],
+      {
         prompt,
         files,
         consoleLogs: consoleLogs.slice(-6),
@@ -354,13 +475,11 @@ export async function runSaraStream(params: {
         mimeType: image?.mimeType,
         agentMode,
         pastProjects,
-      }),
-    });
-
-    const saraData = await saraRes.json().catch(() => ({}));
-    if (!saraRes.ok) {
-      throw new Error(saraData.error || `Erro HTTP ${saraRes.status} ao contactar a Sara.`);
-    }
+        forceBuilderMode: false,
+      },
+      headers,
+      'Erro ao contactar a Sara'
+    );
 
     return {
       mode: 'conversation',
@@ -371,25 +490,36 @@ export async function runSaraStream(params: {
     };
   }
 
-  const response = await fetch('/api/builder/stream', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      prompt,
-      files,
-      consoleLogs: consoleLogs.slice(-15),
-      history: history.slice(-10).map((m) => ({ sender: m.sender, text: m.text })),
-      imageBase64: image?.data,
-      imageMimeType: image?.mimeType,
-      attachedFiles: textAttachments,
-      agentMode,
-      pastProjects,
-      projectState,
-    }),
-  });
+  let response: Response | null = null;
+  let shouldFallbackToBuild = false;
 
-  if (!response.ok || !response.body) {
-    throw new Error(`Erro HTTP ${response.status} ao iniciar construção em streaming.`);
+  try {
+    response = await fetch('/api/build-stream', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(requestPayload),
+    });
+
+    const contentType = response.headers.get('content-type') || '';
+    if (
+      !response.ok ||
+      !response.body ||
+      contentType.includes('text/html')
+    ) {
+      shouldFallbackToBuild = true;
+    }
+  } catch {
+    shouldFallbackToBuild = true;
+  }
+
+  if (shouldFallbackToBuild || !response || !response.body) {
+    const fallbackData = await postJsonWithFallback(
+      ['/api/build', '/api/builder/generate'],
+      { ...requestPayload, forceBuilderMode: true },
+      headers,
+      'Erro ao construir projeto na API'
+    );
+    return buildResultFromJsonFallback(fallbackData, customKey, callbacks);
   }
 
   const reader = response.body.getReader();
@@ -398,6 +528,7 @@ export async function runSaraStream(params: {
   let rawModelText = '';
   let modelUsed = 'gemini-4-hydrogen';
   let metaSent = false;
+  let streamErroredMessage = '';
   let lastParsed: ReturnType<typeof parseStreamBuffer> = {
     meta: null,
     files: {},
@@ -429,7 +560,7 @@ export async function runSaraStream(params: {
       if (evt.type === 'status' && evt.model) {
         modelUsed = evt.model;
       } else if (evt.type === 'error') {
-        throw new Error(evt.error || 'Erro no streaming da IA.');
+        streamErroredMessage = evt.error || 'Erro no streaming da IA.';
       } else if (evt.type === 'chunk' && evt.text) {
         if (evt.model) modelUsed = evt.model;
         rawModelText += evt.text;
@@ -452,6 +583,21 @@ export async function runSaraStream(params: {
           callbacks?.onReplyProgress?.(lastParsed.reply);
         }
       }
+    }
+  }
+
+  // Se o stream terminou sem texto útil (ou falhou antes de entregar código), faz fallback automático para /api/build
+  if (!rawModelText.trim()) {
+    try {
+      const fallbackData = await postJsonWithFallback(
+        ['/api/build', '/api/builder/generate'],
+        { ...requestPayload, forceBuilderMode: true },
+        headers,
+        streamErroredMessage || 'Erro ao construir projeto na API'
+      );
+      return buildResultFromJsonFallback(fallbackData, customKey, callbacks);
+    } catch (fallbackErr: any) {
+      throw new Error(streamErroredMessage || fallbackErr?.message || 'Erro no streaming da IA.');
     }
   }
 
@@ -500,10 +646,9 @@ export async function askSaraBuilderStep(params: {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (customKey) headers['x-gemini-api-key'] = customKey;
 
-  const response = await fetch('/api/builder/generate', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
+  const data = await postJsonWithFallback(
+    ['/api/build', '/api/builder/generate'],
+    {
       prompt,
       files,
       consoleLogs: consoleLogs.slice(-12),
@@ -512,13 +657,10 @@ export async function askSaraBuilderStep(params: {
       imageMimeType: image?.mimeType,
       forceBuilderMode: true,
       projectState,
-    }),
-  });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || `Erro HTTP ${response.status}`);
-  }
+    },
+    headers,
+    'Erro ao executar etapa'
+  );
 
   return {
     mode: 'builder',
@@ -550,18 +692,12 @@ export async function planAutonomousMission(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (customKey) headers['x-gemini-api-key'] = customKey;
 
-  const response = await fetch('/api/mission/plan', {
-    method: 'POST',
+  return postJsonWithFallback(
+    ['/api/mission-plan', '/api/mission/plan'],
+    { goal, files, mode, pastProjects, projectState },
     headers,
-    body: JSON.stringify({ goal, files, mode, pastProjects, projectState }),
-  });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || 'Erro ao planear etapas do projeto.');
-  }
-
-  return data;
+    'Erro ao planear etapas do projeto.'
+  );
 }
 
 export async function runSaraFinalTest(params: {
@@ -579,20 +715,14 @@ export async function runSaraFinalTest(params: {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (customKey) headers['x-gemini-api-key'] = customKey;
 
-  const response = await fetch('/api/sara/final-test', {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
+  return postJsonWithFallback(
+    ['/api/final-test', '/api/sara/final-test'],
+    {
       goal: params.goal,
       files: params.files,
       consoleLogs: params.consoleLogs.slice(-15),
-    }),
-  });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || 'Erro no teste final.');
-  }
-
-  return data;
+    },
+    headers,
+    'Erro no teste final.'
+  );
 }
