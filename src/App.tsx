@@ -41,14 +41,25 @@ import {
 import { buildStandaloneHtml, downloadProjectZip, importProjectZip } from './utils/zipService';
 import { getSavedGitHubToken, pushProjectToGitHub } from './utils/githubService';
 import {
+  adjustVoiceSpeed,
+  getBuildAcceptanceSpeech,
+  getContinuationSpeech,
+  getModeSwitchSpeech,
   parseVoiceCommand,
   playCompletionChime,
   setSaraSilenced,
   setSpeakingStateListener,
   speakAsSara,
+  speakAsSaraAndWait,
   startContinuousVoiceRecognition,
   stopSaraSpeech,
+  type VoiceCommandAction,
 } from './utils/voiceService';
+import {
+  isProjectBlank,
+  loadActiveProjectState,
+  updateProjectStateFromRecord,
+} from './utils/projectMemory';
 import { TopBar } from './components/TopBar';
 import { SaraChatPanel } from './components/SaraChatPanel';
 import { LivePreviewPanel } from './components/LivePreviewPanel';
@@ -56,6 +67,7 @@ import { EditorConsolePanel } from './components/EditorConsolePanel';
 import { ProjectsModal } from './components/ProjectsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { DeployModal } from './components/DeployModal';
+import { PwaInstallBar } from './components/PwaInstallBar';
 
 const PROJECTS_STORAGE_KEY = 'sara_biulder_projects_v2';
 const ACTIVE_PROJECT_KEY = 'sara_biulder_active_id_v2';
@@ -184,8 +196,14 @@ export default function App() {
   });
 
   const currentProject = projects.find((p) => p.id === currentProjectId) || projects[0];
-  const pastProjectNames = useMemo(
-    () => projects.map((p) => p.name).filter(Boolean).slice(0, 8),
+  // Não envia projetos antigos por padrão (evita contaminação de KG Services / projetos anteriores)
+  const shouldRecallPastProjects = (promptText: string) =>
+    /\b(lembra|dados\s+da\s+kg|kg\s*services|usa\s+os\s+dados)\b/i.test(promptText);
+  const getRequestedPastProjects = useCallback(
+    (promptText: string) =>
+      shouldRecallPastProjects(promptText)
+        ? projects.map((p) => p.name).filter(Boolean).slice(0, 8)
+        : [],
     [projects]
   );
 
@@ -340,6 +358,13 @@ export default function App() {
     }
   }, [projects, currentProjectId]);
 
+  // Mantém sara_estado_projeto sempre atualizado com o projeto ativo
+  useEffect(() => {
+    if (currentProject) {
+      updateProjectStateFromRecord(currentProject);
+    }
+  }, [currentProject]);
+
   useEffect(() => {
     try {
       localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-50)));
@@ -411,10 +436,17 @@ export default function App() {
             nextVersions = [snap, ...nextVersions].slice(0, 15);
           }
 
+          const resolvedProjectName =
+            merge && !isProjectBlank(proj.files) && proj.name !== 'Novo Projeto'
+              ? proj.name
+              : newName || proj.name;
+          const resolvedProjectType =
+            merge && !isProjectBlank(proj.files) ? proj.type : newType || proj.type;
+
           return {
             ...proj,
-            name: newName || proj.name,
-            type: newType || proj.type,
+            name: resolvedProjectName,
+            type: resolvedProjectType,
             files: nextFiles,
             versions: nextVersions,
             updatedAt: new Date().toISOString(),
@@ -485,6 +517,11 @@ export default function App() {
     }
   }, [firebaseUser?.uid, addConsoleLog, showToast]);
 
+  const handleDownloadZip = useCallback(async () => {
+    await downloadProjectZip(currentProject.files, currentProject.name);
+    showToast('ZIP descarregado!');
+  }, [currentProject.files, currentProject.name, showToast]);
+
   // Atalhos globais de teclado: Ctrl+S salvar, Ctrl+P apresentação, Ctrl+E editor fullscreen, Esc sair
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -554,10 +591,10 @@ export default function App() {
         setMessages((prev) => [...prev, userMsg]);
       }
 
-      // Resposta espontânea imediata antes de começar
+      // Resposta espontânea ANTES de começar a construir (fala e espera terminar antes do plano)
       if (options?.contextCue === 'sleep') {
         const sleepReply =
-          'Boa, Eletro-Jr! Vou ativar o modo automático e criar tudo sozinha. Vai descansar tranquilo, quando acordares está pronto.';
+          'Modo automático ativado, Eletro-Jr! Vou construir tudo sozinha etapa por etapa. Vai descansar tranquilo, amanhã está tudo pronto.';
         setMessages((prev) => [
           ...prev,
           {
@@ -567,7 +604,10 @@ export default function App() {
             timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
-        speakAsSara(sleepReply, voiceEnabledRef.current, { level: 'short' });
+        await speakAsSaraAndWait(sleepReply, voiceEnabledRef.current, {
+          level: 'medium',
+          forceSpeak: true,
+        });
       } else if (options?.contextCue === 'leave') {
         const leaveReply =
           'Pode sair tranquilo, Eletro-Jr! Já ativei o automático e vou criar tudo etapa por etapa.';
@@ -580,9 +620,16 @@ export default function App() {
             timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
-        speakAsSara(leaveReply, voiceEnabledRef.current, { level: 'short' });
+        await speakAsSaraAndWait(leaveReply, voiceEnabledRef.current, {
+          level: 'medium',
+          forceSpeak: true,
+        });
       } else if (!options?.resumedMission) {
-        speakAsSara('Ok Eletro-Jr, já estou a criar.', voiceEnabledRef.current, { level: 'short' });
+        const acceptanceSpeech = getBuildAcceptanceSpeech(cleanGoal, 'automatic');
+        await speakAsSaraAndWait(acceptanceSpeech, voiceEnabledRef.current, {
+          level: 'medium',
+          forceSpeak: true,
+        });
       }
 
       setIsThinking(true);
@@ -603,11 +650,13 @@ export default function App() {
         const startedAtIso = options?.resumedMission?.startedAt || new Date().toISOString();
 
         if (!options?.resumedMission) {
+          const activeState = loadActiveProjectState(currentProject.id);
           const plan = await planAutonomousMission(
             cleanGoal,
             currentProject.files,
             'automatic',
-            pastProjectNames
+            getRequestedPastProjects(cleanGoal),
+            activeState
           );
           plannedTasks = (plan.tasks || []).map((t, idx) => ({
             id: idx + 1,
@@ -623,6 +672,13 @@ export default function App() {
           if (plannedTasks.length === 0) {
             throw new Error('Não foi possível planear as etapas deste projeto.');
           }
+
+          updateProjectStateFromRecord(currentProject, {
+            goal: cleanGoal,
+            lastStepDone: 'Planeamento de arquitetura definido',
+            nextStep: plannedTasks[0]?.title || 'Executar Etapa 1',
+            missingFeatures: plannedTasks.map((t) => t.title),
+          });
 
           setLiveBuild((prev) => ({
             ...prev,
@@ -707,6 +763,7 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
               files: workingFiles,
               consoleLogs: consoleLogs.slice(-8),
               history: messages.slice(-6),
+              projectState: loadActiveProjectState(currentProject.id),
             });
 
             if (res.assumedNotes?.length) {
@@ -715,13 +772,15 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
 
             if (res.updateFiles && res.files) {
               workingFiles = { ...workingFiles, ...res.files };
-              if (res.projectName) resolvedName = res.projectName;
-              if (res.projectType) resolvedType = res.projectType;
+              const shouldKeepExistingName =
+                !isProjectBlank(currentProject.files) && resolvedName !== 'Novo Projeto';
+              if (res.projectName && !shouldKeepExistingName) resolvedName = res.projectName;
+              if (res.projectType && !shouldKeepExistingName) resolvedType = res.projectType;
               replaceCurrentProjectFiles(
                 workingFiles,
                 resolvedName,
                 resolvedType,
-                false,
+                true,
                 `Etapa ${i + 1}: ${task.title}`
               );
               const firstKey = Object.keys(res.files)[0];
@@ -771,6 +830,17 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
               level: 'short',
             });
           }
+
+          const remainingTitles = plannedTasks.slice(i + 1).map((t) => t.title);
+          updateProjectStateFromRecord(
+            { ...currentProject, name: resolvedName, type: resolvedType, files: workingFiles },
+            {
+              goal: cleanGoal,
+              lastStepDone: `Etapa ${i + 1}/${plannedTasks.length}: ${task.title}`,
+              nextStep: remainingTitles[0] || 'Teste final e publicação',
+              missingFeatures: remainingTitles,
+            }
+          );
 
           setMission((prev) => ({
             ...prev,
@@ -882,6 +952,16 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
         setResumableMission(null);
         localStorage.removeItem(SAVED_MISSION_KEY);
 
+        updateProjectStateFromRecord(
+          { ...currentProject, name: resolvedName, type: resolvedType, files: workingFiles },
+          {
+            goal: cleanGoal,
+            lastStepDone: `Missão concluída (${plannedTasks.length} etapas)`,
+            nextStep: 'Pronto para continuar com novas funcionalidades a pedido do Eletro-Jr',
+            missingFeatures: [],
+          }
+        );
+
         setLiveBuild({
           isBuilding: false,
           phase: 'idle',
@@ -914,13 +994,17 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
           },
         ]);
 
+        if (Object.keys(workingFiles).length >= 4) {
+          setRightTab('files');
+        }
+
         playCompletionChime();
         speakAsSara(
           finalReport.sleptOvernight
             ? `Eletro-Jr, terminei enquanto dormias! O projeto ${resolvedName} já está pronto.`
             : errorsFixed > 0
-            ? `Pronto, Eletro-Jr, terminei ${plannedTasks.length} etapas e corrigi ${errorsFixed} erros.`
-            : 'Pronto, Eletro-Jr, terminei, está tudo testado.',
+            ? `Tudo fechado, Eletro-Jr! Concluí ${plannedTasks.length} etapas e corrigi ${errorsFixed} erros.`
+            : `Tudo pronto no ${resolvedName}, Eletro-Jr, e já está testado.`,
           voiceEnabledRef.current,
           { level: 'short' }
         );
@@ -955,7 +1039,7 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
     },
     [
       currentProject,
-      pastProjectNames,
+      getRequestedPastProjects,
       consoleLogs,
       messages,
       firebaseUser?.uid,
@@ -998,16 +1082,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           files: currentProject.files,
           consoleLogs: consoleLogs.slice(-10),
           history: messages.slice(-8),
+          projectState: loadActiveProjectState(currentProject.id),
         });
 
         let updatedFiles = { ...currentProject.files };
         if (res.updateFiles && res.files) {
           updatedFiles = { ...updatedFiles, ...res.files };
+          const shouldKeepName =
+            !isProjectBlank(currentProject.files) && currentProject.name !== 'Novo Projeto';
           replaceCurrentProjectFiles(
             updatedFiles,
-            res.projectName,
-            res.projectType,
-            false,
+            shouldKeepName ? undefined : res.projectName,
+            shouldKeepName ? undefined : res.projectType,
+            true,
             `Manual Etapa ${idx + 1}: ${step.title}`
           );
           const firstKey = Object.keys(res.files)[0];
@@ -1037,10 +1124,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             files: updatedFiles,
             consoleLogs: consoleLogs.slice(-8),
             history: messages.slice(-6),
+            projectState: loadActiveProjectState(currentProject.id),
           });
           if (fixRes.updateFiles && fixRes.files) {
             updatedFiles = { ...updatedFiles, ...fixRes.files };
-            replaceCurrentProjectFiles(updatedFiles, undefined, undefined, false, 'Autocorreção manual');
+            replaceCurrentProjectFiles(updatedFiles, undefined, undefined, true, 'Autocorreção manual');
             setRefreshSeed((s) => s + 1);
             setErrorsFixedCount((c) => c + 1);
           }
@@ -1058,6 +1146,17 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         const nextIdx = idx + 1;
         const hasNext = nextIdx < proposal.stepsQueue.length;
         const nextTask = hasNext ? proposal.stepsQueue[nextIdx] : null;
+        const remainingManualTitles = proposal.stepsQueue.slice(nextIdx).map((s) => s.title);
+
+        updateProjectStateFromRecord(
+          { ...currentProject, files: updatedFiles },
+          {
+            goal: proposal.goal,
+            lastStepDone: `Etapa ${idx + 1}/${proposal.totalEstimatedSteps}: ${step.title}`,
+            nextStep: nextTask?.title || 'Sistema concluído',
+            missingFeatures: remainingManualTitles,
+          }
+        );
 
         if (hasNext && nextTask) {
           setManualProposal({
@@ -1128,9 +1227,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           setMission((prev) => ({ ...prev, active: false, paused: true }));
         }
         setAgentMode('manual');
-        const msg =
-          spokenReason ||
-          'Perfeito, Eletro-Jr! Modo manual ativado. Estou aqui contigo, vamos fazer juntos passo a passo. O que começamos primeiro?';
+        const msg = spokenReason || getModeSwitchSpeech('manual');
         setMessages((prev) => [
           ...prev,
           {
@@ -1140,13 +1237,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
-        speakAsSara(msg, voiceEnabledRef.current, { level: 'short' });
+        speakAsSara(msg, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
         showToast('Modo Manual ativado');
       } else {
         setAgentMode('automatic');
-        const msg =
-          spokenReason ||
-          'Modo automático ativado, Eletro-Jr! Diz-me o que queres construir que eu faço tudo etapa por etapa sozinha.';
+        const msg = spokenReason || getModeSwitchSpeech('automatic');
         setMessages((prev) => [
           ...prev,
           {
@@ -1156,7 +1251,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
-        speakAsSara(msg, voiceEnabledRef.current, { level: 'short' });
+        speakAsSara(msg, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
         showToast('Modo Automático ativado');
       }
     },
@@ -1199,26 +1294,65 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     speakAsSara(msgText, true, { level: 'full', forceSpeak: true });
   }, []);
 
-  const handleSendMessage = useCallback(
-    async (text: string, image?: ConvertedImage | null, attachments?: AttachedFile[]) => {
-      const trimmed = text.trim();
-      if (!trimmed && !image && (!attachments || attachments.length === 0)) return;
+  // Ref para permitir comando "Sara, fixa erro" dentro de executePlatformCommand sem ciclo
+  const handleSendMessageRef = useRef<
+    ((text: string, image?: ConvertedImage | null, attachments?: AttachedFile[]) => Promise<void>) | null
+  >(null);
 
-      const cmd = parseVoiceCommand(trimmed);
+  const stopHandsFreeMic = useCallback(() => {
+    shouldKeepListeningRef.current = false;
+    stopMicRef.current?.();
+    stopMicRef.current = null;
+    setIsListening(false);
+  }, []);
 
-      // Calar Sara imediatamente (por texto ou voz)
+  const handleSaraFixError = useCallback(
+    (customError?: string) => {
+      const lastError =
+        customError ||
+        [...consoleLogs].reverse().find((l) => l.level === 'error')?.message ||
+        [...consoleLogs].reverse().find((l) => l.level === 'command')?.message ||
+        'Verifica o código atual e corrige quaisquer erros ou melhorias pendentes.';
+
+      handleSendMessageRef.current?.(
+        `Sara, corrige este erro do console no projeto agora com código completo: "${lastError}"`
+      );
+    },
+    [consoleLogs]
+  );
+
+  // Controlo total da plataforma por Voz ou Chat
+  const executePlatformCommand = useCallback(
+    async (cmd: VoiceCommandAction, rawText: string): Promise<boolean> => {
+      // 1. Calar Sara imediatamente
       if (cmd.type === 'silence_sara') {
         handleForceSilenceSara();
-        return;
+        return true;
       }
 
-      // Se Eletro-Jr chamar a Sara diretamente, reativa a voz caso estivesse calada
-      if (/^sara\b/i.test(trimmed)) {
+      // Reativa voz automaticamente quando Eletro-Jr chama a Sara
+      if (/^sara\b/i.test(rawText.trim())) {
         setSaraSilenced(false);
         setIsSaraSilencedState(false);
       }
 
-      // Alterar nível de voz por comando ("Sara, explica mais", "Sara, lê tudo", "Modo curto")
+      // 2. Velocidade da voz
+      if (cmd.type === 'voice_speed') {
+        setSaraSilenced(false);
+        setIsSaraSilencedState(false);
+        const newRate = adjustVoiceSpeed(cmd.direction);
+        const msg =
+          cmd.direction === 'faster'
+            ? `Vou falar mais rápido, Eletro-Jr (${newRate}x).`
+            : cmd.direction === 'slower'
+            ? `Vou falar mais devagar, Eletro-Jr (${newRate}x).`
+            : 'Voltei à velocidade normal, Eletro-Jr.';
+        showToast(msg);
+        speakAsSara(msg, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      // 3. Nível de voz
       if (cmd.type === 'voice_level') {
         setSaraSilenced(false);
         setIsSaraSilencedState(false);
@@ -1231,32 +1365,287 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             : 'Modo curto ativo, Eletro-Jr.';
         showToast(confirmMsg);
         speakAsSara(confirmMsg, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
-        return;
+        return true;
       }
 
-      // Conversa rápida em segundo plano (NÃO polui o chat principal nem chama IA pesada)
+      // 4. Conversa rápida espontânea (mostra no chat sem chamar IA pesada e fala sem repetir)
       if (cmd.type === 'background_smalltalk') {
         setSaraSilenced(false);
         setIsSaraSilencedState(false);
+        const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        setMessages((prev) => [
+          ...prev,
+          { id: `usr_${Date.now()}`, sender: 'user', text: rawText, timestamp: nowTime },
+          { id: `sara_${Date.now() + 1}`, sender: 'sara', text: cmd.reply, timestamp: nowTime },
+        ]);
         showToast(`Sara (voz): ${cmd.reply}`);
         speakAsSara(cmd.reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
-        return;
+        return true;
       }
 
+      // 5. Troca instantânea de modo (Manual <-> Automático)
       if (cmd.type === 'switch_manual') {
         handleSwitchMode('manual');
-        return;
+        return true;
       }
 
       if (cmd.type === 'switch_automatic') {
         if (cmd.goal) {
           await runAutonomousMission(cmd.goal, { contextCue: cmd.contextCue });
+        } else if (manualProposal.active && manualProposal.goal) {
+          const autoMsg = 'Entendido, Eletro-Júnior, vou fazer sozinha no automático.';
+          setAgentMode('automatic');
+          showToast('Modo Automático ativado');
+          await speakAsSaraAndWait(autoMsg, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          await runAutonomousMission(manualProposal.goal, { skipUserMsg: true });
         } else {
           handleSwitchMode('automatic');
         }
-        return;
+        return true;
       }
 
+      // 6. Continuar projeto exatamente de onde parou
+      if (cmd.type === 'continue_project') {
+        if (mission.paused && mission.tasks.length > 0) {
+          missionPausedRef.current = false;
+          setMission((prev) => ({ ...prev, paused: false }));
+          speakAsSara('Retomei o modo automático de onde parámos, Eletro-Jr.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return true;
+        }
+        if (resumableMission) {
+          const saved = resumableMission;
+          setResumableMission(null);
+          await runAutonomousMission(saved.goal, { resumedMission: saved, skipUserMsg: true });
+          return true;
+        }
+        if (agentModeRef.current === 'manual' && manualProposal.active) {
+          await executeManualApprovedStep(rawText, manualProposal);
+          return true;
+        }
+        const savedState = loadActiveProjectState(currentProject.id);
+        const resumePrompt = savedState
+          ? `Sara, continua o projeto "${savedState.projectName}" exatamente de onde parámos (última etapa concluída: ${savedState.lastStepDone}; próximo passo sugerido: ${savedState.nextStep}). Lê todos os ficheiros existentes, preserva tudo e implementa a próxima melhoria/etapa completa.`
+          : `Sara, lê todos os ficheiros do projeto "${currentProject.name}" e continua a partir do ponto atual adicionando a próxima funcionalidade real completa sem apagar o código existente.`;
+        await handleSendMessageRef.current?.(resumePrompt);
+        return true;
+      }
+
+      // 7. Controlo completo de ecrãs, editor, ficheiros, console, preview e ações
+      if (cmd.type === 'open_editor') {
+        setIsEditorFullscreen(false);
+        setRightTab('editor');
+        setMobileTab('code');
+        showToast('Editor aberto');
+        speakAsSara('Editor aberto, Eletro-Jr.', voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'open_editor_fullscreen') {
+        setRightTab('editor');
+        setMobileTab('code');
+        setIsEditorFullscreen(true);
+        showToast('Editor em tela cheia');
+        speakAsSara('Editor em tela cheia, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'open_files') {
+        setIsEditorFullscreen(false);
+        setRightTab('files');
+        setMobileTab('code');
+        showToast('Ficheiros abertos');
+        speakAsSara('Ficheiros do projeto abertos, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'close_editor_or_back') {
+        setIsEditorFullscreen(false);
+        setIsPresentationMode(false);
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setMobileTab('preview');
+        showToast('Voltei ao painel principal');
+        speakAsSara('Voltei ao painel principal, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'open_console') {
+        setIsEditorFullscreen(false);
+        setRightTab('console');
+        setMobileTab('console');
+        showToast('Console aberto');
+        speakAsSara('Console aberto, Eletro-Jr.', voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'show_preview') {
+        setIsEditorFullscreen(false);
+        setMobileTab('preview');
+        showToast('Preview aberto');
+        speakAsSara('Aqui está o preview, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'preview_mobile') {
+        setIsEditorFullscreen(false);
+        setPreviewDevice('mobile');
+        setMobileTab('preview');
+        showToast('Preview em Telemóvel');
+        speakAsSara('Preview em telemóvel ativo, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'preview_tablet') {
+        setIsEditorFullscreen(false);
+        setPreviewDevice('tablet');
+        setMobileTab('preview');
+        showToast('Preview em Tablet');
+        speakAsSara('Preview em tablet ativo, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'preview_desktop') {
+        setIsEditorFullscreen(false);
+        setPreviewDevice('desktop');
+        setMobileTab('preview');
+        showToast('Preview em PC');
+        speakAsSara('Preview em computador ativo, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'open_deploy') {
+        setShowDeployModal(true);
+        showToast('Painel de deploy aberto');
+        speakAsSara('Painel de deploy aberto, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'push_github') {
+        const ghToken = getSavedGitHubToken();
+        if (!ghToken) {
+          setShowDeployModal(true);
+          showToast('Configura o GitHub Token primeiro');
+          speakAsSara('Eletro-Jr, configura o teu GitHub Token primeiro.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return true;
+        }
+        try {
+          showToast('A enviar para o GitHub...');
+          const res = await pushProjectToGitHub({
+            projectName: currentProject.name,
+            files: currentProject.files,
+          });
+          addConsoleLog('success', `[GitHub Push] Enviado para ${res.repoUrl}`);
+          showToast(`Push concluído: ${res.repoUrl}`);
+          speakAsSara('Push para o GitHub concluído, Eletro-Jr.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        } catch (err: any) {
+          const msg = err?.message || 'Erro no push para o GitHub.';
+          addConsoleLog('error', msg);
+          showToast(msg);
+          speakAsSara('Deu um erro no push para o GitHub, Eletro-Jr.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        }
+        return true;
+      }
+
+      if (cmd.type === 'save_project') {
+        await handleSaveProjectToFirebase();
+        speakAsSara('Projeto salvo, Eletro-Jr.', voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'download_zip') {
+        await handleDownloadZip();
+        speakAsSara('ZIP descarregado, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'clear_chat') {
+        stopSaraSpeech();
+        setManualProposal(EMPTY_MANUAL_PROPOSAL);
+        setMessages([WELCOME_MESSAGE]);
+        showToast('Chat limpo');
+        speakAsSara('Chat limpo, Eletro-Jr.', voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'open_projects') {
+        setShowProjectsModal(true);
+        showToast('Projetos abertos');
+        speakAsSara('Lista de projetos aberta, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'open_settings') {
+        setShowSettingsModal(true);
+        showToast('Configurações abertas');
+        speakAsSara('Configurações abertas, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'stop_listening') {
+        stopHandsFreeMic();
+        showToast('Microfone desligado');
+        speakAsSara('Microfone desligado, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'fix_error') {
+        handleSaraFixError();
+        return true;
+      }
+
+      // 8. Consultas de progresso e relatório
       if (cmd.type === 'query_status') {
         const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
         let reply = '';
@@ -1267,11 +1656,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         } else if (manualProposal.active) {
           reply = `Estamos no Modo Manual na etapa ${manualProposal.currentStepIndex + 1} de ${manualProposal.totalEstimatedSteps}, Eletro-Jr.`;
         } else {
-          reply = `O projeto atual **${currentProject.name}** tem ${Object.keys(currentProject.files).length} ficheiro(s) prontos, Eletro-Jr.`;
+          const mem = loadActiveProjectState(currentProject.id);
+          reply = mem
+            ? `O projeto atual **${mem.projectName}** tem ${Object.keys(currentProject.files).length} ficheiro(s). Última etapa: ${mem.lastStepDone}. Próximo passo: ${mem.nextStep}.`
+            : `O projeto atual **${currentProject.name}** tem ${Object.keys(currentProject.files).length} ficheiro(s) prontos, Eletro-Jr.`;
         }
         setMessages((prev) => [
           ...prev,
-          { id: `usr_${Date.now()}`, sender: 'user', text: trimmed, timestamp: nowTime },
+          { id: `usr_${Date.now()}`, sender: 'user', text: rawText, timestamp: nowTime },
           { id: `sara_${Date.now() + 1}`, sender: 'sara', text: reply, timestamp: nowTime },
         ]);
         speakAsSara(reply, voiceEnabledRef.current, {
@@ -1279,7 +1671,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           isQuestionReply: true,
           forceSpeak: true,
         });
-        return;
+        return true;
       }
 
       if (cmd.type === 'query_report') {
@@ -1292,7 +1684,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           : 'Ainda não concluí nenhuma missão automática recente, Eletro-Jr. Podes ativar o modo automático quando quiseres.';
         setMessages((prev) => [
           ...prev,
-          { id: `usr_${Date.now()}`, sender: 'user', text: trimmed, timestamp: nowTime },
+          { id: `usr_${Date.now()}`, sender: 'user', text: rawText, timestamp: nowTime },
           { id: `sara_${Date.now() + 1}`, sender: 'sara', text: reply, timestamp: nowTime },
         ]);
         speakAsSara(
@@ -1302,11 +1694,80 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           voiceEnabledRef.current,
           { level: 'short', isQuestionReply: true, forceSpeak: true }
         );
+        return true;
+      }
+
+      return false;
+    },
+    [
+      handleForceSilenceSara,
+      showToast,
+      handleSwitchMode,
+      runAutonomousMission,
+      manualProposal,
+      mission,
+      resumableMission,
+      executeManualApprovedStep,
+      currentProject,
+      addConsoleLog,
+      handleSaveProjectToFirebase,
+      handleDownloadZip,
+      stopHandsFreeMic,
+      handleSaraFixError,
+      lastCompletedReport,
+    ]
+  );
+
+  const handleSendMessage = useCallback(
+    async (text: string, image?: ConvertedImage | null, attachments?: AttachedFile[]) => {
+      const trimmed = text.trim();
+      if (!trimmed && !image && (!attachments || attachments.length === 0)) return;
+
+      const cmd = parseVoiceCommand(trimmed);
+      if (cmd.type === 'start_listening') {
+        // Liga microfone manualmente apenas se pedido no chat
+        if (!shouldKeepListeningRef.current) {
+          shouldKeepListeningRef.current = true;
+          setIsListening(true);
+          stopMicRef.current = startContinuousVoiceRecognition({
+            shouldKeepListening: () => shouldKeepListeningRef.current,
+            onResult: (transcript) => {
+              const voiceCmd = parseVoiceCommand(transcript);
+              addConsoleLog('info', `Voz: "${transcript}"`);
+              executePlatformCommand(voiceCmd, transcript).then((handled) => {
+                if (!handled) {
+                  handleSendMessageRef.current?.(transcript);
+                }
+              });
+            },
+            onError: (errMsg) => {
+              addConsoleLog('warn', errMsg);
+              shouldKeepListeningRef.current = false;
+              setIsListening(false);
+            },
+            onEnd: () => {
+              if (!shouldKeepListeningRef.current) {
+                setIsListening(false);
+              }
+            },
+          });
+        }
+        showToast('Microfone contínuo ativado!');
+        speakAsSara('Microfone ligado, estou a ouvir, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         return;
       }
 
+      const handled = await executePlatformCommand(cmd, trimmed);
+      if (handled) return;
+
+      const hasExistingCode = !isProjectBlank(currentProject.files);
+      const activeProjectState = loadActiveProjectState(currentProject.id);
+
       // No MODO AUTOMÁTICO, um pedido de criação novo dispara automaticamente o pipeline autónomo
-      if (agentModeRef.current === 'automatic' && isNewBuildRequest(trimmed) && !image) {
+      if (agentModeRef.current === 'automatic' && isNewBuildRequest(trimmed) && !image && !hasExistingCode) {
         await runAutonomousMission(trimmed);
         return;
       }
@@ -1320,11 +1781,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
       const attachSummary = attachments?.length ? attachments.map((a) => a.name).join(', ') : undefined;
 
-      // No MODO MANUAL: quando Eletro-Jr pede para criar um sistema novo do zero (sem imagem e sem proposta ativa),
-      // Sara pensa, planeia etapas espontâneas, apresenta a Etapa 1 e ESPERA aprovação antes de avançar!
+      // No MODO MANUAL: só cria plano novo multi-etapas quando o projeto ainda está vazio (do zero).
+      // Se já existe código no projeto, continua e edita em cima do que já existe sem apagar nada!
       if (
         agentModeRef.current === 'manual' &&
         !manualProposal.active &&
+        !hasExistingCode &&
         isNewBuildRequest(trimmed) &&
         !image &&
         (!attachments || attachments.length === 0)
@@ -1346,7 +1808,20 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         });
 
         try {
-          const plan = await planAutonomousMission(trimmed, currentProject.files, 'manual', pastProjectNames);
+          // Fala aceitação e ideia ANTES de planear e avançar
+          await speakAsSaraAndWait(
+            getBuildAcceptanceSpeech(trimmed, 'manual'),
+            voiceEnabledRef.current,
+            { level: 'medium', forceSpeak: true }
+          );
+
+          const plan = await planAutonomousMission(
+            trimmed,
+            currentProject.files,
+            'manual',
+            getRequestedPastProjects(trimmed),
+            activeProjectState
+          );
           setIsThinking(false);
           setLiveBuild({
             isBuilding: false,
@@ -1368,6 +1843,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             });
 
             const first = queue[0];
+            updateProjectStateFromRecord(currentProject, {
+              goal: trimmed,
+              lastStepDone: 'Plano inicial proposto',
+              nextStep: first.title,
+              missingFeatures: queue.map((q) => q.title),
+            });
+
             const proposalText = `${plan.planSentence}\n\n**Etapa 1 de ${queue.length}:** **${first.title}** — ${first.description}.\n\nQueres algum ajuste nos dados ou aprovas que eu crie esta etapa agora, Eletro-Jr?`;
             setMessages((prev) => [
               ...prev,
@@ -1389,12 +1871,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             return;
           }
         } catch {
-          // cai para o stream normal se plan falhar
           setIsThinking(false);
         }
       }
 
-      // Fluxo padrão com streaming (A pensar... -> Plano 1 frase -> Etapa atual)
+      // Fluxo padrão com streaming (lê TODO o projeto atual + sara_estado_projeto e preserva ficheiros existentes!)
       const userMsg: ChatMessage = {
         id: `usr_${Date.now()}`,
         sender: 'user',
@@ -1418,8 +1899,15 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       salvarMensagemChatFirebase(userMsg, currentProject.id, firebaseUser?.uid);
 
-      if (isNewBuildRequest(trimmed)) {
-        speakAsSara('Ok Eletro-Jr, já estou a criar.', voiceEnabledRef.current, { level: 'short' });
+      // Fala aceitação e ideia ANTES de iniciar o stream de construção
+      if (isNewBuildRequest(trimmed) || hasExistingCode) {
+        const introSpeech = hasExistingCode
+          ? getContinuationSpeech(currentProject.name)
+          : getBuildAcceptanceSpeech(trimmed, agentModeRef.current);
+        await speakAsSaraAndWait(introSpeech, voiceEnabledRef.current, {
+          level: 'medium',
+          forceSpeak: true,
+        });
       }
 
       try {
@@ -1431,7 +1919,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           image,
           attachments,
           agentMode: agentModeRef.current,
-          pastProjects: pastProjectNames,
+          pastProjects: getRequestedPastProjects(trimmed),
+          projectState: activeProjectState,
           callbacks: {
             onMeta: (meta, modelUsed) => {
               if (meta.mode === 'conversation') {
@@ -1464,7 +1953,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               if (currentActive) {
                 setActiveFile(currentActive);
               }
-              replaceCurrentProjectFiles(streamedFiles, undefined, undefined, false);
+              // Preserva ficheiros antigos se já existe projeto ativo!
+              replaceCurrentProjectFiles(streamedFiles, undefined, undefined, hasExistingCode);
 
               setLiveBuild((prev) => ({
                 ...prev,
@@ -1491,21 +1981,45 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         });
 
         if (result.updateFiles && result.files) {
+          const keepName = hasExistingCode && currentProject.name !== 'Novo Projeto';
           replaceCurrentProjectFiles(
             result.files,
-            result.projectName,
-            result.projectType,
-            false,
+            keepName ? undefined : result.projectName,
+            keepName ? undefined : result.projectType,
+            hasExistingCode,
             `Alteração (${new Date().toLocaleTimeString('pt-PT', {
               hour: '2-digit',
               minute: '2-digit',
             })})`
           );
+
+          const mergedFiles = hasExistingCode
+            ? { ...currentProject.files, ...result.files }
+            : { ...result.files };
+          updateProjectStateFromRecord(
+            {
+              ...currentProject,
+              name: keepName ? currentProject.name : result.projectName || currentProject.name,
+              type: keepName ? currentProject.type : result.projectType || currentProject.type,
+              files: mergedFiles,
+            },
+            {
+              goal: activeProjectState?.goal || trimmed,
+              lastStepDone: result.planSentence || trimmed.slice(0, 100),
+              nextStep: result.nextStep || result.proactiveSuggestion || 'Testar e expandir',
+              missingFeatures: result.missingFeatures || [],
+            }
+          );
+
           const keys = Object.keys(result.files);
           if (keys.includes('index.html')) {
             setActiveFile('index.html');
           } else if (keys[0]) {
             setActiveFile(keys[0]);
+          }
+          // Mostra a árvore completa com todas as pastas abertas ao construir projeto multi-pastas
+          if (!hasExistingCode && keys.length >= 4) {
+            setRightTab('files');
           }
           setRefreshSeed((s) => s + 1);
           if (/corrige|erro/i.test(trimmed)) {
@@ -1580,38 +2094,24 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
     },
     [
-      handleForceSilenceSara,
-      showToast,
-      handleSwitchMode,
+      executePlatformCommand,
+      currentProject,
       runAutonomousMission,
-      mission,
-      lastCompletedReport,
       manualProposal,
       executeManualApprovedStep,
-      currentProject,
-      pastProjectNames,
+      getRequestedPastProjects,
       firebaseUser?.uid,
       consoleLogs,
       messages,
       replaceCurrentProjectFiles,
       addConsoleLog,
+      showToast,
     ]
   );
 
-  const handleSaraFixError = useCallback(
-    (customError?: string) => {
-      const lastError =
-        customError ||
-        [...consoleLogs].reverse().find((l) => l.level === 'error')?.message ||
-        [...consoleLogs].reverse().find((l) => l.level === 'command')?.message ||
-        'Verifica o código atual e corrige quaisquer erros ou melhorias pendentes.';
-
-      handleSendMessage(
-        `Sara, corrige este erro do console no projeto agora com código completo: "${lastError}"`
-      );
-    },
-    [consoleLogs, handleSendMessage]
-  );
+  useEffect(() => {
+    handleSendMessageRef.current = handleSendMessage;
+  }, [handleSendMessage]);
 
   const handleRunConsoleJs = useCallback(
     (code: string) => {
@@ -1636,35 +2136,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         const cmd = parseVoiceCommand(transcript);
         addConsoleLog('info', `Voz: "${transcript}"`);
 
-        if (cmd.type === 'stop_listening') {
-          shouldKeepListeningRef.current = false;
-          stopMicRef.current?.();
-          stopMicRef.current = null;
-          setIsListening(false);
-          speakAsSara('Microfone desligado, Eletro-Jr.', voiceEnabledRef.current, { level: 'short' });
-        } else if (cmd.type === 'open_console') {
-          setRightTab('console');
-          setMobileTab('console');
-          speakAsSara('Console aberto, Eletro-Jr.', voiceEnabledRef.current, { level: 'short' });
-        } else if (cmd.type === 'fix_error') {
-          handleSaraFixError();
-        } else if (cmd.type === 'preview_mobile') {
-          setPreviewDevice('mobile');
-          setMobileTab('preview');
-          speakAsSara('Preview em telemóvel ativo, Eletro-Jr.', voiceEnabledRef.current, {
+        if (cmd.type === 'start_listening') {
+          speakAsSara('Já estou a ouvir, Eletro-Jr.', voiceEnabledRef.current, {
             level: 'short',
+            forceSpeak: true,
           });
-        } else if (cmd.type === 'preview_desktop') {
-          setPreviewDevice('desktop');
-          setMobileTab('preview');
-          speakAsSara('Preview em computador ativo, Eletro-Jr.', voiceEnabledRef.current, {
-            level: 'short',
-          });
-        } else if (cmd.type === 'save_project') {
-          handleSaveProjectToFirebase();
-        } else {
-          handleSendMessage(transcript);
+          return;
         }
+
+        executePlatformCommand(cmd, transcript).then((handled) => {
+          if (!handled) {
+            handleSendMessage(transcript);
+          }
+        });
       },
       onError: (errMsg) => {
         addConsoleLog('warn', errMsg);
@@ -1677,14 +2161,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
       },
     });
-  }, [addConsoleLog, handleSaraFixError, handleSaveProjectToFirebase, handleSendMessage]);
-
-  const stopHandsFreeMic = useCallback(() => {
-    shouldKeepListeningRef.current = false;
-    stopMicRef.current?.();
-    stopMicRef.current = null;
-    setIsListening(false);
-  }, []);
+  }, [addConsoleLog, executePlatformCommand, handleSendMessage]);
 
   const handleToggleMic = useCallback(() => {
     if (isListening || shouldKeepListeningRef.current) {
@@ -1847,11 +2324,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     const full = buildStandaloneHtml(currentProject.files, currentProject.name);
     navigator.clipboard?.writeText(full).catch(() => {});
     showToast('Código completo copiado!');
-  };
-
-  const handleDownloadZip = async () => {
-    await downloadProjectZip(currentProject.files, currentProject.name);
-    showToast('ZIP descarregado!');
   };
 
   const handleSelectProjectFileFromChat = (filePath: string) => {
@@ -2090,6 +2562,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           />
         </div>
       </main>
+
+      {/* Barra Discreta de Instalação PWA / App */}
+      <PwaInstallBar onNotify={showToast} />
 
       {/* Modais */}
       <ProjectsModal

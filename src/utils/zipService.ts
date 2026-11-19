@@ -28,9 +28,32 @@ export function buildStandaloneHtml(files: ProjectFiles, projectTitle = 'Projeto
     .map(([p, c]) => `/* ${p} */\n${c}`)
     .join('\n\n');
 
+  const rankJs = (p: string) => {
+    const l = p.toLowerCase();
+    if (l.includes('config') || l.includes('firebase')) return 1;
+    if (l.includes('data') || l.includes('store') || l.includes('state')) return 2;
+    if (l.includes('util') || l.includes('format') || l.includes('helper')) return 3;
+    if (l.includes('service') || l.includes('auth') || l.includes('pagamento')) return 4;
+    if (l.includes('engine')) return 5;
+    if (l.includes('render')) return 6;
+    if (l.includes('component')) return 7;
+    if (l.includes('scene')) return 8;
+    if (l.includes('page')) return 9;
+    if (l.endsWith('app.js') || l.endsWith('main.js') || l.endsWith('index.js')) return 11;
+    return 7;
+  };
+
   const allJs = entries
     .filter(([p]) => p.toLowerCase().endsWith('.js'))
-    .map(([p, c]) => `// ${p}\n${c.replace(/^\s*import\s+[\s\S]*?from\s+['"]\.\.?\/[^'"]+['"];?\s*$/gm, '').replace(/^\s*export\s+(default\s+)?/gm, '')}`)
+    .sort(([a], [b]) => rankJs(a) - rankJs(b) || a.localeCompare(b))
+    .map(
+      ([p, c]) =>
+        `// ${p}\n${c
+          .replace(/^\s*import\s+(?:type\s+)?[\s\S]*?\sfrom\s+['"](?:\.\.?\/|\/|@\/)[^'"]+['"];?[ \t]*/gm, '')
+          .replace(/^\s*import\s+['"](?:\.\.?\/|\/|@\/)[^'"]+['"];?[ \t]*/gm, '')
+          .replace(/^\s*export\s+\{[^}]*\};?[ \t]*/gm, '')
+          .replace(/^\s*export\s+(default\s+)?/gm, '')}`
+    )
     .join('\n\n');
 
   return `<!doctype html>

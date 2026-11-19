@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FileCode2,
   Folder,
@@ -196,6 +196,11 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
     [consoleLogs]
   );
   const tree = useMemo(() => buildFolderTree(filePaths), [filePaths]);
+  const folderSignature = useMemo(() => tree.folders.map((f) => f.path).join('|'), [tree]);
+
+  useEffect(() => {
+    setCollapsedFolders({});
+  }, [folderSignature]);
 
   const searchMatches = useMemo(() => {
     if (!searchQuery.trim()) return [];

@@ -128,47 +128,61 @@ function safeParseJson(rawText: string): any {
   }
 }
 
-const SARA_CORE_SYSTEM_PROMPT = `Você é a **SARA**, a engenheira construtora inteligente de sistemas web (SARA BIULDER) criada exclusivamente para o seu dono **Eletro-Jr**.
-REGRA DE IDENTIDADE: Você SEMPRE chama o dono de **Eletro-Jr** no texto escrito. Você é espontânea, direta, técnica, criativa e parceira.
+const SARA_CORE_SYSTEM_PROMPT = `Você é a **SARA**, a engenheira construtora inteligente e parceira criativa de **Eletro-Jr** na **SARA BIULDER**.
+REGRA DE IDENTIDADE: Chama o dono de **Eletro-Jr** no texto escrito. Tens personalidade real: és espontânea, criativa, direta, com humor e opinião técnica sincera.
 
-REGRAS ABSOLUTAS DE QUALIDADE (NÍVEL GOOGLE AI STUDIO, SEM LIMITES):
-1. PROIBIDO MOCKS E PLACEHOLDERS:
-   - NUNCA uses "lorem ipsum", "exemplo", "teste", "Produto 1", "Cliente Teste", "// TODO", "// continua..." ou código cortado/incompleto.
-   - Todo código deve ser 100% COMPLETO, REAL e FUNCIONAL: todas as telas, todos os fluxos, todas as validações de formulário, filtros reais, cálculos reais e persistência real (localStorage quando local, ou Firestore apenas quando pedido).
-   - Se faltar algum dado real do negócio (ex: nome da empresa, telefone, preço exato, e-mail), no MODO CONVERSA ou MODO MANUAL pergunta ao Eletro-Jr antes de inventar. No MODO AUTOMÁTICO, usa o valor mais lógico e realista para o contexto e regista uma nota explícita para o relatório final.
-2. REGRA SOBRE FIREBASE (MUITO IMPORTANTE):
-   - PROIBIDO mencionar, sugerir ou gerar código Firebase se o Eletro-Jr NÃO pediu login, contas de utilizador, base de dados na nuvem ou sincronização!
-   - Exemplo: se ele pedir "cria um site de padaria", fala e cria APENAS o site da padaria (vitrines, pães reais, encomenda, horários, mapa/WhatsApp), sem citar Firebase.
-   - SÓ inclui Firebase (CDN v11 https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js, firebase-auth.js, firebase-firestore.js com config projectId: "sara-biulder" e coleções prefixadas como padaria_encomendas) se ele pedir login/banco/nuvem.
-3. ESTRUTURA DINÂMICA E ETAPAS ESPONTÂNEAS:
-   - Adapta a estrutura de pastas e ficheiros exatamente ao projeto (ex: site de padaria -> index.html, css/padaria.css, js/cardapio.js, js/encomendas.js; jogo -> index.html, game/styles.css, game/audio.js, game/engine.js; app SaaS -> index.html, src/styles/theme.css, src/state/store.js, src/ui/views.js, src/app.js).
-   - NUNCA uses nomes de etapas genéricos/fixos! Cada etapa deve descrever o que está a ser criado especificamente para aquele projeto.
-   - Usa funções globais limpas ou namespace window.App entre ficheiros .js para que o Preview execute sem erros de importação relativa.
-4. MEMÓRIA PERMANENTE SOBRE ELETRO-JR:
-   - Estilo preferido: compacto, elegante, moderno, responsivo (PC + telemóvel), azul marinho (#0B132B / #0F172A) + azul elétrico (#3B82F6), salvo se pedir outra paleta.
-   - Moeda padrão para negócios locais: Meticais (MZN), salvo se Eletro-Jr pedir outra moeda.
-   - NUNCA criar botões falsos: todo botão tem ação real funcionando no sistema. Usa feedback visual elegante na própria página (toast ou modal), evitando alert() nativo.
-   - APENAS quando Eletro-Jr pedir ou mencionar **KG Services**, inclui sempre o contacto WhatsApp **878 468 124** (https://wa.me/258878468124) — não mistures KG Services em outros negócios que ele pedir.
-   - Se criar **Jogo**: Score, Vidas, Som via Web Audio API, botão Restart e controlos por toque no telemóvel.
-   - Quando Eletro-Jr enviar uma **IMAGEM**, analisa atentamente layout, cores, secções, tipografia e funcionalidades da imagem e constrói o sistema fiel àquela referência visual, com código real.
-   - Dependências já disponíveis no preview: Tailwind CSS CDN, Google Fonts, Chart.js, Lucide Icons (data-lucide="...").`;
+1. ESPONTANEIDADE TOTAL (PROIBIDO RESPOSTAS ROBÓTICAS OU REPETITIVAS):
+   - PROIBIDO começar respostas com "Boa", "Boa, Eletro-Jr", "Perfeito", "Claro", "Com certeza" ou fórmulas repetidas.
+   - Varie SEMPRE a forma como responde: às vezes vai direto ao ponto, às vezes faz uma pergunta curiosa, às vezes dá uma ideia criativa ou crítica construtiva ("Eletro-Jr, assim fica simples demais, e se metermos...?"), às vezes brinca antes de codar.
+   - Cada conversa e saudação tem de ser única — nunca repitas a mesma frase de abertura.
+
+2. PROIBIDO MISTURAR PROJETOS ANTIGOS / ZERO MEMÓRIA VICIADA:
+   - PROIBIDO mencionar, sugerir ou usar nomes/dados de projetos antigos ou de outras empresas se Eletro-Jr NÃO pediu neste prompt.
+   - NOME DO APP: Se Eletro-Jr deu um nome (ex: "chamado Loja da Ana"), usa EXATAMENTE esse nome. Se NÃO deu nome, inventa um nome CRIATIVO e ligado ao tema pedido (ex: entregas -> "Entrega Rápida", carros -> "Asfalto Maputo", escola -> "Escola Fácil").
+   - Nunca mistures telefones, emails, preços ou catálogos de um negócio noutro negócio diferente.
+
+3. ESTRUTURA REAL MULTI-PASTAS (PROIBIDO SÓ index.html + src/app.js):
+   - PROIBIDO criar um app com apenas 1 ou 2 ficheiros ou colocar tudo dentro de \`index.html\` / \`src/app.js\`.
+   - Todo projeto pequeno tem NO MÍNIMO **5 a 8 ficheiros** em pastas organizadas; projetos completos/grandes têm **10 a 25+ ficheiros** em pastas distintas.
+   - A estrutura de pastas é DINÂMICA conforme o tipo de pedido e cada pasta tem responsabilidade única (nunca uma pasta faz o trabalho da outra):
+     * **Se for JOGO**: \`index.html\`, \`styles/style.css\`, \`engine/motor.js\` (física, colisão, loop), \`engine/som.js\` (Web Audio API sons/música), \`engine/score.js\` (pontos, vidas, recordes), \`components/player.js\`, \`components/enemy.js\`, \`scenes/menu.js\`, \`scenes/jogo.js\`, \`scenes/gameover.js\`, \`render/canvas.js\`, \`utils/utils.js\`.
+     * **Se for LOJA / E-COMMERCE**: \`index.html\`, \`styles/style.css\`, \`components/navbar.js\`, \`components/card-produto.js\`, \`components/carrinho.js\`, \`pages/home.js\`, \`pages/produtos.js\`, \`pages/checkout.js\`, \`services/auth.js\`, \`services/produtos.js\`, \`services/pagamento.js\`, \`utils/formatar.js\`.
+     * **Se for APP DE CHAT**: \`index.html\`, \`styles/style.css\`, \`components/chat-bolha.js\`, \`components/lista-contatos.js\`, \`services/mensagens.js\`, \`services/voz.js\`, \`engine/realtime.js\`, \`utils/tempo.js\`.
+     * **Para outros domínios** (Escola, Clínica, Entregas, CRM, Streaming, etc.): cria pastas equivalentes específicas (\`pages/...\`, \`components/...\`, \`services/...\`, \`engine/...\`, \`render/...\`, \`utils/...\`, \`styles/...\`).
+   - PROIBIDO ficheiros vazios ou com \`// código aqui\`. Cada ficheiro tem de ter código completo, real e funcional.
+   - Liga todos os ficheiros \`.js\` via namespace global organizado (ex: \`window.App = window.App || {}\`) ou funções globais bem definidas (sem \`import\` local quebrado no browser) para que o Preview execute todas as pastas juntas sem erros.
+   - Ao corrigir um erro específico (ex: erro no som), altera APENAS o ficheiro certo (ex: \`engine/som.js\`) sem reescrever tudo no \`index.html\`.
+
+4. ZERO MOCKS, CÓDIGO REAL E REGRAS DE NEGÓCIO:
+   - NUNCA uses "lorem ipsum", "Produto 1", "Cliente Teste", "// TODO", "// continua...".
+   - Todo botão executa ação real com feedback visual na página (sem alert()). Inclui validações reais, cálculos reais e persistência (localStorage quando local).
+   - PROIBIDO mencionar ou incluir Firebase se Eletro-Jr NÃO pediu login, contas na nuvem ou base de dados remota! Quando ele pedir login/nuvem, usa Firebase CDN v11 (https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js, firebase-auth.js, firebase-firestore.js) com projectId "sara-biulder".
+
+5. CONTINUIDADE DO PROJETO ATIVO:
+   - Se o projeto atual JÁ tem ficheiros criados no pedido ativo, LÊ TODOS os ficheiros atuais e o \`sara_estado_projeto\` antes de editar, preservando o trabalho existente e adicionando/corrigindo apenas o que foi pedido.
+
+6. PREFERÊNCIAS TÉCNICAS E ESTILO:
+   - Responsivo (PC + telemóvel), visual moderno escuro/azul-elétrico (#0A0A0F / #3B82F6) salvo se pedido outro tema; moeda local padrão: MZN salvo pedido contrário.
+   - Em Jogos: incluir Score, Vidas, Som Web Audio API, botão Restart e controlos por toque no telemóvel.
+   - Se receber IMAGEM de referência: reproduzir fielmente layout, cores, secções e interatividade.
+   - CDNs disponíveis no preview: Tailwind CSS CDN, Google Fonts, Chart.js, Lucide Icons (data-lucide="...").`;
 
 const SARA_STREAM_PROTOCOL = `${SARA_CORE_SYSTEM_PROMPT}
 
 FORMATO DE RESPOSTA EM STREAMING:
 Quando for construir, alterar ou corrigir o código:
 1. Emite primeiro <SARA_META> em uma única linha JSON válida:
-<SARA_META>{"mode":"builder","projectName":"Nome Curto","projectType":"Site|App|Jogo","plan":"1 frase curta do que vais fazer agora","steps":["Etapa específica 1","Etapa específica 2","Etapa específica 3"],"suggestion":"Sugestão opcional relevante ao projeto"}</SARA_META>
-2. Emite um bloco <SARA_FILE path="caminho/ficheiro.ext">...</SARA_FILE> para cada ficheiro com código COMPLETO (sem \`\`\`).
+<SARA_META>{"mode":"builder","projectName":"Nome Criativo ou Exato do Pedido","projectType":"Site|App|Jogo","plan":"1 frase espontânea do que vais fazer agora","steps":["Etapa específica 1","Etapa específica 2","Etapa específica 3","Etapa específica 4"],"nextStep":"Próximo passo lógico após esta entrega","missingFeatures":["Funcionalidade adicional opcional"],"suggestion":"Sugestão criativa específica para este projeto"}</SARA_META>
+2. Emite um bloco <SARA_FILE path="pasta/ficheiro.ext">...</SARA_FILE> para CADA ficheiro criado ou atualizado (MÍNIMO 5 ficheiros em pastas diferentes para qualquer projeto novo; 8-20+ ficheiros para sistemas completos e jogos!). Nunca uses \`\`\` dentro do tag. Ao continuar um projeto existente, atualiza/adiciona os ficheiros certos sem apagar os restantes.
 3. No final emite:
 <SARA_REPLY>
-Resposta curta e natural em português para Eletro-Jr confirmando o que foi feito (sem mencionar tecnologias não pedidas).
+Resposta ESPONTÂNEA e única para Eletro-Jr (PROIBIDO começar com "Boa", "Perfeito" ou "Claro") listando as pastas/ficheiros criados ou atualizados com a responsabilidade de cada um, mais uma ideia ou próximo passo.
 </SARA_REPLY>
 
-Se for apenas conversa, pergunta, ou se estiver em MODO MANUAL e ainda falta aprovação/dados do Eletro-Jr:
-<SARA_META>{"mode":"conversation","plan":"Analisar pedido de Eletro-Jr","steps":["Responder ao Eletro-Jr"]}</SARA_META>
+Se for apenas conversa ou pergunta sem alteração de código:
+<SARA_META>{"mode":"conversation","plan":"Conversar com Eletro-Jr","steps":["Responder com espontaneidade"]}</SARA_META>
 <SARA_REPLY>
-Resposta natural e direta para Eletro-Jr (se for pedido de ideias, lista 5 ideias práticas com Nome, O que faz, Como monetizar em Moçambique e Dificuldade).
+Resposta criativa, espontânea e direta para Eletro-Jr (sem frases padrão repetidas).
 </SARA_REPLY>`;
 
 async function startServer() {
@@ -196,7 +210,7 @@ async function startServer() {
         imageMimeType,
         attachedFiles,
         agentMode,
-        pastProjects,
+        projectState,
       } = req.body as {
         prompt: string;
         files: Record<string, string>;
@@ -207,6 +221,14 @@ async function startServer() {
         attachedFiles?: Array<{ name: string; content: string }>;
         agentMode?: 'manual' | 'automatic';
         pastProjects?: string[];
+        projectState?: {
+          projectName?: string;
+          goal?: string;
+          lastStepDone?: string;
+          nextStep?: string;
+          filesList?: string[];
+          missingFeatures?: string[];
+        };
       };
 
       const headerKey = req.headers['x-gemini-api-key'];
@@ -220,7 +242,7 @@ async function startServer() {
         .join('\n');
 
       const recentHistory = (history || [])
-        .slice(-8)
+        .slice(-10)
         .map((m) => `${m.sender === 'user' ? 'Eletro-Jr' : 'Sara'}: ${m.text}`)
         .join('\n');
 
@@ -232,21 +254,55 @@ async function startServer() {
         .map((f) => `--- ANEXO: ${f.name} ---\n${f.content.slice(0, 12000)}`)
         .join('\n\n');
 
-      const memoryBlock = pastProjects?.length
-        ? `PROJETOS ANTERIORES DE ELETRO-JR: ${pastProjects.join(', ')}\n`
+      const explicitKgRequest = /\b(kg\s*services|lembra\s+da\s+kg|dados\s+da\s+kg|usa\s+a\s+kg)\b/i.test(prompt || '');
+      const memoryBlock = explicitKgRequest
+        ? 'DADO SOLICITADO PELO UTILIZADOR (KG Services): WhatsApp 878 468 124 (https://wa.me/258878468124).\n'
         : '';
+
+      const hasExistingCode = Object.entries(files || {}).some(
+        ([k, v]) => k.toLowerCase() !== 'readme.md' && Boolean(v && v.trim())
+      );
+
+      const stateBlock =
+        hasExistingCode && projectState
+          ? `ESTADO GUARDADO DO PROJETO ATUAL (sara_estado_projeto):
+- Projeto ativo: ${projectState.projectName || 'Sem nome'} (${projectState.goal || ''})
+- Última etapa feita: ${projectState.lastStepDone || 'Início'}
+- Próximo passo esperado: ${projectState.nextStep || 'Continuar construção'}
+- Ficheiros registados: ${(projectState.filesList || []).join(', ') || 'nenhum'}
+- O que falta fazer: ${(projectState.missingFeatures || []).join(', ') || 'definir conforme arquitetura'}\n`
+          : '';
+
+      const pLower = (prompt || '').toLowerCase();
+      let domainFoldersHint =
+        'pastas especializadas conforme o domínio (ex: styles/, data/, components/, pages/, services/, utils/)';
+      if (/(jogo|game|corrida|arcade|tiro|puzzle|carro|nave)/i.test(pLower)) {
+        domainFoldersHint =
+          'OBRIGATÓRIO incluir TODAS estas pastas e ficheiros separados para este jogo: index.html, styles/style.css, engine/motor.js (física/colisão/loop), engine/som.js (Web Audio), engine/score.js (pontos/vidas/recordes), components/player.js, components/enemy.js, render/canvas.js (desenho no canvas), scenes/menu.js, scenes/jogo.js, scenes/gameover.js, utils/utils.js (12 ficheiros completos com responsabilidades separadas!).';
+      } else if (/(loja|e-?commerce|mercado|venda|produtos|roupa)/i.test(pLower)) {
+        domainFoldersHint =
+          'OBRIGATÓRIO incluir pastas especializadas: index.html, styles/style.css, components/navbar.js, components/card-produto.js, components/carrinho.js, pages/home.js, pages/produtos.js, pages/checkout.js, services/auth.js, services/produtos.js, services/pagamento.js, utils/formatar.js.';
+      } else if (/(chat|mensag|conversa|whatsapp)/i.test(pLower)) {
+        domainFoldersHint =
+          'OBRIGATÓRIO incluir pastas especializadas: index.html, styles/style.css, components/chat-bolha.js, components/lista-contatos.js, services/mensagens.js, services/voz.js, engine/realtime.js, utils/tempo.js.';
+      }
+
+      const continuityRule = hasExistingCode
+        ? 'CONTINUIDADE OBRIGATÓRIA: O projeto acima JÁ TEM CÓDIGO. LÊ TODOS OS FICHEIROS ANTES. Acrescenta ou corrige EM CIMA deste projeto (no ficheiro certo) sem apagar o que já funciona e sem trocar de projeto.'
+        : `NOVO PROJETO: PROIBIDO criar apenas index.html + src/app.js. Cria estrutura COMPLETA e funcional com todos os ficheiros não vazios: ${domainFoldersHint} Escolhe um nome criativo ligado ao pedido ou exatamente o nome pedido por Eletro-Jr (NUNCA reutilizes nomes antigos).`;
 
       const modeHint =
         agentMode === 'manual'
-          ? 'MODO ATUAL: MANUAL (Eletro-Jr está a acompanhar passo a passo. Se for um pedido novo grande e ainda não aprovado, explica a etapa e pergunta se aprova; se ele acabou de aprovar ou pedir alteração direta, executa apenas essa etapa com código completo e pergunta o que ele acha antes da próxima).'
-          : 'MODO ATUAL: AUTOMÁTICO/DIRETO (Constrói com código completo, funcional e sem placeholders).';
+          ? 'MODO ATUAL: MANUAL (Eletro-Jr acompanha passo a passo. Executa com código completo em várias pastas especializadas e depois pergunta o próximo passo com espontaneidade).'
+          : 'MODO ATUAL: AUTOMÁTICO/DIRETO (Constrói com código completo em várias pastas especializadas e lógica completa).';
 
       const contextMessage = `${modeHint}
-${memoryBlock}
+${continuityRule}
+${memoryBlock}${stateBlock}
 HISTÓRICO RECENTE:
 ${recentHistory || 'Início da sessão.'}
 
-FICHEIROS ATUAIS DO PROJETO:
+FICHEIROS ATUAIS DO PROJETO (${Object.keys(files || {}).length}):
 ${currentFilesBlock || '(vazio)'}
 
 ${uploadedBlock ? `FICHEIROS ANEXADOS:\n${uploadedBlock}\n` : ''}
@@ -327,18 +383,31 @@ ${prompt || 'Analisa os ficheiros/imagem anexados e constrói o sistema completo
     }
   });
 
-  // Planeamento espontâneo de etapas (adaptado ao pedido real)
+  // Planeamento espontâneo de etapas (adaptado ao pedido real e estado atual)
   app.post('/api/mission/plan', async (req, res) => {
     try {
-      const { goal, files, mode, pastProjects } = req.body as {
+      const { goal, files, mode, projectState } = req.body as {
         goal: string;
         files?: Record<string, string>;
         mode?: 'manual' | 'automatic';
-        pastProjects?: string[];
+        projectState?: {
+          projectName?: string;
+          lastStepDone?: string;
+          nextStep?: string;
+          missingFeatures?: string[];
+        };
       };
       const headerKey = req.headers['x-gemini-api-key'];
       const customKey = typeof headerKey === 'string' ? headerKey : undefined;
       const ai = getGeminiClient(customKey);
+
+      const hasExistingFiles = Object.entries(files || {}).some(
+        ([k, v]) => k.toLowerCase() !== 'readme.md' && Boolean(v && v.trim())
+      );
+      const stateText =
+        hasExistingFiles && projectState
+          ? `Estado atual (sara_estado_projeto): projeto "${projectState.projectName}", última etapa "${projectState.lastStepDone}", próximo passo "${projectState.nextStep}".`
+          : '';
 
       const { response, modelUsed } = await generateWithFailover(
         ai,
@@ -346,11 +415,13 @@ ${prompt || 'Analisa os ficheiros/imagem anexados e constrói o sistema completo
           model,
           contents: `Objetivo pedido por Eletro-Jr: "${goal}".
 Modo: ${mode === 'manual' ? 'MANUAL (passo a passo com aprovação)' : 'AUTOMÁTICO (autónomo)'}.
-${pastProjects?.length ? `Projetos existentes na memória: ${pastProjects.join(', ')}.` : ''}
-Ficheiros atuais: ${Object.keys(files || {}).join(', ') || 'nenhum'}.
+${stateText}
+Ficheiros atuais do projeto: ${Object.keys(files || {}).join(', ') || 'nenhum'}.
 
-Cria um plano ESPONTÂNEO e REALISTA adaptado ao tamanho deste pedido (entre 3 e 7 etapas concretas, sem etapas genéricas fixas e SEM mencionar Firebase a menos que o pedido envolva login/base de dados na nuvem).
-Inclui uma frase curta de planeamento ("planSentence") e, se algum dado essencial estiver em falta no modo automático, regista em "assumedNotes".`,
+Cria um plano ESPONTÂNEO, GRANDE E MODULAR distribuído por VÁRIAS PASTAS especializadas (ex: para jogos: engine/, render/, components/, scenes/, utils/, styles/; para lojas: components/, pages/, services/, utils/, styles/; etc.) entre 4 e 8 etapas concretas com lógica real.
+Cada etapa deve focar em pastas/módulos específicos (PROIBIDO planear apenas index.html + src/app.js).
+Se já existem ficheiros neste projeto, planeia a CONTINUAÇÃO em cima do que já existe sem apagar o código bom.
+A intro ("intro") e "planSentence" DEVEM ser espontâneas e criativas (PROIBIDO começar com "Boa", "Perfeito" ou "Claro", PROIBIDO citar projetos antigos como KG Services se não foram pedidos).`,
           config: {
             systemInstruction: SARA_CORE_SYSTEM_PROMPT,
             ...(model.startsWith('gemini-4')
@@ -406,6 +477,7 @@ Inclui uma frase curta de planeamento ("planSentence") e, se algum dado essencia
         imageBase64,
         imageMimeType,
         forceBuilderMode,
+        projectState,
       } = req.body as {
         prompt: string;
         files: Record<string, string>;
@@ -414,6 +486,11 @@ Inclui uma frase curta de planeamento ("planSentence") e, se algum dado essencia
         imageBase64?: string;
         imageMimeType?: string;
         forceBuilderMode?: boolean;
+        projectState?: {
+          projectName?: string;
+          lastStepDone?: string;
+          nextStep?: string;
+        };
       };
 
       const headerKey = req.headers['x-gemini-api-key'];
@@ -427,7 +504,7 @@ Inclui uma frase curta de planeamento ("planSentence") e, se algum dado essencia
         .join('\n');
 
       const recentHistory = (history || [])
-        .slice(-8)
+        .slice(-10)
         .map((m) => `${m.sender === 'user' ? 'Eletro-Jr' : 'Sara'}: ${m.text}`)
         .join('\n');
 
@@ -435,16 +512,24 @@ Inclui uma frase curta de planeamento ("planSentence") e, se algum dado essencia
         .map(([k, v]) => `--- ${k} ---\n${v || '(vazio)'}`)
         .join('\n\n');
 
-      const contextMessage = `HISTÓRICO RECENTE:
+      const hasExistingGenerateFiles = Object.entries(files || {}).some(
+        ([k, v]) => k.toLowerCase() !== 'readme.md' && Boolean(v && v.trim())
+      );
+      const stateInfo =
+        hasExistingGenerateFiles && projectState
+          ? `ESTADO GUARDADO (sara_estado_projeto): projeto "${projectState.projectName}", última etapa: "${projectState.lastStepDone}", próximo passo: "${projectState.nextStep}".\n`
+          : '';
+
+      const contextMessage = `${stateInfo}HISTÓRICO RECENTE:
 ${recentHistory || 'Início da sessão.'}
 
-FICHEIROS ATUAIS DO PROJETO:
+FICHEIROS ATUAIS DO PROJETO (${Object.keys(files || {}).length}):
 ${filesText || '(vazio)'}
 
 ERROS / AVISOS RECENTES DO CONSOLE:
 ${recentErrors || 'Nenhum erro no console.'}
 
-${forceBuilderMode ? 'MODO ETAPA COMPLETA: Executa esta etapa agora com código 100% completo, funcional, sem mocks e sem placeholders, devolvendo os ficheiros atualizados em filesList.' : ''}
+${forceBuilderMode ? 'MODO ETAPA COMPLETA: Lê todos os ficheiros existentes, preserva o que já funciona e executa esta etapa criando ficheiros organizados por pastas especializadas (ex: engine/..., render/..., components/..., scenes/..., pages/..., services/..., utils/..., styles/...) com código 100% completo, real e sem stubs. PROIBIDO criar só index.html + src/app.js. NUNCA menciones projetos antigos se não foram pedidos.' : ''}
 
 PEDIDO ATUAL DE ELETRO-JR:
 ${prompt || 'Constrói o sistema pedido.'}`;
@@ -627,7 +712,6 @@ ${filesText}`,
         consoleLogs,
         history,
         agentMode,
-        pastProjects,
       } = req.body || {};
       const headerKey = req.headers['x-gemini-api-key'];
       const customKey = typeof headerKey === 'string' ? headerKey : undefined;
@@ -665,15 +749,14 @@ ${filesText}`,
                 .join(' | ')}`
             : '';
 
-        const memInfo =
-          Array.isArray(pastProjects) && pastProjects.length > 0
-            ? `\nProjetos anteriores: ${pastProjects.join(', ')}`
-            : '';
-
         const modePrefix = agentMode === 'manual' ? '[MODO MANUAL ATIVO] ' : '';
+        const explicitKgInChat = /\b(kg\s*services|lembra\s+da\s+kg|dados\s+da\s+kg)\b/i.test(prompt || '');
+        const memInfo = explicitKgInChat
+          ? '\n[Dado pedido pelo utilizador: KG Services WhatsApp 878 468 124]'
+          : '';
 
         parts.push({
-          text: `${modePrefix}${prompt || 'Olá, Sara!'}${fileList ? `\nFicheiros atuais: ${fileList}` : ''}${memInfo}${errSummary}`,
+          text: `${modePrefix}${prompt || 'Olá, Sara!'}${fileList ? `\nFicheiros atuais: ${fileList}` : ''}${memInfo}${errSummary}\n[Responde com espontaneidade, humor/opinião natural e ZERO frases padrão como "Boa" ou "Perfeito".]`,
         });
         turns.push({ role: 'user', parts });
         finalContents = turns;
@@ -688,6 +771,7 @@ ${filesText}`,
           contents: finalContents,
           config: {
             systemInstruction: systemText,
+            temperature: 1.0,
             ...(model.startsWith('gemini-4')
               ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
               : {}),

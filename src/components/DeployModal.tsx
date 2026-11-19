@@ -177,7 +177,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({
                 type="text"
                 value={repoName}
                 onChange={(e) => setRepoName(e.target.value)}
-                placeholder="Nome do repositório (ex: mozflix-app)"
+                placeholder="Nome do repositório (ex: minha-app)"
                 className="flex-1 bg-[#12121A] border border-[#1F1F2E] focus:border-[#3B82F6] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
               />
               <label className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#12121A] border border-[#1F1F2E] text-xs text-[#A1A1AA] cursor-pointer">

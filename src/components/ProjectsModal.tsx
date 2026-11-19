@@ -115,7 +115,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                   type="text"
                   value={newName}
                   onChange={(e) => setNewName(e.target.value)}
-                  placeholder="Ex: MozFlix, Loja KG..."
+                  placeholder="Ex: Loja da Ana, Corrida Maputo..."
                   className="flex-1 min-w-0 bg-[#12121A] border border-[#1F1F2E] focus:border-[#3B82F6] rounded-lg px-3 py-2 text-xs text-white outline-none"
                 />
                 <select

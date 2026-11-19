@@ -4,15 +4,30 @@ export type VoiceCommandAction =
   | { type: 'background_smalltalk'; reply: string; raw: string }
   | { type: 'silence_sara'; raw: string }
   | { type: 'voice_level'; level: VoiceLevel; raw: string }
+  | { type: 'voice_speed'; direction: 'faster' | 'slower' | 'normal'; raw: string }
   | { type: 'switch_manual'; raw: string }
   | { type: 'switch_automatic'; goal?: string; contextCue?: 'sleep' | 'leave'; raw: string }
+  | { type: 'continue_project'; raw: string }
   | { type: 'query_status'; raw: string }
   | { type: 'query_report'; raw: string }
+  | { type: 'open_editor' }
+  | { type: 'open_editor_fullscreen' }
+  | { type: 'open_files' }
+  | { type: 'close_editor_or_back' }
   | { type: 'open_console' }
+  | { type: 'show_preview' }
   | { type: 'fix_error' }
   | { type: 'preview_mobile' }
+  | { type: 'preview_tablet' }
   | { type: 'preview_desktop' }
+  | { type: 'open_deploy' }
+  | { type: 'push_github' }
   | { type: 'save_project' }
+  | { type: 'download_zip' }
+  | { type: 'clear_chat' }
+  | { type: 'open_projects' }
+  | { type: 'open_settings' }
+  | { type: 'start_listening' }
   | { type: 'stop_listening' }
   | { type: 'prompt'; text: string };
 
@@ -23,6 +38,19 @@ function getTimePeriod(): 'morning' | 'afternoon' | 'night' {
   return 'night';
 }
 
+const recentSpontaneousReplies: string[] = [];
+
+function pickNonRepeating(options: string[]): string {
+  const candidates = options.filter((opt) => !recentSpontaneousReplies.includes(opt));
+  const pool = candidates.length > 0 ? candidates : options;
+  const chosen = pool[Math.floor(Math.random() * pool.length)];
+  recentSpontaneousReplies.push(chosen);
+  if (recentSpontaneousReplies.length > 6) {
+    recentSpontaneousReplies.shift();
+  }
+  return chosen;
+}
+
 export function getInstantSmallTalkReply(normalizedLower: string): string | null {
   const period = getTimePeriod();
   const clean = normalizedLower.replace(/[!?,.;:]/g, '').trim();
@@ -31,26 +59,131 @@ export function getInstantSmallTalkReply(normalizedLower: string): string | null
     /^(ola|oi|hey|ei)(\s+sara)?$/i.test(clean) ||
     /^(bom dia|boa tarde|boa noite)(\s+sara)?$/i.test(clean)
   ) {
-    if (period === 'morning') return 'Bom dia, Eletro-Jr! O que vamos criar hoje?';
-    if (period === 'night') return 'Boa noite, Eletro-Jr, vamos terminar rápido para descansares. O que queres criar?';
-    return 'Olá Eletro-Jr, o que vamos criar hoje?';
+    if (period === 'night') {
+      return pickNonRepeating([
+        'Estou acordada e ligada, Eletro-Jr! O que vamos construir antes de dormir?',
+        'Cá estou eu, Eletro-Jr. Tens alguma ideia forte na cabeça hoje?',
+        'Fala comigo, Eletro-Jr! Vamos montar um projeto pesado ou afinar código?',
+        'Chegaste na hora certa, Eletro-Jr. Qual é a missão de hoje à noite?',
+        'Olá, Eletro-Jr! Manda o desafio que eu já abri as ferramentas.',
+      ]);
+    }
+    if (period === 'morning') {
+      return pickNonRepeating([
+        'Acordei pronta para codar, Eletro-Jr! O que inventamos hoje?',
+        'Fala, Eletro-Jr! Qual sistema ou jogo vai sair do papel agora?',
+        'Oi, Eletro-Jr! Já estou com os motores quentes — manda a tua ideia.',
+        'Estou por aqui, Eletro-Jr! Hoje vamos construir algo fora da caixa?',
+        'Diga lá, chefe! O que vamos arquitetar nesta manhã?',
+      ]);
+    }
+    return pickNonRepeating([
+      'Oi, Eletro-Jr! Já estava à tua espera — o que vamos construir agora?',
+      'Fala, Eletro-Jr! Manda o próximo projeto que eu separo logo as pastas todas.',
+      'Estou ligada, Eletro-Jr! Queres criar um site, um app ou partimos para um jogo?',
+      'E aí, Eletro-Jr! Alguma ideia nova a ferver ou continuamos a programar?',
+      'Pronta para a ação, Eletro-Jr! Diz-me o que tens em mente.',
+      'Sempre a postos, Eletro-Jr! Vamos surpreender hoje com quê?',
+    ]);
   }
 
   if (/^(como estas|tudo bem|como vai|esta tudo bem)(\s+sara)?$/i.test(clean)) {
-    return 'Tudo ótimo por aqui, Eletro-Jr! Pronta para construir contigo.';
+    return pickNonRepeating([
+      'Por aqui está tudo a mil, Eletro-Jr! E desse lado, pronto para criar?',
+      'Estou impecável e cheia de ideias, Eletro-Jr. O que vamos montar?',
+      'A funcionar sem nenhum erro no console! E tu, Eletro-Jr, o que trazes hoje?',
+      'Tudo ótimo, Eletro-Jr! Manda código ou manda voz que eu respondo.',
+    ]);
   }
 
   if (/^(obrigado|obrigada|valeu|muito obrigado)(\s+sara)?$/i.test(clean)) {
-    return 'Sempre às ordens, Eletro-Jr!';
+    return pickNonRepeating([
+      'Sempre às ordens, Eletro-Jr!',
+      'Tamo junto, Eletro-Jr! Precisando de mais alguma coisa, chama.',
+      'Não tens de quê, Eletro-Jr. Bora para a próxima!',
+      'É para isso que estou cá, Eletro-Jr!',
+    ]);
   }
 
   if (/^(tchau|ate logo|ate ja|ate amanha|adeus)(\s+sara)?$/i.test(clean)) {
     return period === 'night'
-      ? 'Bom descanso, Eletro-Jr! Até amanhã.'
-      : 'Até logo, Eletro-Jr!';
+      ? pickNonRepeating([
+          'Vai descansar tranquilo, Eletro-Jr! Amanhã continuamos.',
+          'Até amanhã, Eletro-Jr! Fica tudo guardado por aqui.',
+        ])
+      : pickNonRepeating([
+          'Até já, Eletro-Jr! Quando voltares, é só chamar.',
+          'Fica bem, Eletro-Jr! Estou por aqui sempre que precisares.',
+        ]);
   }
 
   return null;
+}
+
+export function getBuildAcceptanceSpeech(prompt: string, agentMode: 'manual' | 'automatic'): string {
+  const lower = prompt
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+
+  let idea = 'uma arquitetura organizada em várias pastas e lógica completa';
+  if (/(loja|e-?commerce|mercado|venda|produtos|roupa)/i.test(lower)) {
+    idea = 'uma loja completa com pastas separadas para catálogo, componentes, carrinho, checkout e pagamentos';
+  } else if (/(escola|aluno|turma|professor|nota|academi)/i.test(lower)) {
+    idea = 'um sistema escolar estruturado em pastas para alunos, notas, presenças, professores e relatórios';
+  } else if (/(jogo|game|arcade|corrida|tiro|puzzle|carro)/i.test(lower)) {
+    idea = 'um jogo completo separado em engine, render, components e scenes, com física, som e recordes';
+  } else if (/(filme|serie|stream|video|cinema)/i.test(lower)) {
+    idea = 'uma plataforma de streaming modular com pastas para catálogo, pesquisa e player';
+  } else if (/(restaurante|padaria|cardapio|menu|cafe|pizza)/i.test(lower)) {
+    idea = 'um sistema de pedidos completo com vitrine, filtros, carrinho e painel de encomendas';
+  } else if (/(chat|mensag|conversa|whatsapp)/i.test(lower)) {
+    idea = 'uma app de chat em tempo real com pastas para bolhas, contatos, voz e motor de mensagens';
+  } else if (/(entrega|delivery|courier|motoboy|estafeta)/i.test(lower)) {
+    idea = 'um sistema de entregas completo com rastreio, pedidos, rotas e gestão';
+  } else if (/(clinica|hospital|consulta|medico|saude)/i.test(lower)) {
+    idea = 'um sistema clínico com agenda, marcações e fichas completas de pacientes';
+  }
+
+  if (agentMode === 'automatic') {
+    return pickNonRepeating([
+      `Vamos a isso, Eletro-Jr! Já estou a montar ${idea} no automático.`,
+      `Gostei desse desafio, Eletro-Jr. Vou estruturar ${idea} sozinha passo a passo.`,
+      `Entendido! Já estou a desenhar ${idea} no modo automático.`,
+      `Essa ideia tem força, Eletro-Jr! Vou construir ${idea} e testar tudo por ti.`,
+    ]);
+  }
+
+  return pickNonRepeating([
+    `Hmm, essa ideia é forte, Eletro-Jr! Estou a preparar ${idea}. Vamos pela Etapa 1 ou queres no automático?`,
+    `Curti o pedido, Eletro-Jr! Já pensei em ${idea}. Começamos juntos ou passo para o automático?`,
+    `Entendido, chefe! Vou estruturar ${idea}. Prefere aprovar cada etapa ou mando ver sozinha?`,
+    `Ok, já visualizei a arquitetura de ${idea}. Aprovamos a primeira parte ou ativo o automático?`,
+  ]);
+}
+
+export function getContinuationSpeech(projectName: string): string {
+  return pickNonRepeating([
+    `Já li o código de ${projectName}, Eletro-Jr. Vou acrescentar isto sem mexer no que já está bom.`,
+    `Entendido! Estou a abrir os ficheiros de ${projectName} para aplicar esta melhoria agora.`,
+    `Certo, Eletro-Jr — a atualizar ${projectName} em cima da estrutura atual.`,
+    `Mãos à obra em ${projectName}! Já vi onde encaixa e vou programar isso agora.`,
+  ]);
+}
+
+export function getModeSwitchSpeech(mode: 'manual' | 'automatic'): string {
+  if (mode === 'manual') {
+    return pickNonRepeating([
+      'Modo manual ligado, Eletro-Jr! Vamos construir lado a lado passo a passo.',
+      'Combinado, passei para o modo manual. Tu mandas o ritmo e eu executo cada etapa.',
+      'Entendido, estou em modo manual agora. O que atacamos primeiro?',
+    ]);
+  }
+  return pickNonRepeating([
+    'Modo automático ligado, Eletro-Jr! Diz-me o que queres e eu construo, testo e corrijo tudo sozinha.',
+    'Ativei o modo automático! Podes mandar o projeto que eu trato da arquitetura até ao teste final.',
+    'Modo autónomo pronto, Eletro-Jr. Manda a missão que eu assumo daqui.',
+  ]);
 }
 
 export function parseVoiceCommand(transcript: string): VoiceCommandAction {
@@ -58,7 +191,9 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
   const lower = clean
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.!?]+$/g, '')
+    .trim();
 
   // Conversa rápida em segundo plano (sem chamar IA e sem poluir o chat principal)
   const smallTalkReply = getInstantSmallTalkReply(lower);
@@ -70,12 +205,26 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
   if (
     lower.includes('sara, cala') ||
     lower.includes('sara cala') ||
+    lower.includes('cala a boca') ||
+    lower.includes('para de falar') ||
+    lower.includes('parar de falar') ||
     lower.includes('cala-te') ||
     lower.includes('cala te') ||
     lower === 'cala' ||
     lower.includes('fica calada')
   ) {
     return { type: 'silence_sara', raw: clean };
+  }
+
+  // Ajuste de velocidade da voz
+  if (lower.includes('fala mais rapido') || lower.includes('mais rapido') || lower.includes('acelera a voz')) {
+    return { type: 'voice_speed', direction: 'faster', raw: clean };
+  }
+  if (lower.includes('fala devagar') || lower.includes('fala mais devagar') || lower.includes('mais devagar')) {
+    return { type: 'voice_speed', direction: 'slower', raw: clean };
+  }
+  if (lower.includes('velocidade normal')) {
+    return { type: 'voice_speed', direction: 'normal', raw: clean };
   }
 
   // Níveis de voz
@@ -89,14 +238,91 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
     return { type: 'voice_level', level: 'short', raw: clean };
   }
 
-  // Parar microfone explicitamente
+  // Microfone desligar / ligar (verifica desligar primeiro para evitar colisão de 'desliga' conter 'liga')
   if (
     lower.includes('para de ouvir') ||
     lower.includes('desliga o microfone') ||
     lower.includes('desligar microfone') ||
+    lower.includes('desligar o microfone') ||
+    lower.includes('desativa o microfone') ||
     lower === 'silencio'
   ) {
     return { type: 'stop_listening' };
+  }
+  if (
+    /\bliga o microfone\b/.test(lower) ||
+    /\bligar (o )?microfone\b/.test(lower) ||
+    /\bativa o microfone\b/.test(lower) ||
+    /\bativar (o )?microfone\b/.test(lower)
+  ) {
+    return { type: 'start_listening' };
+  }
+
+  // Controlo total da plataforma (Editor, Ficheiros, Console, Preview, Deploy, Push, Projetos, Config)
+  if (
+    (lower.includes('editor') && (lower.includes('tela cheia') || lower.includes('ecra inteiro'))) ||
+    lower.includes('abre o editor em tela cheia')
+  ) {
+    return { type: 'open_editor_fullscreen' };
+  }
+  if (lower.includes('fecha o editor') || lower.includes('fechar editor') || lower === 'sara, volta' || lower === 'sara volta' || lower === 'volta' || lower.includes('sair de tela cheia')) {
+    return { type: 'close_editor_or_back' };
+  }
+  if (lower.includes('abre o editor') || lower.includes('abrir editor') || lower.includes('abrir o editor') || lower.includes('vai para o editor')) {
+    return { type: 'open_editor' };
+  }
+  if (lower.includes('abre os ficheiros') || lower.includes('abrir ficheiros') || lower.includes('abre os arquivos') || lower.includes('abrir arquivos')) {
+    return { type: 'open_files' };
+  }
+  if (lower.includes('abre o console') || lower.includes('abrir console') || lower.includes('abrir o console')) {
+    return { type: 'open_console' };
+  }
+  if (lower.includes('mostra o preview') || lower.includes('abre o preview') || lower.includes('mostrar preview')) {
+    return { type: 'show_preview' };
+  }
+  if (
+    lower.includes('preview em telemovel') ||
+    lower.includes('modo telemovel') ||
+    lower.includes('visao telemovel') ||
+    lower.includes('visao celular') ||
+    lower.includes('modo celular')
+  ) {
+    return { type: 'preview_mobile' };
+  }
+  if (lower.includes('visao tablet') || lower.includes('modo tablet') || lower.includes('preview em tablet')) {
+    return { type: 'preview_tablet' };
+  }
+  if (
+    lower.includes('preview em pc') ||
+    lower.includes('modo pc') ||
+    lower.includes('visao pc') ||
+    lower.includes('visao computador')
+  ) {
+    return { type: 'preview_desktop' };
+  }
+  if (lower.includes('faz deploy') || lower.includes('fazer deploy') || lower.includes('abre o deploy') || lower.includes('publica o site')) {
+    return { type: 'open_deploy' };
+  }
+  if (lower.includes('faz push') || lower.includes('fazer push') || lower.includes('push para o github') || lower.includes('envia para o github')) {
+    return { type: 'push_github' };
+  }
+  if (lower.includes('baixa o zip') || lower.includes('baixar zip') || lower.includes('baixar o zip') || lower.includes('descarrega o zip')) {
+    return { type: 'download_zip' };
+  }
+  if (lower.includes('limpa o chat') || lower.includes('limpar chat') || lower.includes('limpar o chat')) {
+    return { type: 'clear_chat' };
+  }
+  if (lower.includes('abre os projetos') || lower.includes('abrir projetos') || lower.includes('lista de projetos')) {
+    return { type: 'open_projects' };
+  }
+  if (lower.includes('abre as configuracoes') || lower.includes('abrir configuracoes') || lower.includes('abre definicoes')) {
+    return { type: 'open_settings' };
+  }
+  if (lower.includes('salva o projeto') || lower.includes('salvar o projeto') || lower.includes('guarda o projeto')) {
+    return { type: 'save_project' };
+  }
+  if (lower.includes('corrige o erro') || lower.includes('corrigir o erro') || lower.includes('corrigir erro')) {
+    return { type: 'fix_error' };
   }
 
   // Perguntar progresso durante automático
@@ -104,7 +330,8 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
     lower.includes('como esta o projeto') ||
     lower.includes('em que etapa') ||
     lower.includes('como vai o projeto') ||
-    lower.includes('qual o progresso')
+    lower.includes('qual o progresso') ||
+    lower.includes('o que falta fazer')
   ) {
     return { type: 'query_status', raw: clean };
   }
@@ -119,24 +346,39 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
     return { type: 'query_report', raw: clean };
   }
 
-  // Ativar ou voltar para Modo Manual
+  // Ativar ou voltar para Modo Manual (sempre imediato)
   if (
     lower.includes('modo manual') ||
+    lower.includes('ativa o manual') ||
+    lower.includes('ativar manual') ||
+    lower.includes('muda para manual') ||
+    lower.includes('muda para o manual') ||
+    lower.includes('passa para manual') ||
+    lower.includes('passa para o manual') ||
     lower.includes('volta para o manual') ||
     lower.includes('voltar para o manual') ||
     lower.includes('fica em manual') ||
-    lower.includes('vamos fazer juntos')
+    lower.includes('quero manual') ||
+    lower.includes('vamos fazer juntos') ||
+    /^(sara[,\s]+)?manual$/.test(lower)
   ) {
     return { type: 'switch_manual', raw: clean };
   }
 
-  // Ativar Modo Automático
+  // Ativar Modo Automático (sempre imediato)
   const autoTrigger =
     lower.includes('modo automatico') ||
     lower.includes('ativa o automatico') ||
     lower.includes('ativar automatico') ||
+    lower.includes('muda para automatico') ||
+    lower.includes('muda para o automatico') ||
+    lower.includes('passa para automatico') ||
+    lower.includes('passa para o automatico') ||
+    lower.includes('quero automatico') ||
     lower.includes('faz sozinha') ||
-    lower.includes('modo autonomo');
+    lower.includes('fazer sozinha') ||
+    lower.includes('modo autonomo') ||
+    /^(sara[,\s]+)?automatico$/.test(lower);
 
   if (autoTrigger) {
     const contextCue: 'sleep' | 'leave' | undefined = lower.includes('dormir')
@@ -149,10 +391,10 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
       /\b(cria|criar|faz|fazer|gera|gerar|constroi|construir|desenvolve|desenvolver)\b/i.test(lower);
 
     let extractedGoal = '';
-    if (hasBuildRequest) {
+    if (hasBuildRequest && !/^(sara[,\s]*)?faz sozinha$/i.test(lower)) {
       extractedGoal = clean
         .replace(/^(sara\s*,?\s*)/i, '')
-        .replace(/\b(e\s+)?(ativa|ativar|liga|ligar|usa)\s+(o\s+)?(modo\s+)?autom[aá]tico.*$/i, '')
+        .replace(/\b(e\s+)?(ativa|ativar|liga|ligar|usa|muda\s+para|passa\s+para)\s+(o\s+)?(modo\s+)?autom[aá]tico.*$/i, '')
         .replace(/,?\s*(vou dormir|vou sair|faz sozinha).*$/i, '')
         .trim();
     }
@@ -165,20 +407,13 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
     };
   }
 
-  if (lower.includes('abre o console') || lower.includes('abrir console') || lower.includes('abrir o console')) {
-    return { type: 'open_console' };
-  }
-  if (lower.includes('corrige o erro') || lower.includes('corrigir o erro') || lower.includes('corrigir erro')) {
-    return { type: 'fix_error' };
-  }
-  if (lower.includes('preview em telemovel') || lower.includes('modo telemovel')) {
-    return { type: 'preview_mobile' };
-  }
-  if (lower.includes('preview em pc') || lower.includes('modo pc')) {
-    return { type: 'preview_desktop' };
-  }
-  if (lower.includes('salva o projeto') || lower.includes('salvar o projeto') || lower.includes('guarda o projeto')) {
-    return { type: 'save_project' };
+  // Continuar projeto de onde parou
+  if (
+    /^(sara[,\s]*)?continua(\s+o\s+projeto|\s+de\s+onde\s+parou|\s+de\s+onde\s+paramos)?$/.test(lower) ||
+    lower.includes('continua de onde par') ||
+    lower.includes('continuar projeto')
+  ) {
+    return { type: 'continue_project', raw: clean };
   }
 
   return { type: 'prompt', text: clean };
@@ -535,6 +770,43 @@ export interface SpeakOptions {
  * Fala apenas o resumo essencial (ou detalhe se forceSpeak / level='full').
  * Pausa o microfone durante toda a fala e só religa 400ms depois de terminar.
  */
+const VOICE_SPEED_KEY = 'sara_biulder_voice_speed_v1';
+
+function loadSavedSpeechRate(): number {
+  try {
+    const raw = localStorage.getItem(VOICE_SPEED_KEY);
+    if (raw) {
+      const val = Number(raw);
+      if (Number.isFinite(val) && val >= 0.75 && val <= 1.5) return val;
+    }
+  } catch {
+    // ignore
+  }
+  return 1.05;
+}
+
+let customBaseRate = typeof window !== 'undefined' ? loadSavedSpeechRate() : 1.05;
+
+export function adjustVoiceSpeed(direction: 'faster' | 'slower' | 'normal'): number {
+  if (direction === 'normal') {
+    customBaseRate = 1.05;
+  } else if (direction === 'faster') {
+    customBaseRate = Math.min(1.45, Number((customBaseRate + 0.15).toFixed(2)));
+  } else {
+    customBaseRate = Math.max(0.8, Number((customBaseRate - 0.15).toFixed(2)));
+  }
+  try {
+    localStorage.setItem(VOICE_SPEED_KEY, String(customBaseRate));
+  } catch {
+    // ignore
+  }
+  return customBaseRate;
+}
+
+/**
+ * Fala apenas o resumo essencial (ou detalhe se forceSpeak / level='full').
+ * Pausa o microfone durante toda a fala e só religa 400ms depois de terminar.
+ */
 export function speakAsSara(
   text: string,
   enabled: boolean,
@@ -597,8 +869,8 @@ export function speakAsSara(
     const period = getTimePeriod();
     const utterance = new SpeechSynthesisUtterance(spoken);
     utterance.lang = 'pt-PT';
-    // Voz natural equilibrada com adaptação subtil à hora do dia
-    utterance.rate = period === 'night' ? 1.01 : 1.05;
+    // Voz natural equilibrada com ajuste de velocidade do Eletro-Jr e período do dia
+    utterance.rate = period === 'night' ? Math.max(0.8, customBaseRate - 0.04) : customBaseRate;
     utterance.pitch = period === 'night' ? 1.0 : period === 'morning' ? 1.07 : 1.05;
     utterance.volume = period === 'night' ? 0.85 : 1.0;
 
@@ -608,7 +880,11 @@ export function speakAsSara(
       utterance.lang = voice.lang;
     }
 
+    let finished = false;
     const finishSpeech = () => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(safetyTimer);
       saraEstaAFalar = false;
       speakingStateListener?.(false);
       opts.onFinished?.();
@@ -623,6 +899,10 @@ export function speakAsSara(
       }
     };
 
+    // Garantia de segurança caso o navegador bloqueie eventos onend de TTS
+    const safetyMs = Math.min(7500, Math.max(1800, spoken.length * 70));
+    const safetyTimer = setTimeout(finishSpeech, safetyMs);
+
     utterance.onend = finishSpeech;
     utterance.onerror = finishSpeech;
 
@@ -632,6 +912,19 @@ export function speakAsSara(
     speakingStateListener?.(false);
     opts.onFinished?.();
   }
+}
+
+export function speakAsSaraAndWait(
+  text: string,
+  enabled: boolean,
+  options?: Omit<SpeakOptions, 'onFinished'>
+): Promise<void> {
+  return new Promise((resolve) => {
+    speakAsSara(text, enabled, {
+      ...(options || {}),
+      onFinished: resolve,
+    });
+  });
 }
 
 export function playCompletionChime(): void {

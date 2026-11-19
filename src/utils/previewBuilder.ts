@@ -5,12 +5,23 @@ function sortJsFilesForExecution(paths: string[]): string[] {
     const lower = p.toLowerCase();
     if (lower.includes('config') || lower.includes('firebase')) return 1;
     if (lower.includes('data') || lower.includes('store') || lower.includes('state')) return 2;
-    if (lower.includes('service') || lower.includes('util') || lower.includes('audio')) return 3;
-    if (lower.includes('component')) return 4;
-    if (lower.endsWith('app.js') || lower.endsWith('main.js') || lower.endsWith('index.js')) return 9;
-    return 5;
+    if (lower.includes('util') || lower.includes('format') || lower.includes('helper')) return 3;
+    if (lower.includes('service') || lower.includes('auth') || lower.includes('pagamento')) return 4;
+    if (lower.includes('engine')) return 5;
+    if (lower.includes('render')) return 6;
+    if (lower.includes('component')) return 7;
+    if (lower.includes('scene')) return 8;
+    if (lower.includes('page')) return 9;
+    if (
+      lower.endsWith('app.js') ||
+      lower.endsWith('main.js') ||
+      lower.endsWith('index.js') ||
+      lower.includes('/app/')
+    )
+      return 11;
+    return 7;
   };
-  return [...paths].sort((a, b) => rank(a) - rank(b));
+  return [...paths].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
 function processJsForPreview(files: ProjectFiles, jsPaths: string[]): {
@@ -23,12 +34,6 @@ function processJsForPreview(files: ProjectFiles, jsPaths: string[]): {
 
   for (const filePath of jsPaths) {
     let code = files[filePath] || '';
-    // Remove importações locais relativas (ex: import ... from './utils.js')
-    code = code
-      .replace(/^\s*import\s+[\s\S]*?from\s+['"]\.\.?\/[^'"]+['"];?\s*$/gm, '')
-      .replace(/^\s*import\s+['"]\.\.?\/[^'"]+['"];?\s*$/gm, '')
-      .replace(/^\s*export\s+(default\s+)?/gm, '');
-
     // Extrai importações remotas CDN (ex: Firebase CDN) para o topo do <script type="module">
     code = code.replace(
       /^\s*import\s+(?:[\s\S]*?from\s+)?['"](https?:\/\/[^'"]+)['"];?\s*$/gm,
@@ -41,6 +46,14 @@ function processJsForPreview(files: ProjectFiles, jsPaths: string[]): {
         return '';
       }
     );
+
+    // Remove importações locais relativas ou absolutas entre pastas e declarações export
+    code = code
+      .replace(/^\s*import\s+(?:type\s+)?[\s\S]*?\sfrom\s+['"](?:\.\.?\/|\/|@\/)[^'"]+['"];?[ \t]*/gm, '')
+      .replace(/^\s*import\s+['"](?:\.\.?\/|\/|@\/)[^'"]+['"];?[ \t]*/gm, '')
+      .replace(/^\s*export\s+\{[^}]*\};?[ \t]*/gm, '')
+      .replace(/^\s*export\s+default\s+/gm, '')
+      .replace(/^\s*export\s+(?=(async\s+)?function|const|let|var|class)/gm, '');
 
     code = code.replace(/<\/script>/gi, '<\\/script>');
     if (code.trim()) {

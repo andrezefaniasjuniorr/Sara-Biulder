@@ -8,6 +8,7 @@ import type {
   ProjectFiles,
   ProjectType,
 } from '../types/builder';
+import type { SaraProjectState } from '../utils/projectMemory';
 
 export interface ConvertedImage {
   data: string;
@@ -201,6 +202,8 @@ export interface StreamMeta {
   projectType?: ProjectType;
   plan?: string;
   steps?: string[];
+  nextStep?: string;
+  missingFeatures?: string[];
   suggestion?: string;
 }
 
@@ -212,6 +215,8 @@ export interface SaraBuilderResult {
   projectName?: string;
   projectType?: ProjectType;
   planSentence?: string;
+  nextStep?: string;
+  missingFeatures?: string[];
   proactiveSuggestion?: string;
   assumedNotes?: string[];
   engineLabel: string;
@@ -313,6 +318,7 @@ export async function runSaraStream(params: {
   attachments?: AttachedFile[];
   agentMode?: AgentMode;
   pastProjects?: string[];
+  projectState?: SaraProjectState | null;
   callbacks?: StreamBuildCallbacks;
 }): Promise<SaraBuilderResult> {
   const {
@@ -324,6 +330,7 @@ export async function runSaraStream(params: {
     attachments,
     agentMode,
     pastProjects,
+    projectState,
     callbacks,
   } = params;
   const customKey = getSavedGeminiKey();
@@ -377,6 +384,7 @@ export async function runSaraStream(params: {
       attachedFiles: textAttachments,
       agentMode,
       pastProjects,
+      projectState,
     }),
   });
 
@@ -465,6 +473,8 @@ export async function runSaraStream(params: {
     projectName: lastParsed.meta?.projectName,
     projectType: lastParsed.meta?.projectType,
     planSentence: lastParsed.meta?.plan,
+    nextStep: lastParsed.meta?.nextStep,
+    missingFeatures: lastParsed.meta?.missingFeatures,
     proactiveSuggestion: lastParsed.meta?.suggestion,
     engineLabel: `${modelUsed}${customKey ? ' + TXT' : ''}`,
     modelUsed,
@@ -483,8 +493,9 @@ export async function askSaraBuilderStep(params: {
   consoleLogs: ConsoleEntry[];
   history: ChatMessage[];
   image?: ConvertedImage | null;
+  projectState?: SaraProjectState | null;
 }): Promise<SaraBuilderResult> {
-  const { prompt, files, consoleLogs, history, image } = params;
+  const { prompt, files, consoleLogs, history, image, projectState } = params;
   const customKey = getSavedGeminiKey();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (customKey) headers['x-gemini-api-key'] = customKey;
@@ -500,6 +511,7 @@ export async function askSaraBuilderStep(params: {
       imageBase64: image?.data,
       imageMimeType: image?.mimeType,
       forceBuilderMode: true,
+      projectState,
     }),
   });
 
@@ -526,7 +538,8 @@ export async function planAutonomousMission(
   goal: string,
   files: ProjectFiles,
   mode: AgentMode = 'automatic',
-  pastProjects: string[] = []
+  pastProjects: string[] = [],
+  projectState?: SaraProjectState | null
 ): Promise<{
   planSentence: string;
   intro: string;
@@ -540,7 +553,7 @@ export async function planAutonomousMission(
   const response = await fetch('/api/mission/plan', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ goal, files, mode, pastProjects }),
+    body: JSON.stringify({ goal, files, mode, pastProjects, projectState }),
   });
 
   const data = await response.json().catch(() => ({}));
