@@ -1,0 +1,6 @@
+{
+  "name": "SARA BIULDER",
+  "description": "O construtor inteligente de sites, apps e jogos de Eletro-Jr.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

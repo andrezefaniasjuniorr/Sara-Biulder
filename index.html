@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="pt" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SARA BIULDER — Construtor Inteligente de Eletro-Jr</title>
+    <meta name="description" content="O construtor inteligente de sites, apps e jogos de Eletro-Jr." />
+    <meta property="og:title" content="SARA BIULDER — Construtor Inteligente de Eletro-Jr" />
+    <meta property="og:description" content="O construtor inteligente de sites, apps e jogos de Eletro-Jr." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Importmap para Firebase via CDN (sem necessidade de npm) -->
+    <script type="importmap">
+      {
+        "imports": {
+          "firebase/app": "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js",
+          "firebase/auth": "https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js",
+          "firebase/firestore": "https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js",
+          "firebase/analytics": "https://www.gstatic.com/firebasejs/11.6.0/firebase-analytics.js"
+        }
+      }
+    </script>
+  </head>
+  <body class="bg-[#0A0A0F] text-white antialiased selection:bg-[#3B82F6]/30 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
