@@ -3,16 +3,22 @@ export type VoiceLevel = 'short' | 'medium' | 'full';
 export type VoiceCommandAction =
   | { type: 'background_smalltalk'; reply: string; raw: string }
   | { type: 'silence_sara'; raw: string }
+  | { type: 'confirm_pending'; raw: string }
+  | { type: 'cancel_pending'; raw: string }
   | { type: 'voice_level'; level: VoiceLevel; raw: string }
   | { type: 'voice_speed'; direction: 'faster' | 'slower' | 'normal'; raw: string }
   | { type: 'switch_manual'; raw: string }
   | { type: 'switch_automatic'; goal?: string; contextCue?: 'sleep' | 'leave'; raw: string }
+  | { type: 'pause_mission' }
+  | { type: 'resume_mission' }
+  | { type: 'open_report' }
   | { type: 'continue_project'; raw: string }
   | { type: 'query_status'; raw: string }
   | { type: 'query_report'; raw: string }
   | { type: 'open_editor' }
   | { type: 'open_editor_fullscreen' }
   | { type: 'open_files' }
+  | { type: 'focus_file'; filePath: string }
   | { type: 'close_editor_or_back' }
   | { type: 'open_console' }
   | { type: 'show_preview' }
@@ -21,10 +27,10 @@ export type VoiceCommandAction =
   | { type: 'preview_tablet' }
   | { type: 'preview_desktop' }
   | { type: 'open_deploy' }
-  | { type: 'push_github' }
+  | { type: 'push_github'; preAuthorized?: boolean }
   | { type: 'save_project' }
   | { type: 'download_zip' }
-  | { type: 'clear_chat' }
+  | { type: 'clear_chat'; preAuthorized?: boolean }
   | { type: 'open_projects' }
   | { type: 'open_settings' }
   | { type: 'start_listening' }
@@ -32,6 +38,16 @@ export type VoiceCommandAction =
   | { type: 'undo_version' }
   | { type: 'refresh_preview' }
   | { type: 'prompt'; text: string };
+
+export interface VoiceParseContext {
+  activeTab?: 'files' | 'editor' | 'console';
+  previewDevice?: 'desktop' | 'tablet' | 'mobile';
+  isEditorFullscreen?: boolean;
+  hasPendingConfirm?: boolean;
+  projectFiles?: string[];
+  isMissionActive?: boolean;
+  isMissionPaused?: boolean;
+}
 
 function getTimePeriod(): 'morning' | 'afternoon' | 'night' {
   const hour = new Date().getHours();
@@ -191,14 +207,113 @@ export function getModeSwitchSpeech(mode: 'manual' | 'automatic'): string {
   ]);
 }
 
-export function parseVoiceCommand(transcript: string): VoiceCommandAction {
-  const clean = transcript.trim();
+/**
+ * Corrige erros fonéticos frequentes do reconhecimento de voz pt-PT dentro do contexto técnico da plataforma.
+ */
+export function normalizePhoneticVoiceTranscript(transcript: string): string {
+  let out = transcript.trim();
+  if (!out) return out;
+
+  // Confusão comum do nome "Sara" no início da frase (ex: "sala abre o editor", "zara modo manual")
+  out = out.replace(
+    /^(sala|saia|cara|zara|lara)(?=[\s,]+(abre|abrir|fecha|fechar|faz|fazer|modo|desfaz|mostra|vai|para|continua|limpa|baixa|salva|guarda|atualiza|recarrega|cala|pausa|retoma|tudo|esta|oi|ola))/i,
+    'Sara'
+  );
+
+  // Confusões técnicas recorrentes em STT português
+  const replacements: Array<[RegExp, string]> = [
+    [/\b(priviu|perviu|pr[eé]vio|pre viu)\b/gi, 'preview'],
+    [/\b(consola|consolo|conselho)\b/gi, 'console'],
+    [/\b(heitor|aditor|edito)\b/gi, 'editor'],
+    [/\b(feicheiros|fixeiros)\b/gi, 'ficheiros'],
+    [/\b(deploi|de\s+poi|dip[l]?oy)\b/gi, 'deploy'],
+    [/\b(puxa|puxe|puche|pux)\b(?=\s+(para|pro|github|git|agora|$))/gi, 'push'],
+    [/\b(faz|fazer|envia|manda)\s+(puxa|puxe|puche|pux)\b/gi, '$1 push'],
+    [/\b(zipe|sipe|sip)\b(?=\s|$)/gi, 'zip'],
+    [/\b(disfaz|des\s+faz)\b/gi, 'desfaz'],
+    [/\b(manoel|manuais)\b/gi, 'manual'],
+    [/\b(automato|autom[aá]ticos)\b/gi, 'automático'],
+    [/\b(tabrete|tablate|t[aá]blete)\b/gi, 'tablet'],
+    [/\b(tela\s+cheia|ecra\s+inteiro|ekra\s+inteiro)\b/gi, 'tela cheia'],
+    [/\b(git\s*hub|guit\s*hub|jithub)\b/gi, 'github'],
+    [/\b(chart\s*js|xart\s*js|shart)\b/gi, 'chart.js'],
+  ];
+
+  for (const [pattern, target] of replacements) {
+    out = out.replace(pattern, target);
+  }
+
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Deteta pedidos destrutivos ou ambíguos quando já existe código funcional no projeto.
+ */
+export function detectAmbiguousOrDangerousPrompt(
+  prompt: string,
+  hasExistingCode: boolean
+): { requiresConfirmation: boolean; title: string; question: string } | null {
+  const lower = prompt
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  if (!lower) return null;
+
+  // Já contém autorização explícita na mesma frase
+  if (/\b(confirmo|autorizo|pode\s+apagar|sim\s+apaga|tenho\s+certeza)\b/i.test(lower)) {
+    return null;
+  }
+
+  if (
+    hasExistingCode &&
+    /\b(apaga\s+tudo|apagar\s+tudo|limpa\s+o\s+projeto|limpar\s+projeto|recria\s+do\s+zero|comeca\s+do\s+zero|reseta\s+tudo|remove\s+toda\s+a\s+logica|apaga\s+o\s+codigo|elimina\s+tudo)\b/i.test(
+      lower
+    )
+  ) {
+    return {
+      requiresConfirmation: true,
+      title: 'Confirmar alteração destrutiva',
+      question:
+        'Já tens código funcional neste projeto. Queres mesmo apagar ou reiniciar a estrutura atual? Diz "Sim, confirmo" ou "Não".',
+    };
+  }
+
+  return null;
+}
+
+export function parseVoiceCommand(
+  transcript: string,
+  context?: VoiceParseContext
+): VoiceCommandAction {
+  const repaired = normalizePhoneticVoiceTranscript(transcript);
+  const clean = repaired.trim();
   const lower = clean
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[.!?]+$/g, '')
     .trim();
+
+  // Confirmação / cancelamento imediato quando há uma pergunta de segurança pendente
+  if (context?.hasPendingConfirm) {
+    const cleanWords = lower.replace(/[,.;:]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (
+      /^(sara\s+)?(sim|confirmo|confirmar|autorizo|ok|claro|avanca|manda\s+ver|executa|faz\s+isso|pode\s+(fazer|ir|enviar|apagar|limpar))(\s+(sim|confirmo|autorizo|pode\s+(fazer|ir|enviar|apagar|limpar)|sara))*$/i.test(
+        cleanWords
+      )
+    ) {
+      return { type: 'confirm_pending', raw: clean };
+    }
+    if (
+      /^(sara\s+)?(nao|cancela|cancelar|aborta|abortar|esquece|para|deixa\s+estar)(\s+(nao|cancela|cancelar|esquece|sara))*$/i.test(
+        cleanWords
+      )
+    ) {
+      return { type: 'cancel_pending', raw: clean };
+    }
+  }
 
   // Conversa rápida em segundo plano (sem chamar IA e sem poluir o chat principal)
   const smallTalkReply = getInstantSmallTalkReply(lower);
@@ -263,6 +378,25 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
     return { type: 'start_listening' };
   }
 
+  // Pausar / retomar missão automática e relatório
+  if (
+    lower.includes('pausa o automatico') ||
+    lower.includes('pausar automatico') ||
+    lower.includes('pausa a missao')
+  ) {
+    return { type: 'pause_mission' };
+  }
+  if (
+    lower.includes('retoma o automatico') ||
+    lower.includes('retomar automatico') ||
+    lower.includes('retoma a missao')
+  ) {
+    return { type: 'resume_mission' };
+  }
+  if (lower.includes('abre o relatorio') || lower.includes('mostra o relatorio') || lower.includes('ver relatorio')) {
+    return { type: 'open_report' };
+  }
+
   // Controlo total da plataforma (Editor, Ficheiros, Console, Preview, Deploy, Push, Projetos, Config)
   if (
     (lower.includes('editor') && (lower.includes('tela cheia') || lower.includes('ecra inteiro'))) ||
@@ -270,19 +404,41 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
   ) {
     return { type: 'open_editor_fullscreen' };
   }
-  if (lower.includes('fecha o editor') || lower.includes('fechar editor') || lower === 'sara, volta' || lower === 'sara volta' || lower === 'volta' || lower.includes('sair de tela cheia')) {
+  if (
+    lower.includes('fecha o editor') ||
+    lower.includes('fechar editor') ||
+    lower === 'sara, volta' ||
+    lower === 'sara volta' ||
+    lower === 'volta' ||
+    lower.includes('sair de tela cheia') ||
+    ((context?.isEditorFullscreen || context?.activeTab === 'editor') &&
+      /^(sara[,\s]+)?(fecha|sair|sai)$/.test(lower))
+  ) {
     return { type: 'close_editor_or_back' };
   }
-  if (lower.includes('abre o editor') || lower.includes('abrir editor') || lower.includes('abrir o editor') || lower.includes('vai para o editor')) {
+  if (/\b(abre|abrir|mostra|mostrar|vai para|foca)\s+((o|a)\s+)?editor\b/.test(lower)) {
     return { type: 'open_editor' };
   }
-  if (lower.includes('abre os ficheiros') || lower.includes('abrir ficheiros') || lower.includes('abre os arquivos') || lower.includes('abrir arquivos')) {
+
+  // Abrir ficheiro específico do projeto por voz (ex: "abre o ficheiro style.css", "foca motor.js")
+  if (context?.projectFiles?.length && /\b(abre|abrir|foca|mostra|edita)\b/.test(lower)) {
+    const fileMatch = context.projectFiles.find((fp) => {
+      const base = fp.split('/').pop()?.toLowerCase() || fp.toLowerCase();
+      const stem = base.replace(/\.[a-z0-9]+$/, '');
+      return lower.includes(fp.toLowerCase()) || lower.includes(base) || (stem.length >= 3 && lower.includes(`ficheiro ${stem}`));
+    });
+    if (fileMatch) {
+      return { type: 'focus_file', filePath: fileMatch };
+    }
+  }
+
+  if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((os|as)\s+)?(ficheiros|arquivos)\b/.test(lower)) {
     return { type: 'open_files' };
   }
-  if (lower.includes('abre o console') || lower.includes('abrir console') || lower.includes('abrir o console')) {
+  if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((o|a)\s+)?console\b/.test(lower)) {
     return { type: 'open_console' };
   }
-  if (lower.includes('mostra o preview') || lower.includes('abre o preview') || lower.includes('mostrar preview')) {
+  if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((o|a)\s+)?preview\b/.test(lower)) {
     return { type: 'show_preview' };
   }
   if (
@@ -290,32 +446,37 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
     lower.includes('modo telemovel') ||
     lower.includes('visao telemovel') ||
     lower.includes('visao celular') ||
-    lower.includes('modo celular')
+    lower.includes('modo celular') ||
+    lower === 'telemovel'
   ) {
     return { type: 'preview_mobile' };
   }
-  if (lower.includes('visao tablet') || lower.includes('modo tablet') || lower.includes('preview em tablet')) {
+  if (lower.includes('visao tablet') || lower.includes('modo tablet') || lower.includes('preview em tablet') || lower === 'tablet') {
     return { type: 'preview_tablet' };
   }
   if (
     lower.includes('preview em pc') ||
     lower.includes('modo pc') ||
     lower.includes('visao pc') ||
-    lower.includes('visao computador')
+    lower.includes('visao computador') ||
+    lower === 'pc' ||
+    lower === 'desktop'
   ) {
     return { type: 'preview_desktop' };
   }
-  if (lower.includes('faz deploy') || lower.includes('fazer deploy') || lower.includes('abre o deploy') || lower.includes('publica o site')) {
+  if (lower.includes('faz deploy') || lower.includes('fazer deploy') || lower.includes('abre o deploy') || lower.includes('publica o site') || lower.includes('publicar site')) {
     return { type: 'open_deploy' };
   }
-  if (lower.includes('faz push') || lower.includes('fazer push') || lower.includes('push para o github') || lower.includes('envia para o github')) {
-    return { type: 'push_github' };
+  if (lower.includes('faz push') || lower.includes('fazer push') || lower.includes('push para o github') || lower.includes('envia para o github') || lower.includes('autorizo o push') || lower.includes('pode fazer push')) {
+    const preAuthorized = /\b(autorizo|confirmo|pode\s+fazer|podes\s+fazer|sim)\b/i.test(lower);
+    return { type: 'push_github', preAuthorized };
   }
   if (lower.includes('baixa o zip') || lower.includes('baixar zip') || lower.includes('baixar o zip') || lower.includes('descarrega o zip')) {
     return { type: 'download_zip' };
   }
   if (lower.includes('limpa o chat') || lower.includes('limpar chat') || lower.includes('limpar o chat')) {
-    return { type: 'clear_chat' };
+    const preAuthorized = /\b(autorizo|confirmo|pode\s+limpar)\b/i.test(lower);
+    return { type: 'clear_chat', preAuthorized };
   }
   if (lower.includes('abre os projetos') || lower.includes('abrir projetos') || lower.includes('lista de projetos')) {
     return { type: 'open_projects' };

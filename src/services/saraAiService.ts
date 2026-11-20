@@ -7,6 +7,7 @@ import type {
   ConsoleEntry,
   ProjectFiles,
   ProjectType,
+  ScreenContextInfo,
 } from '../types/builder';
 import type { SaraProjectState } from '../utils/projectMemory';
 
@@ -440,6 +441,7 @@ export async function runSaraStream(params: {
   agentMode?: AgentMode;
   pastProjects?: string[];
   projectState?: SaraProjectState | null;
+  screenContext?: ScreenContextInfo;
   callbacks?: StreamBuildCallbacks;
 }): Promise<SaraBuilderResult> {
   const {
@@ -452,6 +454,7 @@ export async function runSaraStream(params: {
     agentMode,
     pastProjects,
     projectState,
+    screenContext,
     callbacks,
   } = params;
   const customKey = getSavedGeminiKey();
@@ -473,6 +476,7 @@ export async function runSaraStream(params: {
     agentMode,
     pastProjects,
     projectState,
+    screenContext,
   };
 
   if (isPureConversationIntent(prompt, Boolean(image), textAttachments.length > 0)) {
@@ -655,8 +659,9 @@ export async function askSaraBuilderStep(params: {
   history: ChatMessage[];
   image?: ConvertedImage | null;
   projectState?: SaraProjectState | null;
+  screenContext?: ScreenContextInfo;
 }): Promise<SaraBuilderResult> {
-  const { prompt, files, consoleLogs, history, image, projectState } = params;
+  const { prompt, files, consoleLogs, history, image, projectState, screenContext } = params;
   const customKey = getSavedGeminiKey();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (customKey) headers['x-gemini-api-key'] = customKey;
@@ -672,6 +677,7 @@ export async function askSaraBuilderStep(params: {
       imageMimeType: image?.mimeType,
       forceBuilderMode: true,
       projectState,
+      screenContext,
     },
     headers,
     'Erro ao executar etapa'

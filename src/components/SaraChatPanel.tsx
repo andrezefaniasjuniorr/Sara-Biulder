@@ -35,6 +35,7 @@ import type {
   LiveBuildInfo,
   ManualProposalState,
   MissionState,
+  PendingVoiceConfirmation,
 } from '../types/builder';
 import { convertFileToMultimodalImage, type ConvertedImage } from '../services/saraAiService';
 
@@ -45,6 +46,7 @@ interface SaraChatPanelProps {
   isSaraSpeaking: boolean;
   isListening: boolean;
   isVoiceProcessing?: boolean;
+  pendingConfirmation?: PendingVoiceConfirmation | null;
   liveBuild: LiveBuildInfo;
   mission: MissionState;
   manualProposal: ManualProposalState;
@@ -52,6 +54,8 @@ interface SaraChatPanelProps {
   resumableGoal?: string;
   onResumeSavedMission: () => void;
   onDiscardSavedMission: () => void;
+  onConfirmPending?: () => void;
+  onCancelPending?: () => void;
   onToggleMic: () => void;
   onSendMessage: (
     text: string,
@@ -166,6 +170,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   isSaraSpeaking,
   isListening,
   isVoiceProcessing = false,
+  pendingConfirmation = null,
   liveBuild,
   mission,
   manualProposal,
@@ -173,6 +178,8 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   resumableGoal,
   onResumeSavedMission,
   onDiscardSavedMission,
+  onConfirmPending,
+  onCancelPending,
   onToggleMic,
   onSendMessage,
   onImportZipAttachment,
@@ -414,9 +421,17 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                 : isListening
                 ? 'A ouvir em modo contínuo...'
                 : isThinking || liveBuild.isBuilding
-                ? `${liveBuild.phase === 'thinking' ? 'A pensar...' : 'A construir'} · ${formatTimer(
-                    liveBuild.elapsedSeconds
-                  )}`
+                ? `${
+                    liveBuild.activeFile
+                      ? `A criar ${liveBuild.activeFile}`
+                      : liveBuild.phase === 'thinking'
+                      ? 'A analisar arquitetura'
+                      : liveBuild.phase === 'testing'
+                      ? 'A testar no console'
+                      : liveBuild.phase === 'fixing'
+                      ? 'A corrigir erro'
+                      : 'A construir módulos'
+                  } · ${formatTimer(liveBuild.elapsedSeconds)}`
                 : agentMode === 'manual'
                 ? 'Contigo passo a passo · Eletro-Jr'
                 : 'Autónomo sem limites · Eletro-Jr'}
@@ -553,7 +568,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
             <span className="font-semibold text-white truncate">
               {mission.active
                 ? `Etapa ${Math.min(mission.currentIndex + 1, totalTasks)} de ${totalTasks} — ${
-                    mission.tasks[mission.currentIndex]?.title || 'A processar...'
+                    mission.tasks[mission.currentIndex]?.title || 'A preparar módulo seguinte...'
                   }`
                 : `Missão concluída: ${doneCount}/${totalTasks} etapas`}
             </span>
@@ -919,20 +934,51 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
           );
         })}
 
-        {/* Indicador Efêmero Estilo Google AI Studio (A pensar... -> Plano 1 frase -> Etapa atual) */}
+        {/* Cartão de Confirmação Direta (Segurança & Autorizações) */}
+        {pendingConfirmation && (
+          <div className="w-full rounded-xl bg-amber-950/35 border border-amber-400/50 p-3.5 space-y-2.5 shadow-[0_0_24px_rgba(245,158,11,0.12)]">
+            <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase tracking-wider text-amber-300 font-bold">
+              <span>{pendingConfirmation.title}</span>
+              <span>Aguardar confirmação</span>
+            </div>
+            <p className="text-xs text-amber-50 leading-relaxed">{pendingConfirmation.question}</p>
+            <div className="flex flex-wrap items-center gap-2 pt-0.5">
+              <button
+                type="button"
+                onClick={onConfirmPending}
+                className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/50 text-emerald-100 text-xs font-semibold cursor-pointer transition"
+              >
+                Confirmar (ou diz &quot;Sim&quot;)
+              </button>
+              <button
+                type="button"
+                onClick={onCancelPending}
+                className="px-3 py-1.5 rounded-lg bg-[#0A0A0F] hover:bg-rose-500/20 border border-[#1F1F2E] hover:border-rose-400/40 text-xs text-[#A1A1AA] hover:text-rose-200 cursor-pointer transition"
+              >
+                Cancelar (ou diz &quot;Não&quot;)
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Indicador Transparente em Tempo Real (Etapas + Ficheiros um por um) */}
         {(isThinking || liveBuild.isBuilding) && (
-          <div className="w-full rounded-xl bg-[#090D16] border border-cyan-400/40 p-3.5 space-y-2 shadow-[0_0_24px_rgba(6,182,212,0.12)]">
+          <div className="w-full rounded-xl bg-[#090D16] border border-cyan-400/40 p-3.5 space-y-2.5 shadow-[0_0_24px_rgba(6,182,212,0.12)]">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-mono font-bold text-cyan-300 min-w-0">
                 <Loader2 className="w-4 h-4 animate-spin text-cyan-400 shrink-0" />
                 <span className="truncate">
                   {liveBuild.phase === 'thinking'
-                    ? 'A pensar...'
+                    ? 'A analisar contexto, estrutura e dependências...'
                     : liveBuild.phase === 'planning'
-                    ? liveBuild.planSentence || 'A planear a melhor estrutura...'
+                    ? liveBuild.planSentence || 'A definir arquitetura modular por pastas...'
+                    : liveBuild.phase === 'testing'
+                    ? liveBuild.currentStepLabel || 'A validar interface, botões e console...'
+                    : liveBuild.phase === 'fixing'
+                    ? liveBuild.currentStepLabel || 'A corrigir falha detetada...'
                     : liveBuild.activeFile
-                    ? `A criar ${liveBuild.activeFile}...`
-                    : liveBuild.currentStepLabel || 'A construir etapa...'}
+                    ? `A criar/editar ${liveBuild.activeFile}`
+                    : liveBuild.currentStepLabel || 'A construir módulos do sistema...'}
                 </span>
               </div>
               <div className="flex items-center gap-1.5 font-mono text-xs text-cyan-300 bg-[#05080F] px-2 py-0.5 rounded border border-cyan-500/30 shrink-0">
@@ -942,12 +988,80 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
             </div>
 
             {liveBuild.planSentence && liveBuild.phase !== 'thinking' && (
-              <p className="text-[11px] text-[#A1A1AA] leading-relaxed">{liveBuild.planSentence}</p>
+              <p className="text-[11px] text-[#A1A1AA] leading-relaxed border-l-2 border-cyan-500/40 pl-2.5">
+                {liveBuild.planSentence}
+              </p>
             )}
 
-            {liveBuild.currentStepLabel && liveBuild.activeFile && (
-              <div className="text-[11px] font-mono text-emerald-300/90 truncate">
-                ↳ {liveBuild.currentStepLabel}
+            {/* Etapas reais da construção */}
+            {liveBuild.steps.length > 0 && (
+              <div className="rounded-lg bg-[#05080F] border border-[#1F1F2E] p-2.5 space-y-1.5">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-cyan-300/80 font-semibold">
+                  Etapas em execução
+                </div>
+                {liveBuild.steps.map((s) => (
+                  <div key={s.id} className="flex items-center gap-2 text-[11px]">
+                    {s.status === 'done' ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                    ) : s.status === 'running' ? (
+                      <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin shrink-0" />
+                    ) : (
+                      <span className="w-3.5 h-3.5 rounded-full border border-[#2A2A3C] inline-block shrink-0" />
+                    )}
+                    <span
+                      className={
+                        s.status === 'done'
+                          ? 'text-emerald-300/90'
+                          : s.status === 'running'
+                          ? 'text-white font-medium'
+                          : 'text-[#A1A1AA]'
+                      }
+                    >
+                      {s.id}. {s.label}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Ficheiros a ser criados/editados um por um */}
+            {(liveBuild.createdFiles.length > 0 || liveBuild.activeFile) && (
+              <div className="rounded-lg bg-[#05080F] border border-cyan-500/20 p-2.5 space-y-1.5">
+                <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-300/90 font-semibold">
+                  Ficheiros ({liveBuild.createdFiles.length})
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {Array.from(
+                    new Set([
+                      ...liveBuild.createdFiles,
+                      ...(liveBuild.activeFile ? [liveBuild.activeFile] : []),
+                    ])
+                  ).map((filePath) => {
+                    const isWriting = liveBuild.activeFile === filePath;
+                    const isCompleted = liveBuild.completedFiles?.includes(filePath) && !isWriting;
+                    return (
+                      <button
+                        key={filePath}
+                        type="button"
+                        onClick={() => onSelectProjectFile(filePath)}
+                        className={`px-2 py-1 rounded text-[10px] font-mono flex items-center gap-1.5 border cursor-pointer transition ${
+                          isWriting
+                            ? 'bg-cyan-500/20 border-cyan-400 text-white animate-pulse'
+                            : isCompleted
+                            ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-200'
+                            : 'bg-[#0D1322] border-cyan-500/30 text-cyan-200'
+                        }`}
+                      >
+                        {isWriting ? (
+                          <Loader2 className="w-3 h-3 animate-spin text-cyan-300" />
+                        ) : (
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                        )}
+                        <span>{filePath}</span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </div>

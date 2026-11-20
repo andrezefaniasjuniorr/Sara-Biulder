@@ -14,11 +14,13 @@ import type {
   MissionReport,
   MissionState,
   MobilePanelTab,
+  PendingVoiceConfirmation,
   PreviewDevice,
   ProjectFiles,
   ProjectRecord,
   ProjectType,
   RightPanelTab,
+  ScreenContextInfo,
   VersionSnapshot,
   VoiceLevel,
 } from './types/builder';
@@ -42,19 +44,21 @@ import { buildStandaloneHtml, downloadProjectZip, importProjectZip } from './uti
 import { getSavedGitHubToken, pushProjectToGitHub } from './utils/githubService';
 import {
   adjustVoiceSpeed,
+  detectAmbiguousOrDangerousPrompt,
   getBuildAcceptanceSpeech,
   getContinuationSpeech,
   getModeSwitchSpeech,
   getSpokenBuildRecap,
+  normalizePhoneticVoiceTranscript,
   parseVoiceCommand,
   playCompletionChime,
   setSaraSilenced,
   setSpeakingStateListener,
   speakAsSara,
-  speakAsSaraAndWait,
   startContinuousVoiceRecognition,
   stopSaraSpeech,
   type VoiceCommandAction,
+  type VoiceParseContext,
 } from './utils/voiceService';
 import {
   isProjectBlank,
@@ -247,6 +251,7 @@ export default function App() {
   const [isListening, setIsListening] = useState(false);
   const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
   const [isSaraSpeaking, setIsSaraSpeaking] = useState(false);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingVoiceConfirmation | null>(null);
   const shouldKeepListeningRef = useRef(false);
   const stopMicRef = useRef<(() => void) | null>(null);
 
@@ -270,6 +275,8 @@ export default function App() {
   const agentModeRef = useRef(agentMode);
   const missionAbortRef = useRef(false);
   const missionPausedRef = useRef(false);
+  const pendingConfirmationRef = useRef<PendingVoiceConfirmation | null>(null);
+  const voiceContextRef = useRef<VoiceParseContext>({});
 
   useEffect(() => {
     voiceEnabledRef.current = voiceEnabled;
@@ -292,6 +299,27 @@ export default function App() {
       // ignore
     }
   }, [agentMode]);
+
+  useEffect(() => {
+    pendingConfirmationRef.current = pendingConfirmation;
+    voiceContextRef.current = {
+      activeTab: rightTab,
+      previewDevice,
+      isEditorFullscreen,
+      hasPendingConfirm: Boolean(pendingConfirmation),
+      projectFiles: Object.keys(currentProject?.files || {}),
+      isMissionActive: mission.active,
+      isMissionPaused: mission.paused,
+    };
+  }, [
+    pendingConfirmation,
+    rightTab,
+    previewDevice,
+    isEditorFullscreen,
+    currentProject?.files,
+    mission.active,
+    mission.paused,
+  ]);
 
   useEffect(() => {
     try {
@@ -590,22 +618,22 @@ export default function App() {
         setMessages((prev) => [...prev, userMsg]);
       }
 
-      // Respostas por voz rodam apenas em 2.º plano (sem balões de conversa no chat)
+      // Respostas por voz confirmam de imediato em paralelo com o arranque técnico (sem atrasar o pipeline)
       if (options?.contextCue === 'sleep') {
-        await speakAsSaraAndWait(
+        speakAsSara(
           'Modo automático ativado, Eletro-Jr! Vou construir tudo sozinha etapa por etapa. Vai descansar tranquilo, amanhã está tudo pronto.',
           voiceEnabledRef.current,
           { level: 'medium', forceSpeak: true }
         );
       } else if (options?.contextCue === 'leave') {
-        await speakAsSaraAndWait(
+        speakAsSara(
           'Pode sair tranquilo, Eletro-Jr! Já ativei o automático e vou criar tudo etapa por etapa.',
           voiceEnabledRef.current,
           { level: 'medium', forceSpeak: true }
         );
       } else if (!options?.resumedMission) {
         const acceptanceSpeech = getBuildAcceptanceSpeech(cleanGoal, 'automatic');
-        await speakAsSaraAndWait(acceptanceSpeech, voiceEnabledRef.current, {
+        speakAsSara(acceptanceSpeech, voiceEnabledRef.current, {
           level: 'medium',
           forceSpeak: true,
         });
@@ -618,6 +646,7 @@ export default function App() {
         elapsedSeconds: 0,
         steps: [],
         createdFiles: [],
+        completedFiles: [],
       });
 
       try {
@@ -716,7 +745,15 @@ export default function App() {
             ...prev,
             isBuilding: true,
             phase: 'building',
+            planSentence: prev.planSentence || `Missão autónoma: ${cleanGoal}`,
             currentStepLabel: `Etapa ${i + 1} de ${plannedTasks.length} — ${task.title}`,
+            steps: plannedTasks.map((t, idx) => ({
+              id: t.id,
+              label: t.title,
+              status: idx < i ? 'done' : idx === i ? 'running' : 'pending',
+            })),
+            createdFiles: Object.keys(workingFiles),
+            completedFiles: Object.keys(workingFiles),
           }));
 
           addConsoleLog('info', `[Automático] Etapa ${i + 1}/${plannedTasks.length}: ${task.title}`);
@@ -765,11 +802,19 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
               const firstKey = Object.keys(res.files)[0];
               if (firstKey) setActiveFile(firstKey);
               setRefreshSeed((s) => s + 1);
+              const allCreated = Object.keys(workingFiles);
+              setLiveBuild((prev) => ({
+                ...prev,
+                createdFiles: allCreated,
+                completedFiles: allCreated,
+                activeFile: firstKey,
+              }));
             }
 
             setLiveBuild((prev) => ({
               ...prev,
               phase: 'testing',
+              activeFile: undefined,
               currentStepLabel: `A testar etapa ${i + 1} no console...`,
             }));
 
@@ -868,14 +913,15 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
           // não bloqueia conclusão se auditoria der timeout
         }
 
-        // 5. PUSH AUTOMÁTICO PARA O GITHUB (se houver token configurado)
+        // 5. PUSH PARA O GITHUB (respeita autorização explícita do Eletro-Jr)
         let githubUrl: string | undefined;
         const ghToken = getSavedGitHubToken();
-        if (ghToken) {
+        const pushAuthorizedInGoal = /\b(push|github|publica|publicar|envia\s+para\s+o\s+git)\b/i.test(cleanGoal);
+        if (ghToken && pushAuthorizedInGoal) {
           try {
             setLiveBuild((prev) => ({
               ...prev,
-              currentStepLabel: 'A fazer Push automático para o GitHub...',
+              currentStepLabel: 'A fazer Push autorizado para o GitHub...',
             }));
             const ghRes = await pushProjectToGitHub({
               projectName: resolvedName,
@@ -886,6 +932,14 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
           } catch (ghErr: any) {
             missionNotes.push(`Push GitHub falhou: ${ghErr?.message || 'verifica o token'}`);
           }
+        } else if (ghToken) {
+          missionNotes.push('Push GitHub aguardando confirmação explícita do Eletro-Jr.');
+          setPendingConfirmation({
+            id: `conf_push_${Date.now()}`,
+            title: 'Autorizar Push para o GitHub',
+            question: `O projeto "${resolvedName}" está pronto e testado. Queres autorizar o push para o GitHub agora?`,
+            action: { type: 'push_github' },
+          });
         } else {
           missionNotes.push('GitHub Token não configurado — o pacote ZIP está pronto para baixar.');
         }
@@ -1291,12 +1345,94 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     [consoleLogs]
   );
 
+  const executeConfirmedAction = useCallback(async () => {
+    const pending = pendingConfirmationRef.current;
+    if (!pending) return;
+    setPendingConfirmation(null);
+
+    if (pending.action.type === 'push_github') {
+      const ghToken = getSavedGitHubToken();
+      if (!ghToken) {
+        setShowDeployModal(true);
+        showToast('Configura o GitHub Token primeiro');
+        speakAsSara('Eletro-Jr, configura o teu GitHub Token primeiro.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+      try {
+        showToast('A enviar para o GitHub...');
+        const res = await pushProjectToGitHub({
+          projectName: currentProject.name,
+          files: currentProject.files,
+        });
+        addConsoleLog('success', `[GitHub Push] Enviado para ${res.repoUrl}`);
+        showToast(`Push concluído: ${res.repoUrl}`);
+        speakAsSara('Push para o GitHub concluído, Eletro-Júnior.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      } catch (err: any) {
+        const msg = err?.message || 'Erro no push para o GitHub.';
+        addConsoleLog('error', msg);
+        showToast(msg);
+        speakAsSara('Deu um erro no push para o GitHub, Eletro-Júnior.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+      return;
+    }
+
+    if (pending.action.type === 'clear_chat') {
+      stopSaraSpeech();
+      setManualProposal(EMPTY_MANUAL_PROPOSAL);
+      setMessages([]);
+      showToast('Chat limpo');
+      speakAsSara('Chat limpo, Eletro-Júnior.', voiceEnabledRef.current, {
+        level: 'short',
+        forceSpeak: true,
+      });
+      return;
+    }
+
+    if (pending.action.type === 'destructive_prompt') {
+      await handleSendMessageRef.current?.(
+        `Confirmo: ${pending.action.prompt}`,
+        undefined,
+        undefined,
+        pending.action.source
+      );
+    }
+  }, [currentProject.name, currentProject.files, addConsoleLog, showToast]);
+
+  const cancelConfirmedAction = useCallback(() => {
+    if (!pendingConfirmationRef.current) return;
+    setPendingConfirmation(null);
+    showToast('Ação cancelada');
+    speakAsSara('Entendido, cancelei essa ação, Eletro-Júnior.', voiceEnabledRef.current, {
+      level: 'short',
+      forceSpeak: true,
+    });
+  }, [showToast]);
+
   // Controlo total da plataforma por Voz ou Chat
   const executePlatformCommand = useCallback(
     async (cmd: VoiceCommandAction, rawText: string): Promise<boolean> => {
       // 1. Calar Sara imediatamente
       if (cmd.type === 'silence_sara') {
         handleForceSilenceSara();
+        return true;
+      }
+
+      // 1b. Confirmação / cancelamento por voz de uma pergunta pendente
+      if (cmd.type === 'confirm_pending') {
+        await executeConfirmedAction();
+        return true;
+      }
+      if (cmd.type === 'cancel_pending') {
+        cancelConfirmedAction();
         return true;
       }
 
@@ -1346,7 +1482,64 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
-      // 5. Troca instantânea de modo (Manual <-> Automático)
+      // 5. Troca instantânea de modo (Manual <-> Automático) e controlo da missão
+      if (cmd.type === 'pause_mission') {
+        if (mission.active && !mission.paused) {
+          missionPausedRef.current = true;
+          setMission((prev) => ({ ...prev, paused: true }));
+          showToast('Modo Automático pausado');
+          speakAsSara('Pausei o modo automático, Eletro-Júnior.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        } else {
+          speakAsSara('Não há nenhuma missão ativa neste momento, Eletro-Júnior.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        }
+        return true;
+      }
+
+      if (cmd.type === 'resume_mission') {
+        if (mission.active && mission.paused) {
+          missionPausedRef.current = false;
+          setMission((prev) => ({ ...prev, paused: false }));
+          showToast('Modo Automático retomado');
+          speakAsSara('Retomei a missão automática, Eletro-Júnior.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        }
+        return true;
+      }
+
+      if (cmd.type === 'open_report') {
+        const rep = mission.report || lastCompletedReport;
+        if (rep) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `sara_rep_voice_${Date.now()}`,
+              sender: 'sara',
+              text: formatMissionReportText(rep),
+              timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+              mode: 'mission',
+            },
+          ]);
+          speakAsSara(`Mostrei o relatório do ${rep.projectName} no painel, Eletro-Júnior.`, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        } else {
+          speakAsSara('Ainda não há relatório concluído, Eletro-Júnior.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        }
+        return true;
+      }
+
       if (cmd.type === 'switch_manual') {
         handleSwitchMode('manual');
         return true;
@@ -1359,7 +1552,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           const autoMsg = 'Entendido, Eletro-Júnior, vou fazer sozinha no automático.';
           setAgentMode('automatic');
           showToast('Modo Automático ativado');
-          await speakAsSaraAndWait(autoMsg, voiceEnabledRef.current, {
+          speakAsSara(autoMsg, voiceEnabledRef.current, {
             level: 'short',
             forceSpeak: true,
           });
@@ -1400,6 +1593,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       // 7. Controlo completo de ecrãs, editor, ficheiros, console, preview e ações
+      if (cmd.type === 'focus_file') {
+        setIsEditorFullscreen(false);
+        setActiveFile(cmd.filePath);
+        setRightTab('editor');
+        setMobileTab('code');
+        showToast(`Ficheiro aberto: ${cmd.filePath}`);
+        speakAsSara(`Abri o ficheiro ${cmd.filePath} no editor, Eletro-Júnior.`, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
       if (cmd.type === 'open_editor') {
         setIsEditorFullscreen(false);
         setRightTab('editor');
@@ -1525,6 +1731,20 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           });
           return true;
         }
+        if (!cmd.preAuthorized) {
+          setPendingConfirmation({
+            id: `conf_push_${Date.now()}`,
+            title: 'Confirmar Push GitHub',
+            question: `Confirmas enviar os ${Object.keys(currentProject.files).length} ficheiros de "${currentProject.name}" para o GitHub? Diz "Sim, confirmo" ou "Não".`,
+            action: { type: 'push_github' },
+          });
+          speakAsSara(
+            `Confirmas o push de ${currentProject.name} para o GitHub, Eletro-Júnior?`,
+            voiceEnabledRef.current,
+            { level: 'short', forceSpeak: true }
+          );
+          return true;
+        }
         try {
           showToast('A enviar para o GitHub...');
           const res = await pushProjectToGitHub({
@@ -1565,6 +1785,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'clear_chat') {
+        if (!cmd.preAuthorized && messages.length > 0) {
+          setPendingConfirmation({
+            id: `conf_clear_${Date.now()}`,
+            title: 'Confirmar Limpeza do Chat',
+            question: 'Queres mesmo limpar todo o histórico técnico deste chat? Diz "Sim" ou "Não".',
+            action: { type: 'clear_chat' },
+          });
+          speakAsSara('Confirmas limpar o histórico técnico do chat, Eletro-Júnior?', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return true;
+        }
         stopSaraSpeech();
         setManualProposal(EMPTY_MANUAL_PROPOSAL);
         setMessages([]);
@@ -1677,6 +1910,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     },
     [
       handleForceSilenceSara,
+      executeConfirmedAction,
+      cancelConfirmedAction,
       showToast,
       handleSwitchMode,
       runAutonomousMission,
@@ -1692,6 +1927,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       handleSaraFixError,
       handleRestoreVersion,
       lastCompletedReport,
+      messages.length,
     ]
   );
 
@@ -1702,11 +1938,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       attachments?: AttachedFile[],
       source: 'text' | 'voice' = 'text'
     ) => {
-      const trimmed = text.trim();
-      if (!trimmed && !image && (!attachments || attachments.length === 0)) return;
+      const rawTrimmed = text.trim();
+      if (!rawTrimmed && !image && (!attachments || attachments.length === 0)) return;
 
       const isVoice = source === 'voice';
-      const cmd = parseVoiceCommand(trimmed);
+      const trimmed = isVoice ? normalizePhoneticVoiceTranscript(rawTrimmed) : rawTrimmed;
+      const cmd = parseVoiceCommand(trimmed, voiceContextRef.current);
       if (cmd.type === 'start_listening') {
         if (!shouldKeepListeningRef.current) {
           shouldKeepListeningRef.current = true;
@@ -1714,7 +1951,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           stopMicRef.current = startContinuousVoiceRecognition({
             shouldKeepListening: () => shouldKeepListeningRef.current,
             onResult: (transcript) => {
-              const voiceCmd = parseVoiceCommand(transcript);
+              const voiceCmd = parseVoiceCommand(transcript, voiceContextRef.current);
               addConsoleLog('info', '[Canal de Voz] Comando captado em 2.º plano.');
               setIsVoiceProcessing(true);
               executePlatformCommand(voiceCmd, transcript)
@@ -1753,6 +1990,30 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       const hasExistingCode = !isProjectBlank(currentProject.files);
       const activeProjectState = loadActiveProjectState(currentProject.id);
+      const screenContext: ScreenContextInfo = {
+        activeTab: rightTab,
+        previewDevice,
+        activeFile,
+        projectName: currentProject.name,
+        isEditorFullscreen,
+        hasExistingCode,
+      };
+
+      // Segurança inteligente: pergunta curto e direto antes de executar pedidos destrutivos/ambíguos
+      const dangerCheck = detectAmbiguousOrDangerousPrompt(trimmed, hasExistingCode);
+      if (dangerCheck) {
+        setPendingConfirmation({
+          id: `conf_danger_${Date.now()}`,
+          title: dangerCheck.title,
+          question: dangerCheck.question,
+          action: { type: 'destructive_prompt', prompt: trimmed, source },
+        });
+        speakAsSara(dangerCheck.question, voiceEnabledRef.current, {
+          level: 'medium',
+          forceSpeak: true,
+        });
+        return;
+      }
 
       // No MODO AUTOMÁTICO, um pedido de criação novo dispara automaticamente o pipeline autónomo
       if (agentModeRef.current === 'automatic' && isNewBuildRequest(trimmed) && !image && !hasExistingCode) {
@@ -1794,14 +2055,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           elapsedSeconds: 0,
           steps: [],
           createdFiles: [],
+          completedFiles: [],
         });
 
         try {
-          await speakAsSaraAndWait(
-            getBuildAcceptanceSpeech(trimmed, 'manual'),
-            voiceEnabledRef.current,
-            { level: 'medium', forceSpeak: true }
-          );
+          speakAsSara(getBuildAcceptanceSpeech(trimmed, 'manual'), voiceEnabledRef.current, {
+            level: 'medium',
+            forceSpeak: true,
+          });
 
           const plan = await planAutonomousMission(
             trimmed,
@@ -1817,6 +2078,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             elapsedSeconds: 0,
             steps: [],
             createdFiles: [],
+            completedFiles: [],
           });
 
           const queue = plan.tasks || [];
@@ -1886,15 +2148,16 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         elapsedSeconds: 0,
         steps: [],
         createdFiles: [],
+        completedFiles: [],
       });
 
-      // Fala aceitação em 2.º plano antes de construir
+      // Fala aceitação imediata em paralelo (zero bloqueio antes do streaming arrancar)
       if (isNewBuildRequest(trimmed) || hasExistingCode) {
         const introSpeech = hasExistingCode
           ? getContinuationSpeech(currentProject.name)
           : getBuildAcceptanceSpeech(trimmed, agentModeRef.current);
-        await speakAsSaraAndWait(introSpeech, voiceEnabledRef.current, {
-          level: 'medium',
+        speakAsSara(introSpeech, voiceEnabledRef.current, {
+          level: 'short',
           forceSpeak: true,
         });
       }
@@ -1910,6 +2173,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           agentMode: agentModeRef.current,
           pastProjects: getRequestedPastProjects(trimmed),
           projectState: activeProjectState,
+          screenContext,
           callbacks: {
             onMeta: (meta, modelUsed) => {
               if (meta.mode === 'conversation') {
@@ -1944,16 +2208,27 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               }
               replaceCurrentProjectFiles(streamedFiles, undefined, undefined, hasExistingCode);
 
-              setLiveBuild((prev) => ({
-                ...prev,
-                isBuilding: true,
-                phase: 'building',
-                activeFile: currentActive,
-                createdFiles: createdList,
-                currentStepLabel:
-                  prev.steps[Math.min(completedFiles.length, Math.max(0, prev.steps.length - 1))]
-                    ?.label || `A criar ${currentActive || 'código'}`,
-              }));
+              setLiveBuild((prev) => {
+                const totalSteps = prev.steps.length;
+                const activeStepIdx = totalSteps
+                  ? Math.min(Math.floor((completedFiles.length / Math.max(1, createdList.length)) * totalSteps), totalSteps - 1)
+                  : -1;
+                return {
+                  ...prev,
+                  isBuilding: true,
+                  phase: 'building',
+                  activeFile: currentActive,
+                  createdFiles: createdList,
+                  completedFiles,
+                  steps: prev.steps.map((s, idx) => ({
+                    ...s,
+                    status: idx < activeStepIdx ? 'done' : idx === activeStepIdx ? 'running' : 'pending',
+                  })),
+                  currentStepLabel:
+                    (activeStepIdx >= 0 ? prev.steps[activeStepIdx]?.label : undefined) ||
+                    `A criar ${currentActive || 'código'}`,
+                };
+              });
             },
           },
         });
@@ -2105,12 +2380,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           {
             id: `sara_err_${Date.now()}`,
             sender: 'sara',
-            text: `Erro técnico na execução: **${errorText}**`,
+            text: `Erro técnico na execução: **${errorText}**\n\nPodes clicar em **Corrigir automaticamente** abaixo ou verificar a ligação/chave API nas Configurações.`,
             errorContext: errorText,
             timestamp: nowTime,
           },
         ]);
-        speakAsSara('Deu um erro técnico, Eletro-Júnior, já deixei os detalhes no painel.', voiceEnabledRef.current, {
+        speakAsSara('Houve uma falha técnica na execução, Eletro-Júnior. Já expliquei o motivo e deixei o botão de correção no painel.', voiceEnabledRef.current, {
           level: 'short',
         });
       }
@@ -2118,6 +2393,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     [
       executePlatformCommand,
       currentProject,
+      rightTab,
+      previewDevice,
+      activeFile,
+      isEditorFullscreen,
       runAutonomousMission,
       manualProposal,
       executeManualApprovedStep,
@@ -2155,7 +2434,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     stopMicRef.current = startContinuousVoiceRecognition({
       shouldKeepListening: () => shouldKeepListeningRef.current,
       onResult: (transcript) => {
-        const cmd = parseVoiceCommand(transcript);
+        const cmd = parseVoiceCommand(transcript, voiceContextRef.current);
         addConsoleLog('info', '[Canal de Voz] Comando captado em 2.º plano.');
 
         if (cmd.type === 'start_listening') {
@@ -2479,6 +2758,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             isSaraSpeaking={isSaraSpeaking}
             isListening={isListening}
             isVoiceProcessing={isVoiceProcessing}
+            pendingConfirmation={pendingConfirmation}
             liveBuild={liveBuild}
             mission={mission}
             manualProposal={manualProposal}
@@ -2495,6 +2775,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               setResumableMission(null);
               localStorage.removeItem(SAVED_MISSION_KEY);
             }}
+            onConfirmPending={executeConfirmedAction}
+            onCancelPending={cancelConfirmedAction}
             onToggleMic={handleToggleMic}
             onSendMessage={handleSendMessage}
             onImportZipAttachment={handleImportZipFromChat}

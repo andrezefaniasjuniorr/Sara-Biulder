@@ -53,7 +53,27 @@ export interface LiveBuildInfo {
   steps: BuildStep[];
   activeFile?: string;
   createdFiles: string[];
+  completedFiles?: string[];
   modelUsed?: string;
+}
+
+export interface ScreenContextInfo {
+  activeTab: RightPanelTab;
+  previewDevice: PreviewDevice;
+  activeFile: string;
+  projectName: string;
+  isEditorFullscreen: boolean;
+  hasExistingCode: boolean;
+}
+
+export interface PendingVoiceConfirmation {
+  id: string;
+  title: string;
+  question: string;
+  action:
+    | { type: 'push_github' }
+    | { type: 'clear_chat' }
+    | { type: 'destructive_prompt'; prompt: string; source: 'text' | 'voice' };
 }
 
 export interface ChatCodeBlock {
