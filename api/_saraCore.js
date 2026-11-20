@@ -115,8 +115,17 @@ export function formatFriendlyAiError(err) {
   if (msg.includes('GEMINI_API_KEY')) {
     return 'Chave da API Gemini não configurada no servidor (GEMINI_API_KEY).';
   }
-  if (msg.includes('403') || msg.includes('PERMISSION_DENIED') || msg.includes('API_KEY_INVALID')) {
-    return 'Chave Gemini inválida ou sem permissão. Verifica nas Configurações ou variáveis de ambiente.';
+  if (
+    err?.status === 401 ||
+    err?.status === 403 ||
+    msg.includes('401') ||
+    msg.includes('403') ||
+    msg.includes('UNAUTHENTICATED') ||
+    msg.includes('ACCOUNT_STATE_INVALID') ||
+    msg.includes('PERMISSION_DENIED') ||
+    msg.includes('API_KEY_INVALID')
+  ) {
+    return 'Chave Gemini inválida ou desativada no servidor. Verifica a GEMINI_API_KEY nas variáveis de ambiente da Vercel/Cloudflare ou carrega o teu TXT nas Configurações.';
   }
   if (isRetryableModelError(err)) {
     return 'Os servidores da IA estão com alta demanda neste segundo. Tenta novamente em instantes.';
