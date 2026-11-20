@@ -44,6 +44,7 @@ interface SaraChatPanelProps {
   isThinking: boolean;
   isSaraSpeaking: boolean;
   isListening: boolean;
+  isVoiceProcessing?: boolean;
   liveBuild: LiveBuildInfo;
   mission: MissionState;
   manualProposal: ManualProposalState;
@@ -164,6 +165,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   isThinking,
   isSaraSpeaking,
   isListening,
+  isVoiceProcessing = false,
   liveBuild,
   mission,
   manualProposal,
@@ -461,6 +463,63 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
         </div>
       </div>
 
+      {/* Canal de Voz J.A.R.V.I.S. em 2.º Plano (sem transcrição de texto no chat) */}
+      {(isListening || isSaraSpeaking || isVoiceProcessing) && (
+        <div className="px-4 py-2 bg-[#070B13] border-b border-cyan-500/25 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="flex items-end gap-[2.5px] h-3.5 shrink-0" aria-hidden="true">
+              <span
+                className={`w-[2.5px] h-2 rounded-full animate-pulse ${
+                  isSaraSpeaking ? 'bg-purple-400' : isVoiceProcessing ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+              />
+              <span
+                className={`w-[2.5px] h-3.5 rounded-full animate-bounce ${
+                  isSaraSpeaking ? 'bg-purple-400' : isVoiceProcessing ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+              />
+              <span
+                className={`w-[2.5px] h-1.5 rounded-full animate-pulse ${
+                  isSaraSpeaking ? 'bg-purple-400' : isVoiceProcessing ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+              />
+              <span
+                className={`w-[2.5px] h-3 rounded-full animate-bounce ${
+                  isSaraSpeaking ? 'bg-purple-400' : isVoiceProcessing ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+              />
+            </span>
+            <span className="text-[11px] font-mono text-cyan-200/90 truncate">
+              {isSaraSpeaking
+                ? 'Voz em 2.º plano · Sara a responder em áudio'
+                : isVoiceProcessing
+                ? 'Voz em 2.º plano · A processar comando...'
+                : 'Voz em 2.º plano · Escuta ativa'}
+            </span>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {isSaraSpeaking && (
+              <button
+                type="button"
+                onClick={onSilenceSara}
+                className="px-2 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-[10px] font-mono text-rose-200 hover:bg-rose-500/30 cursor-pointer"
+              >
+                Calar
+              </button>
+            )}
+            {isListening && (
+              <button
+                type="button"
+                onClick={onToggleMic}
+                className="px-2 py-0.5 rounded bg-[#12121A] border border-[#1F1F2E] text-[10px] font-mono text-[#A1A1AA] hover:text-white cursor-pointer"
+              >
+                Pausar Mic
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Banner: Continuar Missão Anterior */}
       {hasResumableMission && !mission.active && (
         <div className="px-4 py-2.5 bg-[#0D1526] border-b border-blue-500/30 flex items-center justify-between gap-2 shrink-0">
@@ -580,8 +639,41 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
         </div>
       )}
 
-      {/* Feed de Mensagens */}
+      {/* Feed Técnico de Criação (Voz roda em 2.º plano, chat exibe apenas engenharia e entregas) */}
       <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 sara-scroll bg-[radial-gradient(circle_at_top,rgba(6,182,212,0.06),transparent_55%)]">
+        {messages.length === 0 && !isThinking && !liveBuild.isBuilding && (
+          <div className="rounded-xl bg-[#090D16]/90 border border-cyan-500/25 p-4 space-y-3 shadow-[0_0_24px_rgba(6,182,212,0.07)]">
+            <div className="flex items-center justify-between gap-2 border-b border-cyan-500/15 pb-2">
+              <span className="text-xs font-mono font-bold tracking-wider uppercase text-cyan-300">
+                SARA BIULDER // CONSOLA DE ENGENHARIA
+              </span>
+              <span className="text-[10px] font-mono text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">
+                VOZ EM 2.º PLANO
+              </span>
+            </div>
+            <p className="text-xs text-[#A1A1AA] leading-relaxed">
+              Pede por voz ou escreve o sistema que queres construir. Os diálogos por voz rodam em segundo plano — aqui ficam apenas arquitetura, código modular, auditorias e melhorias estratégicas.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              {[
+                'Cria um dashboard financeiro com gráficos Chart.js, Dark/Light mode e CRUD',
+                'Cria uma loja e-commerce completa com carrinho, checkout e filtros',
+                'Cria um sistema escolar com alunos, notas, presenças e relatórios',
+                'Cria um jogo arcade espacial com áudio Web Audio e recordes',
+              ].map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  onClick={() => onSendMessage(preset)}
+                  className="text-left px-3 py-2 rounded-lg bg-[#05080F] hover:bg-cyan-500/10 border border-[#1F1F2E] hover:border-cyan-500/40 text-[11px] text-white/90 transition cursor-pointer"
+                >
+                  {preset}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {messages.map((msg) => {
           const isUser = msg.sender === 'user';
           const isErrorMsg = Boolean(msg.errorContext);
@@ -641,13 +733,23 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                   </div>
                 )}
 
+                {/* Diagnóstico & Arquitetura */}
+                {msg.architectureSummary && !isUser && (
+                  <div className="mb-3 p-3 rounded-lg bg-[#070B14] border border-blue-500/30 space-y-1">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-blue-300 font-bold">
+                      Arquitetura do Sistema
+                    </div>
+                    <p className="text-xs text-white/90 leading-relaxed">{msg.architectureSummary}</p>
+                  </div>
+                )}
+
                 {/* Checklist de Etapas */}
                 {msg.buildSummary && !isUser && (
                   <div className="mb-3 p-3 rounded-lg bg-[#05080F] border border-cyan-500/25 space-y-2">
                     <div className="flex items-center justify-between text-[11px] font-mono">
                       <span className="text-emerald-400 font-semibold flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Etapas concluídas</span>
+                        <span>Módulos construídos ({msg.buildSummary.filesCreated.length})</span>
                       </span>
                       <span className="text-cyan-300 flex items-center gap-1">
                         <Clock className="w-3 h-3" />
@@ -655,14 +757,16 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                       </span>
                     </div>
 
-                    <div className="space-y-1">
-                      {msg.buildSummary.steps.map((s) => (
-                        <div key={s.id} className="flex items-center gap-2 text-[11px] text-[#A1A1AA]">
-                          <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
-                          <span>{s.label}</span>
-                        </div>
-                      ))}
-                    </div>
+                    {msg.buildSummary.steps.length > 0 && (
+                      <div className="space-y-1">
+                        {msg.buildSummary.steps.map((s) => (
+                          <div key={s.id} className="flex items-center gap-2 text-[11px] text-[#A1A1AA]">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <span>{s.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
 
                     {msg.buildSummary.filesCreated.length > 0 && (
                       <div className="pt-2 border-t border-[#1F1F2E] flex flex-wrap gap-1.5">
@@ -776,17 +880,39 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                   </div>
                 )}
 
-                {msg.suggestion && !isUser && (
-                  <div className="mt-2.5 pt-2 border-t border-cyan-500/20 flex items-center justify-between gap-2">
-                    <span className="text-[11px] text-[#A1A1AA]">{msg.suggestion}</span>
-                    <button
-                      type="button"
-                      onClick={() => onApplySuggestion(msg.suggestion!)}
-                      className="px-2.5 py-1 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[10px] font-semibold shrink-0 cursor-pointer"
-                    >
-                      Aplicar
-                    </button>
+                {msg.strategicImprovements && msg.strategicImprovements.length > 0 && !isUser ? (
+                  <div className="mt-3 pt-2.5 border-t border-cyan-500/20 space-y-1.5">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-cyan-300 font-semibold">
+                      Próximas Melhorias Estratégicas (1 Clique)
+                    </div>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {msg.strategicImprovements.slice(0, 2).map((imp, idx) => (
+                        <button
+                          key={`${msg.id}_imp_${idx}`}
+                          type="button"
+                          onClick={() => onApplySuggestion(imp)}
+                          className="w-full text-left px-2.5 py-1.5 rounded-lg bg-[#05080F] hover:bg-cyan-500/15 border border-cyan-500/30 text-[11px] text-cyan-100 flex items-center justify-between gap-2 cursor-pointer transition"
+                        >
+                          <span className="truncate">{idx + 1}. {imp}</span>
+                          <span className="text-[10px] font-mono text-cyan-300 shrink-0">Implementar</span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
+                ) : (
+                  msg.suggestion &&
+                  !isUser && (
+                    <div className="mt-2.5 pt-2 border-t border-cyan-500/20 flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-[#A1A1AA]">{msg.suggestion}</span>
+                      <button
+                        type="button"
+                        onClick={() => onApplySuggestion(msg.suggestion!)}
+                        className="px-2.5 py-1 rounded bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-[10px] font-semibold shrink-0 cursor-pointer"
+                      >
+                        Aplicar
+                      </button>
+                    </div>
+                  )
                 )}
               </div>
             </div>

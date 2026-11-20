@@ -29,6 +29,8 @@ export type VoiceCommandAction =
   | { type: 'open_settings' }
   | { type: 'start_listening' }
   | { type: 'stop_listening' }
+  | { type: 'undo_version' }
+  | { type: 'refresh_preview' }
   | { type: 'prompt'; text: string };
 
 function getTimePeriod(): 'morning' | 'afternoon' | 'night' {
@@ -56,8 +58,8 @@ export function getInstantSmallTalkReply(normalizedLower: string): string | null
   const clean = normalizedLower.replace(/[!?,.;:]/g, '').trim();
 
   if (
-    /^(ola|oi|hey|ei)(\s+sara)?$/i.test(clean) ||
-    /^(bom dia|boa tarde|boa noite)(\s+sara)?$/i.test(clean)
+    /^(ola|oi|hey|ei)(\s+sara)?(\s+(tudo bem|como estas|como vai|esta tudo bem))?$/i.test(clean) ||
+    /^(bom dia|boa tarde|boa noite)(\s+sara)?(\s+(tudo bem|como estas))?$/i.test(clean)
   ) {
     if (period === 'night') {
       return pickNonRepeating([
@@ -87,7 +89,10 @@ export function getInstantSmallTalkReply(normalizedLower: string): string | null
     ]);
   }
 
-  if (/^(como estas|tudo bem|como vai|esta tudo bem)(\s+sara)?$/i.test(clean)) {
+  if (
+    /^(sara\s+)?(estas ai|tas ai|ouves me|esta me a ouvir|sara)$/i.test(clean) ||
+    /^(sara\s+)?(como estas|tudo bem|como vai|esta tudo bem)(\s+sara)?$/i.test(clean)
+  ) {
     return pickNonRepeating([
       'Por aqui está tudo a mil, Eletro-Jr! E desse lado, pronto para criar?',
       'Estou impecável e cheia de ideias, Eletro-Jr. O que vamos montar?',
@@ -323,6 +328,21 @@ export function parseVoiceCommand(transcript: string): VoiceCommandAction {
   }
   if (lower.includes('corrige o erro') || lower.includes('corrigir o erro') || lower.includes('corrigir erro')) {
     return { type: 'fix_error' };
+  }
+  if (
+    lower.includes('desfaz') ||
+    lower.includes('desfazer') ||
+    lower.includes('versao anterior') ||
+    lower.includes('volta atras')
+  ) {
+    return { type: 'undo_version' };
+  }
+  if (
+    lower.includes('atualiza o preview') ||
+    lower.includes('recarrega o preview') ||
+    lower.includes('recarregar preview')
+  ) {
+    return { type: 'refresh_preview' };
   }
 
   // Perguntar progresso durante automático
@@ -925,6 +945,27 @@ export function speakAsSaraAndWait(
       onFinished: resolve,
     });
   });
+}
+
+export function getSpokenBuildRecap(
+  projectName?: string,
+  filesCount = 0,
+  voiceSummary?: string,
+  strategicImprovements?: string[]
+): string {
+  if (voiceSummary && voiceSummary.trim().length > 10) {
+    return voiceSummary.trim();
+  }
+  const base = projectName
+    ? `Construí ${filesCount} ficheiros modulares no ${projectName}, Eletro-Júnior.`
+    : `Atualizei ${filesCount} módulos do sistema no preview, Eletro-Júnior.`;
+  if (strategicImprovements && strategicImprovements.length >= 2) {
+    return `${base} Como próximos passos sugiro ${strategicImprovements[0]} ou ${strategicImprovements[1]}.`;
+  }
+  if (strategicImprovements && strategicImprovements.length === 1) {
+    return `${base} Próxima melhoria recomendada: ${strategicImprovements[0]}.`;
+  }
+  return `${base} Podes testar tudo ao vivo ou pedir o próximo ajuste por voz.`;
 }
 
 export function playCompletionChime(): void {

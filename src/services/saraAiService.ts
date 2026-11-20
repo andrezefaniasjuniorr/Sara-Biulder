@@ -201,9 +201,12 @@ export interface StreamMeta {
   projectName?: string;
   projectType?: ProjectType;
   plan?: string;
+  architecture?: string;
+  voiceSummary?: string;
   steps?: string[];
   nextStep?: string;
   missingFeatures?: string[];
+  strategicImprovements?: string[];
   suggestion?: string;
 }
 
@@ -215,8 +218,11 @@ export interface SaraBuilderResult {
   projectName?: string;
   projectType?: ProjectType;
   planSentence?: string;
+  architectureSummary?: string;
+  voiceSummary?: string;
   nextStep?: string;
   missingFeatures?: string[];
+  strategicImprovements?: string[];
   proactiveSuggestion?: string;
   assumedNotes?: string[];
   engineLabel: string;
@@ -376,9 +382,12 @@ function buildResultFromJsonFallback(
     projectName: data?.projectName,
     projectType: data?.projectType,
     plan: data?.planSentence || data?.plan || 'Construção concluída via API.',
+    architecture: data?.architecture,
+    voiceSummary: data?.voiceSummary,
     steps: Array.isArray(data?.steps) ? data.steps : undefined,
     nextStep: data?.nextStep,
     missingFeatures: Array.isArray(data?.missingFeatures) ? data.missingFeatures : undefined,
+    strategicImprovements: Array.isArray(data?.strategicImprovements) ? data.strategicImprovements : undefined,
     suggestion: data?.proactiveSuggestion,
   };
 
@@ -403,8 +412,11 @@ function buildResultFromJsonFallback(
     projectName: data?.projectName,
     projectType: data?.projectType,
     planSentence: meta.plan,
+    architectureSummary: data?.architecture,
+    voiceSummary: data?.voiceSummary,
     nextStep: data?.nextStep,
     missingFeatures: meta.missingFeatures,
+    strategicImprovements: meta.strategicImprovements,
     proactiveSuggestion: data?.proactiveSuggestion,
     assumedNotes: Array.isArray(data?.assumedNotes) ? data.assumedNotes : [],
     engineLabel: `${modelUsed}${customKey ? ' + TXT' : ''}`,
@@ -619,8 +631,11 @@ export async function runSaraStream(params: {
     projectName: lastParsed.meta?.projectName,
     projectType: lastParsed.meta?.projectType,
     planSentence: lastParsed.meta?.plan,
+    architectureSummary: lastParsed.meta?.architecture,
+    voiceSummary: lastParsed.meta?.voiceSummary,
     nextStep: lastParsed.meta?.nextStep,
     missingFeatures: lastParsed.meta?.missingFeatures,
+    strategicImprovements: lastParsed.meta?.strategicImprovements,
     proactiveSuggestion: lastParsed.meta?.suggestion,
     engineLabel: `${modelUsed}${customKey ? ' + TXT' : ''}`,
     modelUsed,
@@ -669,6 +684,9 @@ export async function askSaraBuilderStep(params: {
     files: data.files,
     projectName: data.projectName,
     projectType: data.projectType,
+    architectureSummary: data.architecture,
+    voiceSummary: data.voiceSummary,
+    strategicImprovements: Array.isArray(data.strategicImprovements) ? data.strategicImprovements : undefined,
     assumedNotes: Array.isArray(data.assumedNotes) ? data.assumedNotes : [],
     engineLabel: data.modelUsed || 'gemini-4-hydrogen',
     modelUsed: data.modelUsed,

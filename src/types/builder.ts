@@ -71,6 +71,9 @@ export interface ChatMessage {
   timestamp: string;
   mode?: 'conversation' | 'builder' | 'mission' | 'error-fix' | 'manual-proposal';
   suggestion?: string;
+  architectureSummary?: string;
+  strategicImprovements?: string[];
+  voiceDelivered?: boolean;
   hasCodeUpdate?: boolean;
   engineLabel?: string;
   errorContext?: string;
