@@ -26,6 +26,8 @@ interface LivePreviewPanelProps {
   elapsedSeconds?: number;
   builtFilesCount?: number;
   isPresentationMode?: boolean;
+  isFullscreen?: boolean;
+  onToggleFullscreen?: () => void;
   onTogglePresentation?: () => void;
   iframeRef: React.RefObject<HTMLIFrameElement | null>;
   onChangeDevice: (device: PreviewDevice) => void;
@@ -45,6 +47,8 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
   elapsedSeconds = 0,
   builtFilesCount = 0,
   isPresentationMode = false,
+  isFullscreen: controlledFullscreen,
+  onToggleFullscreen,
   onTogglePresentation,
   iframeRef,
   onChangeDevice,
@@ -53,7 +57,10 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
   onPushGitHub,
   onPublish,
 }) => {
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [internalFullscreen, setInternalFullscreen] = useState(false);
+  const isFullscreen =
+    controlledFullscreen !== undefined ? controlledFullscreen : internalFullscreen;
+  const toggleFullscreen = onToggleFullscreen || (() => setInternalFullscreen((v) => !v));
   const [debouncedFiles, setDebouncedFiles] = useState<ProjectFiles>(files);
 
   useEffect(() => {
@@ -159,7 +166,7 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
 
           <button
             type="button"
-            onClick={() => setIsFullscreen((v) => !v)}
+            onClick={toggleFullscreen}
             className="px-2 py-1.5 rounded-lg bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white text-xs font-medium flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
             title={isFullscreen ? 'Sair de tela cheia' : 'Tela cheia'}
           >

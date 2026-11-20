@@ -122,88 +122,58 @@ export function extractApiKeyFromTxtContent(txt: string): string | null {
   return match ? match[0] : null;
 }
 
-function isPureConversationIntent(prompt: string, hasImage: boolean, hasAttachments: boolean): boolean {
+export function isPureConversationIntent(
+  prompt: string,
+  hasImage: boolean,
+  hasAttachments: boolean,
+  hasExistingCode = false
+): boolean {
   if (hasImage || hasAttachments) return false;
-  const p = prompt.toLowerCase().trim();
-  const buildKeywords = [
-    'cria',
-    'criar',
-    'gera',
-    'gerar',
-    'faz',
-    'fazer',
-    'constrói',
-    'constroi',
-    'construir',
-    'sistema',
-    'site',
-    'app',
-    'aplicativo',
-    'jogo',
-    'loja',
-    'dashboard',
-    'painel',
-    'portal',
-    'página',
-    'pagina',
-    'botão',
-    'botao',
-    'adiciona',
-    'adicionar',
-    'muda',
-    'mudar',
-    'altera',
-    'alterar',
-    'corrige',
-    'corrigir',
-    'fix',
-    'atualiza',
-    'atualizar',
-    'melhora',
-    'melhorar',
-    'edita',
-    'editar',
-    'coloca',
-    'colocar',
-    'inclui',
-    'incluir',
-  ];
+  const p = prompt
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
 
-  // Pedidos de controlo de plataforma ("apaga o projeto X", "abre o editor grande", etc.) não são geração de código
-  const platformControlCue =
-    /\b(apaga|elimina|remove)\s+(o\s+|a\s+)?(projeto|ficheiro|arquivo)\b|\b(abre|abrir|fecha|fechar|maximiza|minimiza|mostra|vai\s+para|muda\s+para|duplica|renomeia|salva|guarda)\s+(o\s+|a\s+|os\s+|as\s+)?(editor|ficheiro|console|preview|projeto|projetos|telemovel|celular|tablet|pc|desktop|configuracoes|deploy|apresentacao)\b/i.test(
+  // Qualquer verbo/substantivo de construção, edição, UI, estilo, código ou domínio vai SEMPRE para o Builder!
+  const buildOrEditPattern =
+    /\b(cria|criar|crie|gera|gerar|gere|faz|fazer|faze|fazem|constroi|construir|construa|monta|montar|desenvolve|desenvolver|desenvolva|programa|programar|implementa|implementar|adiciona|adicionar|acrescenta|acrescentar|muda|mudar|altera|alterar|troca|trocar|corrige|corrigir|conserta|consertar|fix|atualiza|atualizar|melhora|melhorar|edita|editar|refatora|refatorar|coloca|colocar|mete|meter|poe|por|inclui|incluir|remove|tira|deixa|transforma|quero|preciso|sistema|site|web|website|app|aplicativo|aplicacao|jogo|game|loja|ecommerce|e-commerce|dashboard|painel|portal|landing|portfolio|blog|pagina|ecra|tela|botao|menu|navbar|header|footer|rodape|formulario|cadastro|login|autenticacao|tabela|grafico|chart|card|modal|pesquisa|busca|filtro|carrinho|checkout|pagamento|escola|clinica|restaurante|hotel|banco|agenda|calendario|calculadora|delivery|entregas|cor|cores|tema|dark|light|fonte|layout|design|responsivo|mobile|animacao|imagem|css|html|js|javascript|typescript|codigo|funcionalidade|funcao|ficheiro|arquivo|pasta|api|crud|relatorio|perfil|admin|stock|estoque|fatura|recibo)\b/i;
+
+  const explicitCreateNewSystem =
+    /\b(cria|criar|faz|fazer|gera|gerar|constroi|construir|monta|montar|desenvolve|desenvolver)\b.*\b(site|sistema|app|aplicativo|jogo|loja|dashboard|painel|portal|landing|portfolio|blog|pagina)\b/i.test(
       p
     );
-  if (platformControlCue && !/\b(cria|constr[oó]i|gera)\s+(um\s+)?(site|sistema|app|jogo|loja|dashboard|painel)\b/i.test(p)) {
+
+  // Pedidos puros de controlo de plataforma ("apaga o projeto X", "abre o editor grande", etc.) não geram código
+  const platformControlCue =
+    /\b(apaga|elimina|remove)\s+(o\s+|a\s+|este\s+|aquele\s+)?(projeto|ficheiro|arquivo)\b|\b(abre|abrir|fecha|fechar|maximiza|minimiza|mostra|vai\s+para|muda\s+para|duplica|renomeia|salva|guarda)\s+(o\s+|a\s+|os\s+|as\s+)?(editor|ficheiros|arquivos|console|preview|projeto|projetos|telemovel|celular|tablet|pc|desktop|configuracoes|deploy|apresentacao)\b/i.test(
+      p
+    );
+  if (platformControlCue && !explicitCreateNewSystem) {
     return true;
   }
 
-  if (buildKeywords.some((k) => p.includes(k))) return false;
+  if (buildOrEditPattern.test(p)) {
+    return false;
+  }
 
-  const chatCues = [
-    'ideia',
-    'ideias',
-    'sugere',
-    'sugest',
-    'como ganhar dinheiro',
-    'o que achas',
-    'pensar',
-    'conversa',
-    'olá',
-    'ola',
-    'oi',
-    'tudo bem',
-    'bom dia',
-    'boa tarde',
-    'boa noite',
-    'explica',
-    'por que',
-    'porque',
-    'qual melhor',
-    'quem és',
-    'quem es',
-  ];
-  return chatCues.some((c) => p.includes(c)) || p.split(/\s+/).length <= 5;
+  // Saudações e conversa espontânea pura (apenas quando NÃO há intenção de construir/editar)
+  const pureChatCue =
+    /^(sara[,\s]+)?(ola|oi|hey|ei|bom dia|boa tarde|boa noite|tudo bem|como estas|como vai|obrigado|obrigada|valeu|tchau|ate logo|ate ja|ate amanha|adeus|quem es|estas ai|tas ai|ouves me)([!?,.\s]+(sara|tudo bem|como estas|como vai))*[!?,.\s]*$/i.test(
+      p
+    ) ||
+    /\b(ideia|ideias|sugere|sugest|como ganhar dinheiro|o que achas|pensar|conversa|explica|por que|porque|qual melhor|quem es)\b/i.test(
+      p
+    );
+
+  if (pureChatCue) return true;
+
+  // Se já existe projeto com código, instruções curtas (ex: "azul escuro", "com 3 colunas") vão para o Builder!
+  if (hasExistingCode && p.length >= 4) {
+    return false;
+  }
+
+  return p.split(/\s+/).length <= 2;
 }
 
 export interface StreamMeta {
@@ -241,6 +211,7 @@ export interface SaraBuilderResult {
   codeBlocks?: ChatCodeBlock[];
   modelUsed?: string;
   apiDegraded?: boolean;
+  needsApiKey?: boolean;
 }
 
 export function extractSaraActionsFromText(rawText: string): {
@@ -308,7 +279,47 @@ export function filesToCodeBlocks(files?: ProjectFiles): ChatCodeBlock[] {
     }));
 }
 
-function parseStreamBuffer(fullBuffer: string): {
+function extractMarkdownFilesFallback(rawText: string): ProjectFiles {
+  const fallbackFiles: ProjectFiles = {};
+  if (!rawText) return fallbackFiles;
+
+  // Procura blocos ```lang ... ``` precedidos por título/caminho de ficheiro (ex: ### styles/style.css, **index.html**, `engine/motor.js`)
+  const codeBlockRegex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
+  let blockMatch: RegExpExecArray | null;
+  let unlabeledJsIndex = 0;
+
+  while ((blockMatch = codeBlockRegex.exec(rawText)) !== null) {
+    const lang = (blockMatch[1] || '').toLowerCase();
+    const code = (blockMatch[2] || '').trim();
+    if (!code || lang === 'json') continue;
+
+    const preceding = rawText.slice(Math.max(0, blockMatch.index - 220), blockMatch.index).trimEnd();
+    const lastLine = (preceding.split('\n').pop() || '').trim();
+    const pathMatch = lastLine.match(
+      /^(?:[-*•]\s*)?(?:#{1,6}\s*|\*\*|`|\/\/\s*|<!--\s*|\/\*\s*|ficheiro:\s*|arquivo:\s*|file:\s*)*([a-zA-Z0-9_.\-/]+\.(?:html|htm|css|js|jsx|ts|tsx|json|svg))(?:\*\*|`|-->|\*\/|:|\s)*$/i
+    );
+
+    let targetPath = pathMatch?.[1]?.trim().replace(/^\/+/, '');
+    if (!targetPath) {
+      if (lang === 'html' || lang === 'htm' || /<!doctype html/i.test(code)) {
+        targetPath = 'index.html';
+      } else if (lang === 'css') {
+        targetPath = 'styles/style.css';
+      } else if (lang === 'js' || lang === 'javascript' || lang === 'ts') {
+        targetPath = unlabeledJsIndex === 0 ? 'src/app.js' : `src/module_${unlabeledJsIndex}.js`;
+        unlabeledJsIndex += 1;
+      }
+    }
+
+    if (targetPath && !fallbackFiles[targetPath]) {
+      fallbackFiles[targetPath] = code;
+    }
+  }
+
+  return fallbackFiles;
+}
+
+export function parseStreamBuffer(fullBuffer: string): {
   meta: StreamMeta | null;
   files: ProjectFiles;
   activeFilePath: string | undefined;
@@ -347,6 +358,15 @@ function parseStreamBuffer(fullBuffer: string): {
   if (openMatch) {
     activeFilePath = openMatch[1].trim().replace(/^\/+/, '');
     files[activeFilePath] = stripCodeFence(openMatch[2].trimStart());
+  }
+
+  // Fallback se a IA respondeu com blocos markdown ```html/css/js em vez de <SARA_FILE>
+  if (Object.keys(files).length === 0 && /```[a-zA-Z0-9_-]*\n[\s\S]*?```/.test(fullBuffer)) {
+    const mdFiles = extractMarkdownFilesFallback(fullBuffer);
+    for (const [k, v] of Object.entries(mdFiles)) {
+      files[k] = v;
+      completedFiles.push(k);
+    }
   }
 
   let reply = '';
@@ -539,7 +559,20 @@ export async function runSaraStream(params: {
     screenContext,
   };
 
-  if (isPureConversationIntent(prompt, Boolean(image), textAttachments.length > 0)) {
+  const hasExistingCode = Object.entries(files || {}).some(
+    ([k, v]) => k.toLowerCase() !== 'readme.md' && Boolean(v && String(v).trim())
+  );
+  const pureChat = isPureConversationIntent(
+    prompt,
+    Boolean(image),
+    textAttachments.length > 0,
+    hasExistingCode
+  );
+
+  const isKeyAuthErrorMsg = (msg: string) =>
+    /gemini_api_key|inv[aá]lida|desativada|unauthenticated|api_key_invalid|401|403/i.test(msg);
+
+  if (pureChat) {
     try {
       const saraData = await postJsonWithFallback(
         ['/api/sara', '/api/build'],
@@ -576,14 +609,19 @@ export async function runSaraStream(params: {
         engineLabel: `Builder (${saraData.modelUsed || 'gemini-4-hydrogen'})`,
         modelUsed: saraData.modelUsed,
       };
-    } catch (bgErr) {
+    } catch (bgErr: any) {
+      const errText = String(bgErr?.message || '');
+      const needsKey = isKeyAuthErrorMsg(errText);
       console.warn('[Sara Failover Silencioso - Conversa]:', bgErr);
       const activeProj = screenContext?.projectName || 'este projeto';
       return {
         mode: 'conversation',
-        reply: `Estou ligada em ${activeProj}, Eletro-Jr! Diz-me exatamente o que queres testar, mudar no código ou controlar aqui na plataforma.`,
+        reply: needsKey
+          ? `Falta configurar uma chave Gemini válida nas Configurações para conversar e gerar em **${activeProj}**, Eletro-Jr.`
+          : `Estou ligada em ${activeProj}, Eletro-Jr! Diz-me exatamente o que queres testar, mudar no código ou controlar aqui na plataforma.`,
         updateFiles: false,
         apiDegraded: true,
+        needsApiKey: needsKey,
         engineLabel: 'Sara Continuity Engine',
       };
     }
@@ -620,13 +658,18 @@ export async function runSaraStream(params: {
         'Falha silenciosa de failover'
       );
       return buildResultFromJsonFallback(fallbackData, customKey, callbacks);
-    } catch (bgErr) {
+    } catch (bgErr: any) {
+      const errText = String(bgErr?.message || '');
+      const needsKey = isKeyAuthErrorMsg(errText);
       console.warn('[Sara Failover Silencioso - Fallback direto]:', bgErr);
       return {
         mode: 'conversation',
-        reply: `Estou a reorganizar os motores de geração para continuar ${screenContext?.projectName || 'o teu projeto'}, Eletro-Jr — envia novamente o detalhe ou testa um comando rápido enquanto estabiliza em segundo plano.`,
+        reply: needsKey
+          ? 'Para a Sara criar e editar ficheiros neste servidor, cola a tua chave Gemini (AIza...) nas Configurações.'
+          : `Estou a reorganizar os motores de geração para continuar ${screenContext?.projectName || 'o teu projeto'}, Eletro-Jr — envia novamente o detalhe ou testa um comando rápido enquanto estabiliza em segundo plano.`,
         updateFiles: false,
         apiDegraded: true,
+        needsApiKey: needsKey,
         engineLabel: 'Sara Continuity Engine',
       };
     }
@@ -697,8 +740,11 @@ export async function runSaraStream(params: {
     }
   }
 
-  // Se o stream terminou sem texto útil (ou falhou antes de entregar código), faz failover silencioso em 2.º plano
-  if (!rawModelText.trim()) {
+  const streamHadFiles = Object.keys(lastParsed.files).length > 0;
+  const streamOnlyHasActions = !streamHadFiles && lastParsed.actions.length > 0;
+
+  // Se o stream terminou vazio OU era um pedido de construção/edição e a IA só respondeu texto sem criar ficheiros nem ações, força /api/build com JSON Schema estrito!
+  if ((!rawModelText.trim() || (!streamHadFiles && !streamOnlyHasActions)) && !isKeyAuthErrorMsg(streamErroredMessage)) {
     try {
       const fallbackData = await postJsonWithFallback(
         ['/api/build', '/api/builder/generate'],
@@ -706,17 +752,41 @@ export async function runSaraStream(params: {
         headers,
         streamErroredMessage || 'Failover silencioso na construção'
       );
-      return buildResultFromJsonFallback(fallbackData, customKey, callbacks);
+      const jsonResult = buildResultFromJsonFallback(fallbackData, customKey, callbacks);
+      if (jsonResult.updateFiles && jsonResult.files) {
+        return jsonResult;
+      }
+      if (!rawModelText.trim()) {
+        return jsonResult;
+      }
     } catch (fallbackErr: any) {
-      console.warn('[Sara Failover Silencioso - Stream vazio]:', streamErroredMessage, fallbackErr);
-      return {
-        mode: 'conversation',
-        reply: `Estou a reajustar a rota dos modelos para executar "${prompt.slice(0, 60)}" em ${screenContext?.projectName || 'teu projeto'}, Eletro-Jr. Podes tentar novamente já a seguir que eu assumo daqui!`,
-        updateFiles: false,
-        apiDegraded: true,
-        engineLabel: 'Sara Continuity Engine',
-      };
+      const errText = `${streamErroredMessage} ${String(fallbackErr?.message || '')}`;
+      const needsKey = isKeyAuthErrorMsg(errText);
+      if (!rawModelText.trim()) {
+        console.warn('[Sara Failover Silencioso - Stream vazio]:', streamErroredMessage, fallbackErr);
+        return {
+          mode: 'conversation',
+          reply: needsKey
+            ? 'Para a Sara criar e editar os ficheiros do projeto aqui, carrega ou cola uma chave Gemini válida nas Configurações.'
+            : `Estou a reajustar a rota dos modelos para executar "${prompt.slice(0, 60)}" em ${screenContext?.projectName || 'teu projeto'}, Eletro-Jr. Podes tentar novamente já a seguir que eu assumo daqui!`,
+          updateFiles: false,
+          apiDegraded: true,
+          needsApiKey: needsKey,
+          engineLabel: 'Sara Continuity Engine',
+        };
+      }
     }
+  }
+
+  if (!rawModelText.trim() && isKeyAuthErrorMsg(streamErroredMessage)) {
+    return {
+      mode: 'conversation',
+      reply: 'Para a Sara construir e editar os ficheiros, verifica ou carrega uma chave Gemini válida nas Configurações.',
+      updateFiles: false,
+      apiDegraded: true,
+      needsApiKey: true,
+      engineLabel: 'Sara Continuity Engine',
+    };
   }
 
   const hasFiles = Object.keys(lastParsed.files).length > 0;

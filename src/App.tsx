@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Eye, Code2, Terminal } from 'lucide-react';
+import { MessageSquare, Eye, Code2, Terminal, Mic, MicOff, VolumeX, Loader2 } from 'lucide-react';
 import type {
   AgentMode,
   AttachedFile,
@@ -173,14 +173,20 @@ function isApprovalMessage(text: string): boolean {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
-  return /^(sim|ok|okay|pode continuar|continua|avanca|vai|aprovo|aprovado|faz|pode fazer|bora|comeca|segue|perfeito)[!.]*$/.test(
+  return /^(sara[,\s]+)?(sim|ok|okay|pode continuar|continua|avanca|pode avancar|vai|vai la|aprovo|aprovado|faz|pode fazer|podes fazer|manda ver|bora|comeca|pode comecar|inicia|executa|segue|perfeito)([,\s]+(sara|sim|pode|por favor))?[!.]*$/.test(
     norm
   );
 }
 
 function isNewBuildRequest(text: string): boolean {
-  const lower = text.toLowerCase();
-  return /\b(cria|criar|faz|fazer|gera|gerar|constroi|construir|desenvolve|desenvolver)\b/.test(lower);
+  const lower = text
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  return /\b(cria|criar|crie|faz|fazer|faze|gera|gerar|constroi|construir|desenvolve|desenvolver|monta|montar|programa|programar|quero\s+(um|uma)|preciso\s+de\s+(um|uma))\b/.test(
+    lower
+  );
 }
 
 export default function App() {
@@ -227,6 +233,7 @@ export default function App() {
   const [refreshSeed, setRefreshSeed] = useState(1);
 
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
+  const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
 
   const [errorsFixedCount, setErrorsFixedCount] = useState<number>(() => {
@@ -307,8 +314,14 @@ export default function App() {
       activeTab: rightTab,
       previewDevice,
       isEditorFullscreen,
+      isPreviewFullscreen,
       hasOpenOverlay: Boolean(
-        showProjectsModal || showSettingsModal || showDeployModal || isEditorFullscreen || isPresentationMode
+        showProjectsModal ||
+          showSettingsModal ||
+          showDeployModal ||
+          isEditorFullscreen ||
+          isPreviewFullscreen ||
+          isPresentationMode
       ),
       hasPendingConfirm: Boolean(pendingConfirmation),
       projectFiles: Object.keys(currentProject?.files || {}),
@@ -321,6 +334,7 @@ export default function App() {
     rightTab,
     previewDevice,
     isEditorFullscreen,
+    isPreviewFullscreen,
     isPresentationMode,
     showProjectsModal,
     showSettingsModal,
@@ -675,6 +689,7 @@ export default function App() {
       } else if (e.key === 'Escape') {
         setIsPresentationMode(false);
         setIsEditorFullscreen(false);
+        setIsPreviewFullscreen(false);
         stopSaraSpeech();
       }
     };
@@ -1186,7 +1201,12 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
 
   // Executa a etapa atual aprovada no MODO MANUAL
   const executeManualApprovedStep = useCallback(
-    async (userText: string, proposal: ManualProposalState, source: 'text' | 'voice' = 'text') => {
+    async (
+      userText: string,
+      proposal: ManualProposalState,
+      source: 'text' | 'voice' = 'text',
+      skipUserMsg = false
+    ) => {
       const idx = proposal.currentStepIndex;
       const step = proposal.stepsQueue[idx];
       if (!step) {
@@ -1195,7 +1215,7 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
       }
 
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
-      if (source !== 'voice') {
+      if (source !== 'voice' && !skipUserMsg) {
         setMessages((prev) => [
           ...prev,
           { id: `usr_${Date.now()}`, sender: 'user', text: userText, timestamp: nowTime },
@@ -1412,7 +1432,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     speakAsSara(msgText, true, { level: 'full', forceSpeak: true });
   }, []);
 
-  // Ref para permitir comando "Sara, fixa erro" dentro de executePlatformCommand sem ciclo
+  // Refs estáveis para callbacks de voz nunca capturarem estado antigo
   const handleSendMessageRef = useRef<
     ((
       text: string,
@@ -1420,6 +1440,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       attachments?: AttachedFile[],
       source?: 'text' | 'voice'
     ) => Promise<void>) | null
+  >(null);
+  const executePlatformCommandRef = useRef<
+    ((cmd: VoiceCommandAction, rawText: string) => Promise<boolean>) | null
   >(null);
 
   const stopHandsFreeMic = useCallback(() => {
@@ -1693,6 +1716,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       // 7. Controlo completo de ecrãs, editor, ficheiros, console, preview e ações
       if (cmd.type === 'focus_file') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
+        setIsPreviewFullscreen(false);
         setIsEditorFullscreen(false);
         setActiveFile(cmd.filePath);
         setRightTab('editor');
@@ -1706,6 +1734,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_editor') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
+        setIsPreviewFullscreen(false);
         setIsEditorFullscreen(false);
         setRightTab('editor');
         setMobileTab('code');
@@ -1715,6 +1748,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_editor_fullscreen') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
+        setIsPreviewFullscreen(false);
         setRightTab('editor');
         setMobileTab('code');
         setIsEditorFullscreen(true);
@@ -1727,6 +1765,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_files') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
+        setIsPreviewFullscreen(false);
         setIsEditorFullscreen(false);
         setRightTab('files');
         setMobileTab('code');
@@ -1740,6 +1783,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       if (cmd.type === 'close_editor_or_back') {
         setIsEditorFullscreen(false);
+        setIsPreviewFullscreen(false);
         setIsPresentationMode(false);
         setShowProjectsModal(false);
         setShowSettingsModal(false);
@@ -1754,6 +1798,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_console') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
+        setIsPreviewFullscreen(false);
         setIsEditorFullscreen(false);
         setRightTab('console');
         setMobileTab('console');
@@ -1763,8 +1812,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'show_preview') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
         setIsEditorFullscreen(false);
+        setIsPreviewFullscreen(false);
         setMobileTab('preview');
+        setRefreshSeed((s) => s + 1);
         showToast('Preview aberto');
         speakAsSara('Aqui está o preview, Eletro-Jr.', voiceEnabledRef.current, {
           level: 'short',
@@ -1773,10 +1828,32 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      if (cmd.type === 'open_preview_fullscreen') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
+        setIsEditorFullscreen(false);
+        setMobileTab('preview');
+        setIsPreviewFullscreen(true);
+        setRefreshSeed((s) => s + 1);
+        showToast('Preview em tela cheia');
+        speakAsSara('Preview em tela cheia, Eletro-Jr.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
       if (cmd.type === 'preview_mobile') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
         setIsEditorFullscreen(false);
         setPreviewDevice('mobile');
         setMobileTab('preview');
+        setRefreshSeed((s) => s + 1);
         showToast('Preview em Telemóvel');
         speakAsSara('Preview em telemóvel ativo, Eletro-Jr.', voiceEnabledRef.current, {
           level: 'short',
@@ -1786,9 +1863,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'preview_tablet') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
         setIsEditorFullscreen(false);
         setPreviewDevice('tablet');
         setMobileTab('preview');
+        setRefreshSeed((s) => s + 1);
         showToast('Preview em Tablet');
         speakAsSara('Preview em tablet ativo, Eletro-Jr.', voiceEnabledRef.current, {
           level: 'short',
@@ -1798,9 +1880,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'preview_desktop') {
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setIsPresentationMode(false);
         setIsEditorFullscreen(false);
         setPreviewDevice('desktop');
         setMobileTab('preview');
+        setRefreshSeed((s) => s + 1);
         showToast('Preview em PC');
         speakAsSara('Preview em computador ativo, Eletro-Jr.', voiceEnabledRef.current, {
           level: 'short',
@@ -2146,54 +2233,113 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       for (const act of actions) {
         switch (act.type) {
           case 'open_editor':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
+            setIsPreviewFullscreen(false);
             setIsEditorFullscreen(false);
             setRightTab('editor');
             setMobileTab('code');
             break;
           case 'open_editor_fullscreen':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
+            setIsPreviewFullscreen(false);
             setRightTab('editor');
             setMobileTab('code');
             setIsEditorFullscreen(true);
             break;
           case 'open_files':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
+            setIsPreviewFullscreen(false);
             setIsEditorFullscreen(false);
             setRightTab('files');
             setMobileTab('code');
             break;
           case 'open_console':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
+            setIsPreviewFullscreen(false);
             setIsEditorFullscreen(false);
             setRightTab('console');
             setMobileTab('console');
             break;
           case 'show_preview':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
+            setIsEditorFullscreen(false);
+            setIsPreviewFullscreen(false);
+            setMobileTab('preview');
+            setRefreshSeed((s) => s + 1);
+            break;
+          case 'open_preview_fullscreen':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
             setIsEditorFullscreen(false);
             setMobileTab('preview');
+            setIsPreviewFullscreen(true);
+            setRefreshSeed((s) => s + 1);
+            break;
+          case 'close_preview_fullscreen':
+            setIsPreviewFullscreen(false);
             break;
           case 'toggle_presentation':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
             setIsEditorFullscreen(false);
+            setIsPreviewFullscreen(false);
             setIsPresentationMode((v) => !v);
             break;
           case 'close_overlay':
             setIsEditorFullscreen(false);
+            setIsPreviewFullscreen(false);
             setIsPresentationMode(false);
             setShowProjectsModal(false);
             setShowSettingsModal(false);
             setShowDeployModal(false);
             break;
           case 'preview_mobile':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
             setIsEditorFullscreen(false);
             setPreviewDevice('mobile');
             setMobileTab('preview');
+            setRefreshSeed((s) => s + 1);
             break;
           case 'preview_tablet':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
             setIsEditorFullscreen(false);
             setPreviewDevice('tablet');
             setMobileTab('preview');
+            setRefreshSeed((s) => s + 1);
             break;
           case 'preview_desktop':
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            setIsPresentationMode(false);
             setIsEditorFullscreen(false);
             setPreviewDevice('desktop');
             setMobileTab('preview');
+            setRefreshSeed((s) => s + 1);
             break;
           case 'open_projects':
             setShowProjectsModal(true);
@@ -2370,7 +2516,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               const voiceCmd = parseVoiceCommand(transcript, voiceContextRef.current);
               addConsoleLog('info', '[Canal de Voz] Comando captado em 2.º plano.');
               setIsVoiceProcessing(true);
-              executePlatformCommand(voiceCmd, transcript)
+              const runner = executePlatformCommandRef.current || executePlatformCommand;
+              runner(voiceCmd, transcript)
                 .then((handled) => {
                   if (!handled) {
                     return handleSendMessageRef.current?.(transcript, undefined, undefined, 'voice');
@@ -2380,11 +2527,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                   setIsVoiceProcessing(false);
                 });
             },
-            onError: (errMsg) => {
+            onError: (errMsg, fatal) => {
               addConsoleLog('warn', errMsg);
-              shouldKeepListeningRef.current = false;
-              setIsListening(false);
               setIsVoiceProcessing(false);
+              if (fatal) {
+                shouldKeepListeningRef.current = false;
+                setIsListening(false);
+                showToast(errMsg);
+              }
             },
             onEnd: () => {
               if (!shouldKeepListeningRef.current) {
@@ -2412,6 +2562,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         activeFile,
         projectName: currentProject.name,
         isEditorFullscreen,
+        isPreviewFullscreen,
         hasExistingCode,
         availableProjects: projects.map((p) => p.name),
         openModal: showProjectsModal
@@ -2509,24 +2660,25 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
           const queue = plan.tasks || [];
           if (queue.length > 0) {
-            setManualProposal({
+            const initialProposal: ManualProposalState = {
               active: true,
               goal: trimmed,
               currentStepIndex: 0,
               totalEstimatedSteps: queue.length,
               stepsQueue: queue,
               pendingPromptForSara: trimmed,
-            });
+            };
+            setManualProposal(initialProposal);
 
             const first = queue[0];
             updateProjectStateFromRecord(currentProject, {
               goal: trimmed,
-              lastStepDone: 'Plano inicial proposto',
+              lastStepDone: 'Arquitetura planeada; a construir Etapa 1',
               nextStep: first.title,
               missingFeatures: queue.map((q) => q.title),
             });
 
-            const proposalText = `${plan.planSentence}\n\n**Etapa 1 de ${queue.length}:** **${first.title}** — ${first.description}`;
+            const proposalText = `${plan.planSentence}\n\n**Arquitetura (${queue.length} etapas):** A construir imediatamente a **Etapa 1 — ${first.title}** (${first.description}).`;
             setMessages((prev) => [
               ...prev,
               {
@@ -2537,11 +2689,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                 mode: 'manual-proposal',
               },
             ]);
-            speakAsSara(
-              'Plano pronto, Eletro-Júnior. Posso iniciar a primeira etapa?',
-              voiceEnabledRef.current,
-              { level: 'short', forceSpeak: true }
-            );
+            // Inicia imediatamente a construção real da Etapa 1 no Editor e Preview em vez de parar vazio!
+            await executeManualApprovedStep(trimmed, initialProposal, source, true);
             return;
           }
         } catch {
@@ -2713,10 +2862,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           } else if (keys[0]) {
             setActiveFile(keys[0]);
           }
-          if (!hasExistingCode && keys.length >= 4) {
+          if (!hasExistingCode && keys.length >= 3) {
             setRightTab('files');
           }
           setRefreshSeed((s) => s + 1);
+          if (isVoice) {
+            setMobileTab('preview');
+          }
           if (/corrige|erro/i.test(trimmed)) {
             setErrorsFixedCount((c) => c + 1);
           }
@@ -2724,6 +2876,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             'success',
             `Construídos ${keys.length} ficheiro(s) em ${totalElapsed}s (${result.engineLabel}).`
           );
+          showToast(`${keys.length} ficheiro(s) atualizados no Editor & Preview`);
+        }
+
+        if (result.needsApiKey) {
+          showToast('Configura a tua chave Gemini nas Configurações para gerar código.');
+          setShowSettingsModal(true);
         }
 
         const createdList = result.files ? Object.keys(result.files) : [];
@@ -2864,6 +3022,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     handleSendMessageRef.current = handleSendMessage;
   }, [handleSendMessage]);
 
+  useEffect(() => {
+    executePlatformCommandRef.current = executePlatformCommand;
+  }, [executePlatformCommand]);
+
   const handleRunConsoleJs = useCallback(
     (code: string) => {
       addConsoleLog('command', `> ${code}`);
@@ -2875,7 +3037,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     [addConsoleLog]
   );
 
-  // Microfone Contínuo Mãos-Livres em 2.º plano (nunca polui chat com texto falado)
+  // Microfone Contínuo Mãos-Livres em 2.º plano (nunca morre por erros transitórios nem usa closures antigas)
   const startHandsFreeMic = useCallback(() => {
     if (shouldKeepListeningRef.current) return;
     shouldKeepListeningRef.current = true;
@@ -2896,21 +3058,25 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
 
         setIsVoiceProcessing(true);
-        executePlatformCommand(cmd, transcript)
+        const runner = executePlatformCommandRef.current || executePlatformCommand;
+        runner(cmd, transcript)
           .then((handled) => {
             if (!handled) {
-              return handleSendMessage(transcript, undefined, undefined, 'voice');
+              return handleSendMessageRef.current?.(transcript, undefined, undefined, 'voice');
             }
           })
           .finally(() => {
             setIsVoiceProcessing(false);
           });
       },
-      onError: (errMsg) => {
+      onError: (errMsg, fatal) => {
         addConsoleLog('warn', errMsg);
-        shouldKeepListeningRef.current = false;
-        setIsListening(false);
         setIsVoiceProcessing(false);
+        if (fatal) {
+          shouldKeepListeningRef.current = false;
+          setIsListening(false);
+          showToast(errMsg);
+        }
       },
       onEnd: () => {
         if (!shouldKeepListeningRef.current) {
@@ -2918,7 +3084,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
       },
     });
-  }, [addConsoleLog, executePlatformCommand, handleSendMessage]);
+  }, [addConsoleLog, executePlatformCommand, showToast]);
 
   const handleToggleMic = useCallback(() => {
     if (isListening || shouldKeepListeningRef.current) {
@@ -3219,6 +3385,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             elapsedSeconds={liveBuild.elapsedSeconds}
             builtFilesCount={liveBuild.createdFiles.length}
             isPresentationMode={isPresentationMode}
+            isFullscreen={isPreviewFullscreen}
+            onToggleFullscreen={() => setIsPreviewFullscreen((v) => !v)}
             onTogglePresentation={() => setIsPresentationMode((v) => !v)}
             iframeRef={iframeRef}
             onChangeDevice={setPreviewDevice}
@@ -3311,6 +3479,60 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           showToast(msg);
         }}
       />
+
+      {/* HUD Global de Voz Contínua (sempre acessível em todas as abas, modais e ecrãs cheios) */}
+      {(isListening ||
+        isSaraSpeaking ||
+        isVoiceProcessing ||
+        showProjectsModal ||
+        showSettingsModal ||
+        showDeployModal ||
+        isEditorFullscreen ||
+        isPreviewFullscreen ||
+        isPresentationMode ||
+        mobileTab !== 'chat') && (
+        <div className="fixed bottom-4 left-4 z-[75] flex items-center gap-2 px-3 py-2 rounded-2xl bg-[#090D16]/95 border border-cyan-500/40 backdrop-blur-md shadow-[0_8px_32px_rgba(0,0,0,0.65)]">
+          <button
+            type="button"
+            onClick={handleToggleMic}
+            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+              isListening
+                ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-200'
+                : 'bg-[#12121A] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white'
+            }`}
+            title={isListening ? 'Desligar escuta contínua' : 'Ligar escuta contínua'}
+          >
+            {isListening ? (
+              <Mic className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+            ) : (
+              <MicOff className="w-3.5 h-3.5" />
+            )}
+            <span>
+              {isSaraSpeaking
+                ? 'Sara a falar...'
+                : isVoiceProcessing
+                ? 'A executar...'
+                : isListening
+                ? 'Sara a ouvir'
+                : 'Ligar voz'}
+            </span>
+          </button>
+
+          {isVoiceProcessing && <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
+
+          {isSaraSpeaking && (
+            <button
+              type="button"
+              onClick={handleForceSilenceSara}
+              className="px-2 py-1.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer hover:bg-rose-500/30 transition"
+              title="Calar Sara agora"
+            >
+              <VolumeX className="w-3.5 h-3.5" />
+              <span>Calar</span>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

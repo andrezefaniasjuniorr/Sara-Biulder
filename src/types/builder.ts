@@ -63,6 +63,8 @@ export type SaraPlatformActionType =
   | 'open_files'
   | 'open_console'
   | 'show_preview'
+  | 'open_preview_fullscreen'
+  | 'close_preview_fullscreen'
   | 'toggle_presentation'
   | 'close_overlay'
   | 'preview_mobile'
@@ -104,6 +106,7 @@ export interface ScreenContextInfo {
   activeFile: string;
   projectName: string;
   isEditorFullscreen: boolean;
+  isPreviewFullscreen?: boolean;
   hasExistingCode: boolean;
   availableProjects?: string[];
   openModal?: 'projects' | 'settings' | 'deploy' | 'presentation' | null;
