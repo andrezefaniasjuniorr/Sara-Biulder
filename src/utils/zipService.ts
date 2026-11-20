@@ -63,8 +63,13 @@ export function buildStandaloneHtml(files: ProjectFiles, projectTitle = 'Projeto
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${projectTitle}</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700;800&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <style>
 ${allCss}
@@ -111,8 +116,13 @@ export async function downloadProjectZip(files: ProjectFiles, projectName: strin
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${projectName}</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700;800&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
 ${cssLinks}
 </head>
@@ -149,7 +159,7 @@ ${jsScripts}
 export async function importProjectZip(file: File): Promise<{ name: string; files: ProjectFiles }> {
   const zip = await JSZip.loadAsync(file);
   const importedFiles: ProjectFiles = {};
-  const allowedExt = /\.(html|css|js|jsx|ts|tsx|json|md|txt|svg|csv)$/i;
+  const allowedExt = /\.(html|css|js|jsx|ts|tsx|py|sql|json|md|txt|svg|csv)$/i;
 
   for (const [entryPath, zipObj] of Object.entries(zip.files)) {
     if (zipObj.dir) continue;

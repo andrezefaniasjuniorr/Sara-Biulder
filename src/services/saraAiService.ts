@@ -122,6 +122,34 @@ export function extractApiKeyFromTxtContent(txt: string): string | null {
   return match ? match[0] : null;
 }
 
+export function isPlatformCommandIntent(prompt: string): boolean {
+  const p = prompt
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  if (!p) return false;
+
+  // Pedido explícito de criar/alterar funcionalidade no app nunca é tratado como mero comando de navegação
+  const appBuildOrEditCue =
+    /\b(adiciona|acrescenta|implementa|corrige|conserta|estiliza|melhora|refatora|programa)\b/i.test(
+      p
+    ) ||
+    /\b(cria|criar|crie|faz|fazer|gera|gerar|constroi|construir|monta|montar|desenvolve|desenvolver)\b.*\b(site|sistema|app|aplicativo|aplicacao|jogo|game|loja|ecommerce|e-commerce|dashboard|painel|portal|landing|portfolio|blog|pagina|formulario|grafico|tabela|chat|login|carrinho|checkout|escola|clinica|restaurante)\b/i.test(
+      p
+    );
+
+  if (appBuildOrEditCue) return false;
+
+  const platformControlCue =
+    /\b(apaga|apagar|elimina|eliminar|remove|remover)\s+(o\s+|a\s+|este\s+|aquele\s+)?(projeto|ficheiro|arquivo)\b|\b(abre|abrir|fecha|fechar|maximiza|maximizar|minimiza|minimizar|mostra|mostrar|vai\s+para|vai\s+ao|entra\s+n[ao]s?|muda\s+para|passa\s+para|duplica|duplicar|renomeia|renomear|salva|salvar|guarda|guardar|sincroniza|sincronizar|baixa|baixar|descarrega|limpa|limpar)\s+(?:la\s+)?(?:o\s+|a\s+|os\s+|as\s+|no\s+|para\s+|com\s+o\s+)?(editor|codigo|ficheiro|ficheiros|arquivo|arquivos|pasta|pastas|console|consola|terminal|preview|resultado|projeto|projetos|telemovel|celular|mobile|tablet|pc|computador|desktop|configuracoes|definicoes|settings|deploy|apresentacao|firebase|zip|chat|relatorio|tela\s+cheia|ecra\s+inteiro)\b/i.test(
+      p
+    );
+
+  return platformControlCue;
+}
+
 export function isPureConversationIntent(
   prompt: string,
   hasImage: boolean,
@@ -135,23 +163,14 @@ export function isPureConversationIntent(
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
 
-  // Qualquer verbo/substantivo de construção, edição, UI, estilo, código ou domínio vai SEMPRE para o Builder!
-  const buildOrEditPattern =
-    /\b(cria|criar|crie|gera|gerar|gere|faz|fazer|faze|fazem|constroi|construir|construa|monta|montar|desenvolve|desenvolver|desenvolva|programa|programar|implementa|implementar|adiciona|adicionar|acrescenta|acrescentar|muda|mudar|altera|alterar|troca|trocar|corrige|corrigir|conserta|consertar|fix|atualiza|atualizar|melhora|melhorar|edita|editar|refatora|refatorar|coloca|colocar|mete|meter|poe|por|inclui|incluir|remove|tira|deixa|transforma|quero|preciso|sistema|site|web|website|app|aplicativo|aplicacao|jogo|game|loja|ecommerce|e-commerce|dashboard|painel|portal|landing|portfolio|blog|pagina|ecra|tela|botao|menu|navbar|header|footer|rodape|formulario|cadastro|login|autenticacao|tabela|grafico|chart|card|modal|pesquisa|busca|filtro|carrinho|checkout|pagamento|escola|clinica|restaurante|hotel|banco|agenda|calendario|calculadora|delivery|entregas|cor|cores|tema|dark|light|fonte|layout|design|responsivo|mobile|animacao|imagem|css|html|js|javascript|typescript|codigo|funcionalidade|funcao|ficheiro|arquivo|pasta|api|crud|relatorio|perfil|admin|stock|estoque|fatura|recibo)\b/i;
-
-  const explicitCreateNewSystem =
-    /\b(cria|criar|faz|fazer|gera|gerar|constroi|construir|monta|montar|desenvolve|desenvolver)\b.*\b(site|sistema|app|aplicativo|jogo|loja|dashboard|painel|portal|landing|portfolio|blog|pagina)\b/i.test(
-      p
-    );
-
-  // Pedidos puros de controlo de plataforma ("apaga o projeto X", "abre o editor grande", etc.) não geram código
-  const platformControlCue =
-    /\b(apaga|elimina|remove)\s+(o\s+|a\s+|este\s+|aquele\s+)?(projeto|ficheiro|arquivo)\b|\b(abre|abrir|fecha|fechar|maximiza|minimiza|mostra|vai\s+para|muda\s+para|duplica|renomeia|salva|guarda)\s+(o\s+|a\s+|os\s+|as\s+)?(editor|ficheiros|arquivos|console|preview|projeto|projetos|telemovel|celular|tablet|pc|desktop|configuracoes|deploy|apresentacao)\b/i.test(
-      p
-    );
-  if (platformControlCue && !explicitCreateNewSystem) {
+  // Comandos puros de controlo da plataforma NUNCA devem disparar geração/edição de código!
+  if (isPlatformCommandIntent(p)) {
     return true;
   }
+
+  // Qualquer verbo/substantivo de construção, edição, UI, estilo ou funcionalidade vai para o Builder
+  const buildOrEditPattern =
+    /\b(cria|criar|crie|gera|gerar|gere|faz|fazer|faze|fazem|constroi|construir|construa|monta|montar|desenvolve|desenvolver|desenvolva|programa|programar|implementa|implementar|adiciona|adicionar|acrescenta|acrescentar|altera|alterar|troca|trocar|corrige|corrigir|conserta|consertar|fix|atualiza|atualizar|melhora|melhorar|edita|editar|refatora|refatorar|coloca|colocar|mete|meter|inclui|incluir|transforma|sistema|site|web|website|app|aplicativo|aplicacao|jogo|game|loja|ecommerce|e-commerce|dashboard|painel|portal|landing|portfolio|blog|pagina|ecra|tela|botao|menu|navbar|header|footer|rodape|formulario|cadastro|login|autenticacao|tabela|grafico|chart|card|modal|pesquisa|busca|filtro|carrinho|checkout|pagamento|escola|clinica|restaurante|hotel|banco|agenda|calendario|calculadora|delivery|entregas|cor|cores|tema|dark|light|fonte|layout|design|responsivo|animacao|imagem|css|html|js|javascript|typescript|python|sql|3d|threejs|echarts|apexcharts|funcionalidade|funcao|api|crud|perfil|admin|stock|estoque|fatura|recibo)\b/i;
 
   if (buildOrEditPattern.test(p)) {
     return false;
@@ -168,7 +187,7 @@ export function isPureConversationIntent(
 
   if (pureChatCue) return true;
 
-  // Se já existe projeto com código, instruções curtas (ex: "azul escuro", "com 3 colunas") vão para o Builder!
+  // Se já existe projeto com código, instruções curtas de ajuste (ex: "azul escuro", "com 3 colunas") vão para o Builder
   if (hasExistingCode && p.length >= 4) {
     return false;
   }
@@ -261,10 +280,13 @@ function stripCodeFence(content: string): string {
 
 function detectLanguage(path: string): string {
   const ext = path.split('.').pop()?.toLowerCase() || '';
-  if (ext === 'html' || ext === 'htm') return 'html';
-  if (ext === 'css') return 'css';
-  if (ext === 'js' || ext === 'jsx' || ext === 'ts' || ext === 'tsx') return 'javascript';
+  if (ext === 'html' || ext === 'htm' || ext === 'svg') return 'html';
+  if (ext === 'css' || ext === 'scss') return 'css';
+  if (ext === 'js' || ext === 'jsx' || ext === 'ts' || ext === 'tsx' || ext === 'mjs') return 'javascript';
+  if (ext === 'py') return 'python';
+  if (ext === 'sql') return 'sql';
   if (ext === 'json') return 'json';
+  if (ext === 'md') return 'markdown';
   return 'text';
 }
 
@@ -283,7 +305,7 @@ function extractMarkdownFilesFallback(rawText: string): ProjectFiles {
   const fallbackFiles: ProjectFiles = {};
   if (!rawText) return fallbackFiles;
 
-  // Procura blocos ```lang ... ``` precedidos por título/caminho de ficheiro (ex: ### styles/style.css, **index.html**, `engine/motor.js`)
+  // Procura blocos ```lang ... ``` precedidos por título/caminho de ficheiro
   const codeBlockRegex = /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g;
   let blockMatch: RegExpExecArray | null;
   let unlabeledJsIndex = 0;
@@ -296,7 +318,7 @@ function extractMarkdownFilesFallback(rawText: string): ProjectFiles {
     const preceding = rawText.slice(Math.max(0, blockMatch.index - 220), blockMatch.index).trimEnd();
     const lastLine = (preceding.split('\n').pop() || '').trim();
     const pathMatch = lastLine.match(
-      /^(?:[-*•]\s*)?(?:#{1,6}\s*|\*\*|`|\/\/\s*|<!--\s*|\/\*\s*|ficheiro:\s*|arquivo:\s*|file:\s*)*([a-zA-Z0-9_.\-/]+\.(?:html|htm|css|js|jsx|ts|tsx|json|svg))(?:\*\*|`|-->|\*\/|:|\s)*$/i
+      /^(?:[-*•]\s*)?(?:#{1,6}\s*|\*\*|`|\/\/\s*|<!--\s*|\/\*\s*|ficheiro:\s*|arquivo:\s*|file:\s*)*([a-zA-Z0-9_.\-/]+\.(?:html|htm|css|js|jsx|ts|tsx|json|svg|py|sql|md))(?:\*\*|`|-->|\*\/|:|\s)*$/i
     );
 
     let targetPath = pathMatch?.[1]?.trim().replace(/^\/+/, '');
@@ -305,8 +327,13 @@ function extractMarkdownFilesFallback(rawText: string): ProjectFiles {
         targetPath = 'index.html';
       } else if (lang === 'css') {
         targetPath = 'styles/style.css';
-      } else if (lang === 'js' || lang === 'javascript' || lang === 'ts') {
-        targetPath = unlabeledJsIndex === 0 ? 'src/app.js' : `src/module_${unlabeledJsIndex}.js`;
+      } else if (lang === 'py' || lang === 'python') {
+        targetPath = 'src/main.py';
+      } else if (lang === 'sql') {
+        targetPath = 'data/schema.sql';
+      } else if (lang === 'js' || lang === 'javascript' || lang === 'ts' || lang === 'tsx' || lang === 'jsx') {
+        const ext = lang === 'tsx' ? 'tsx' : lang === 'jsx' ? 'jsx' : lang === 'ts' ? 'ts' : 'js';
+        targetPath = unlabeledJsIndex === 0 ? `src/app.${ext}` : `src/module_${unlabeledJsIndex}.${ext}`;
         unlabeledJsIndex += 1;
       }
     }

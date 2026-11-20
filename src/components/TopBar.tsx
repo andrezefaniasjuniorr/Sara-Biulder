@@ -24,6 +24,7 @@ interface TopBarProps {
   isSaraSilenced: boolean;
   isThinking: boolean;
   firebaseUser: FirebaseUserProfile | null;
+  isSyncingFirebase?: boolean;
   onChangeAgentMode: (mode: AgentMode) => void;
   onToggleVoice: () => void;
   onCycleVoiceLevel: () => void;
@@ -46,6 +47,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   isSaraSilenced,
   isThinking,
   firebaseUser,
+  isSyncingFirebase = false,
   onChangeAgentMode,
   onToggleVoice,
   onCycleVoiceLevel,
@@ -61,7 +63,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     voiceLevel === 'full' ? 'Completo' : voiceLevel === 'medium' ? 'Médio' : 'Curto';
 
   return (
-    <header className="h-14 shrink-0 bg-[#12121A] border-b border-[#1F1F2E] px-2.5 sm:px-4 flex items-center justify-between gap-2 overflow-x-auto sara-scroll">
+    <header className="h-14 shrink-0 bg-[#0D1117] border-b border-[#1E2433] px-2.5 sm:px-4 flex items-center justify-between gap-2 overflow-x-auto sara-scroll">
       {/* Esquerda: Avatar + Logo + Indicador de Estado de Voz/Pensamento */}
       <div className="flex items-center gap-2.5 min-w-0 shrink-0">
         <div
@@ -110,10 +112,15 @@ export const TopBar: React.FC<TopBarProps> = ({
           <span className="font-extrabold text-sm sm:text-base tracking-tight bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] bg-clip-text text-transparent whitespace-nowrap">
             SARA BIULDER
           </span>
-          <span className="hidden xl:inline text-[#1F1F2E]">|</span>
-          <span className="hidden xl:inline text-xs font-medium text-[#A1A1AA] truncate max-w-[120px]">
+          <span className="hidden xl:inline text-[#1E2433]">|</span>
+          <span className="hidden xl:inline text-xs font-medium text-[#A1A1AA] truncate max-w-[140px]">
             {projectName}
           </span>
+          {isSyncingFirebase && (
+            <span className="hidden lg:inline-flex items-center gap-1 text-[10px] font-mono text-cyan-300/90 px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25">
+              Firebase
+            </span>
+          )}
         </div>
 
         {/* Indicadores ao vivo: A falar / A ouvir com onda / A pensar */}

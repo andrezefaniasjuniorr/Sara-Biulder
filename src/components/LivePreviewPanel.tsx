@@ -113,11 +113,11 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
       className={`flex flex-col bg-[#0A0A0F] overflow-hidden ${
         isFullscreen
           ? 'fixed inset-0 z-50 h-screen w-screen'
-          : 'h-full border-r border-[#1F1F2E]'
+          : 'h-full border-r border-[#1E2433]'
       }`}
     >
       {/* Barra de Ferramentas do Preview */}
-      <div className="px-3 py-2.5 bg-[#12121A] border-b border-[#1F1F2E] flex items-center justify-between gap-2 overflow-x-auto sara-scroll shrink-0">
+      <div className="px-3 py-2.5 bg-[#0D1117] border-b border-[#1E2433] flex items-center justify-between gap-2 overflow-x-auto sara-scroll shrink-0">
         <div className="flex items-center gap-1 bg-[#0A0A0F] p-1 rounded-lg border border-[#1F1F2E] shrink-0">
           <button
             type="button"
@@ -225,7 +225,7 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
                 <Loader2 className="w-5 h-5 text-cyan-400 animate-spin" />
               </div>
               <div>
-                <div className="text-xs font-mono uppercase tracking-wider text-cyan-300 font-bold">
+                <div className="text-xs font-mono tabular-nums uppercase tracking-wider text-cyan-300 font-bold">
                   Construção em Curso · {String(Math.floor(elapsedSeconds / 60)).padStart(2, '0')}:
                   {String(elapsedSeconds % 60).padStart(2, '0')}
                 </div>

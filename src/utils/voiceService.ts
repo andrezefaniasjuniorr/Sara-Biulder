@@ -229,7 +229,7 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
 
   // Confusão comum do nome "Sara" no início da frase (ex: "sala abre o editor", "zara modo manual")
   out = out.replace(
-    /^(sala|saia|cara|zara|lara)(?=[\s,]+(abre|abrir|fecha|fechar|apaga|apagar|elimina|remove|cria|criar|faz|fazer|modo|desfaz|mostra|vai|para|continua|limpa|baixa|salva|guarda|atualiza|recarrega|cala|pausa|retoma|tudo|esta|oi|ola|duplica|renomeia))/i,
+    /^(sala|saia|cara|zara|lara)(?=[\s,]+(abre|abrir|fecha|fechar|apaga|apagar|elimina|remove|cria|criar|faz|fazer|modo|desfaz|mostra|vai|para|continua|limpa|baixa|salva|guarda|atualiza|recarrega|cala|pausa|retoma|tudo|esta|oi|ola|duplica|renomeia|quero|podes|pode|muda|poe))/i,
     'Sara'
   );
 
@@ -237,10 +237,11 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
   const replacements: Array<[RegExp, string]> = [
     [/\b(priviu|perviu|pr[eé]vio|pre viu)\b/gi, 'preview'],
     [/\b(consola|consolo|conselho)\b/gi, 'console'],
-    [/\b(heitor|aditor|edito)\b/gi, 'editor'],
+    [/\b(heitor|aditor|edito|edictor)\b/gi, 'editor'],
     [/\b(feicheiros|fixeiros)\b/gi, 'ficheiros'],
     [/\b(proj[eé]to|progeto)\b/gi, 'projeto'],
     [/\b(deploi|de\s+poi|dip[l]?oy)\b/gi, 'deploy'],
+    [/\b(fire\s*base|faire\s*base|faribase)\b/gi, 'firebase'],
     [/\b(puxa|puxe|puche|pux)\b(?=\s+(para|pro|github|git|agora|$))/gi, 'push'],
     [/\b(faz|fazer|envia|manda)\s+(puxa|puxe|puche|pux)\b/gi, '$1 push'],
     [/\b(zipe|sipe|sip)\b(?=\s|$)/gi, 'zip'],
@@ -258,6 +259,28 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
   }
 
   return out.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Deteta se a frase pede criação ou modificação de app/sistema (para nunca ser confundida com comando simples da IDE).
+ */
+function hasExplicitAppFeatureEdit(lower: string): boolean {
+  if (
+    /\b(adiciona|acrescenta|implementa|corrige|conserta|estiliza|refatora|coloca|inclui|programa)\b/i.test(
+      lower
+    ) &&
+    !/\b(corrige\s+(o\s+)?erro)\b/i.test(lower)
+  ) {
+    return true;
+  }
+  if (
+    /\b(cria|criar|faz|fazer|gera|gerar|constroi|construir|desenvolve|desenvolver|monta|montar)\b.*\b(site|sistema|app|aplicativo|aplicacao|jogo|game|loja|ecommerce|dashboard|painel|portal|landing|portfolio|blog|pagina|formulario|grafico|tabela|chat|restaurante|clinica|escola)\b/i.test(
+      lower
+    )
+  ) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -329,8 +352,6 @@ export function parseVoiceCommand(
     }
   }
 
-  // Saudação e conversa natural seguem diretamente para a Sara viva (Gemini), sem frases pré-gravadas fixas!
-
   // Calar a Sara imediatamente
   if (
     lower.includes('sara, cala') ||
@@ -368,7 +389,7 @@ export function parseVoiceCommand(
     return { type: 'voice_level', level: 'short', raw: clean };
   }
 
-  // Microfone desligar / ligar (verifica desligar primeiro para evitar colisão de 'desliga' conter 'liga')
+  // Microfone desligar / ligar
   if (
     lower.includes('para de ouvir') ||
     lower.includes('desliga o microfone') ||
@@ -407,10 +428,11 @@ export function parseVoiceCommand(
     return { type: 'open_report' };
   }
 
-  // Frases compostas (ex: "apaga X e abre o editor") vão para a IA executar tudo via <SARA_ACTIONS>
+  // Frases compostas (ex: "apaga X e abre o editor") ou frases de edição de app
   const hasCompoundConnector = /\s+e\s+(abre|abrir|fecha|fechar|apaga|cria|mostra|muda|salva|guarda|duplica|limpa)\b/i.test(lower);
+  const isAppEdit = hasExplicitAppFeatureEdit(lower);
 
-  if (!hasCompoundConnector) {
+  if (!hasCompoundConnector && !isAppEdit) {
     // Controlo total da plataforma (Editor, Ficheiros, Console, Preview, Apresentação, Projetos, CRUD)
     if (
       (lower.includes('preview') &&
@@ -427,7 +449,7 @@ export function parseVoiceCommand(
     }
 
     if (
-      (lower.includes('editor') &&
+      ((lower.includes('editor') || lower.includes('codigo')) &&
         (lower.includes('tela cheia') ||
           lower.includes('ecra inteiro') ||
           lower.includes('maximiza') ||
@@ -443,12 +465,14 @@ export function parseVoiceCommand(
     if (
       lower.includes('fecha o editor') ||
       lower.includes('fechar editor') ||
+      lower.includes('fecha o codigo') ||
       lower.includes('fecha o preview') ||
       lower.includes('fechar preview') ||
       lower.includes('minimiza o preview') ||
       lower.includes('fecha os projetos') ||
       lower.includes('sai dos projetos') ||
       lower.includes('fecha as configuracoes') ||
+      lower.includes('fecha definicoes') ||
       lower.includes('fecha o deploy') ||
       lower.includes('fecha o modal') ||
       lower.includes('fecha a apresentacao') ||
@@ -462,12 +486,18 @@ export function parseVoiceCommand(
         context?.isPreviewFullscreen ||
         context?.activeTab === 'editor' ||
         context?.hasOpenOverlay) &&
-        /^(sara[,\s]+)?(fecha|fechar|sair|sai|fecha isto|minimiza|volta)$/.test(lower))
+        /^(sara[,\s]+)?(fecha|fechar|sair|sai|fecha isto|fecha isso|minimiza|volta)$/.test(lower))
     ) {
       return { type: 'close_editor_or_back' };
     }
 
-    if (/\b(abre|abrir|mostra|mostrar|vai para|foca|ver)\s+((o|a)\s+)?(editor|codigo)\b/.test(lower)) {
+    // Abrir / ir para o Editor ou Código (mesmo com "quero", "podes", "por favor", "lá")
+    if (
+      /\b(abre|abrir|abres|mostra|mostrar|mostra-me|mostra me|vai\s+para|vai\s+ao|entra\s+no|muda\s+para|passa\s+para|foca|ver|quero\s+ver|quero\s+abrir|podes?\s+abrir|pode\s+abrir)\s+(?:la\s+)?(?:o\s+|a\s+|no\s+)?(editor|codigo)\b/.test(
+        lower
+      ) ||
+      /^(?:sara[,\s]+)?(?:o\s+)?(editor|codigo)(\s+por\s+favor)?$/.test(lower)
+    ) {
       return { type: 'open_editor' };
     }
 
@@ -557,14 +587,22 @@ export function parseVoiceCommand(
       };
     }
 
-    if (/\b(abre|abrir|mostra|mostrar|vai para|ver)\s+((os|as)\s+)?(ficheiros|arquivos|pastas)\b/.test(lower)) {
+    if (
+      /\b(abre|abrir|abres|mostra|mostrar|vai\s+para|entra\s+n[ao]s?|muda\s+para|ver|quero\s+ver|quero\s+abrir|podes?\s+abrir)\s+(?:o[s]?\s+|a[s]?\s+)?(ficheiros|arquivos|pastas|pasta|arvore)\b/.test(
+        lower
+      )
+    ) {
       return { type: 'open_files' };
     }
-    if (/\b(abre|abrir|mostra|mostrar|vai para|ver)\s+((o|a)\s+)?console\b/.test(lower)) {
+    if (
+      /\b(abre|abrir|abres|mostra|mostrar|vai\s+para|entra\s+n[ao]|muda\s+para|ver|quero\s+ver|quero\s+abrir|podes?\s+abrir)\s+(?:o\s+|a\s+)?(console|terminal)\b/.test(
+        lower
+      )
+    ) {
       return { type: 'open_console' };
     }
     if (
-      /\b(abre|abrir|mostra|mostra-me|mostra me|mostrar|exibe|exibir|vai para|vai ao|passa para|muda para|mete no|ver|quero ver)\s+((o|a|no)\s+)?preview\b/.test(
+      /\b(abre|abrir|abres|mostra|mostra-me|mostra me|mostrar|exibe|exibir|vai\s+para|vai\s+ao|passa\s+para|muda\s+para|mete\s+no|poe\s+no|ver|quero\s+ver|quero\s+abrir|podes?\s+abrir)\s+(?:o\s+|a\s+|no\s+)?(preview|resultado|pre-visualizacao)\b/.test(
         lower
       ) ||
       /^(sara[,\s]+)?(o\s+)?preview(\s+por\s+favor)?$/.test(lower)
@@ -577,11 +615,15 @@ export function parseVoiceCommand(
       lower.includes('visao telemovel') ||
       lower.includes('versao telemovel') ||
       lower.includes('versao mobile') ||
+      lower.includes('muda para telemovel') ||
+      lower.includes('muda para mobile') ||
+      lower.includes('poe no telemovel') ||
       lower.includes('no telemovel') ||
       lower.includes('no celular') ||
       lower.includes('visao celular') ||
       lower.includes('modo celular') ||
       lower.includes('versao celular') ||
+      lower.includes('muda para celular') ||
       lower === 'telemovel' ||
       lower === 'celular'
     ) {
@@ -591,6 +633,8 @@ export function parseVoiceCommand(
       lower.includes('visao tablet') ||
       lower.includes('modo tablet') ||
       lower.includes('versao tablet') ||
+      lower.includes('muda para tablet') ||
+      lower.includes('poe no tablet') ||
       lower.includes('no tablet') ||
       lower.includes('preview em tablet') ||
       lower === 'tablet'
@@ -603,6 +647,9 @@ export function parseVoiceCommand(
       lower.includes('visao pc') ||
       lower.includes('versao pc') ||
       lower.includes('versao desktop') ||
+      lower.includes('muda para pc') ||
+      lower.includes('muda para desktop') ||
+      lower.includes('volta para pc') ||
       lower.includes('no pc') ||
       lower.includes('no computador') ||
       lower.includes('visao computador') ||
@@ -611,7 +658,15 @@ export function parseVoiceCommand(
     ) {
       return { type: 'preview_desktop' };
     }
-    if (lower.includes('faz deploy') || lower.includes('fazer deploy') || lower.includes('abre o deploy') || lower.includes('publica o site') || lower.includes('publicar site')) {
+    if (
+      lower.includes('faz deploy') ||
+      lower.includes('fazer deploy') ||
+      lower.includes('abre o deploy') ||
+      lower.includes('abrir deploy') ||
+      lower.includes('quero abrir o deploy') ||
+      lower.includes('publica o site') ||
+      lower.includes('publicar site')
+    ) {
       return { type: 'open_deploy' };
     }
     if (lower.includes('faz push') || lower.includes('fazer push') || lower.includes('push para o github') || lower.includes('envia para o github') || lower.includes('autorizo o push') || lower.includes('pode fazer push')) {
@@ -628,6 +683,8 @@ export function parseVoiceCommand(
     if (
       lower.includes('abre os projetos') ||
       lower.includes('abrir projetos') ||
+      lower.includes('abrir os projetos') ||
+      lower.includes('quero ver os projetos') ||
       lower.includes('lista de projetos') ||
       lower.includes('mostra os projetos') ||
       lower.includes('ver projetos') ||
@@ -635,7 +692,17 @@ export function parseVoiceCommand(
     ) {
       return { type: 'open_projects' };
     }
-    if (lower.includes('abre as configuracoes') || lower.includes('abrir configuracoes') || lower.includes('abre definicoes') || lower.includes('mostra configuracoes')) {
+    if (
+      lower.includes('abre as configuracoes') ||
+      lower.includes('abrir configuracoes') ||
+      lower.includes('abrir as configuracoes') ||
+      lower.includes('abre configuracoes') ||
+      lower.includes('abre definicoes') ||
+      lower.includes('abre as definicoes') ||
+      lower.includes('abrir definicoes') ||
+      lower.includes('mostra configuracoes') ||
+      lower.includes('vai para configuracoes')
+    ) {
       return { type: 'open_settings' };
     }
     if (
@@ -643,6 +710,13 @@ export function parseVoiceCommand(
       lower.includes('salvar o projeto') ||
       lower.includes('guarda o projeto') ||
       lower.includes('guardar o projeto') ||
+      lower.includes('salva no firebase') ||
+      lower.includes('salvar no firebase') ||
+      lower.includes('guarda no firebase') ||
+      lower.includes('guardar no firebase') ||
+      lower.includes('sincroniza o firebase') ||
+      lower.includes('sincroniza com o firebase') ||
+      lower.includes('sincronizar firebase') ||
       lower.includes('salva isto') ||
       lower.includes('guarda isto') ||
       lower.includes('grava o projeto')

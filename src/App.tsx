@@ -29,6 +29,7 @@ import { createStarterProject } from './utils/starterProject';
 import {
   askSaraBuilderStep,
   filesToCodeBlocks,
+  isPlatformCommandIntent,
   planAutonomousMission,
   runSaraFinalTest,
   runSaraStream,
@@ -36,8 +37,13 @@ import {
 } from './services/saraAiService';
 import {
   apagarProjetoNoFirebase,
+  buscarEstadosProjetosFirebase,
+  buscarMensagensChatFirebase,
+  buscarPreferenciasUsuarioFirebase,
   buscarProjetosNoFirebase,
+  salvarEstadoProjetoFirebase,
   salvarMensagemChatFirebase,
+  salvarPreferenciasUsuarioFirebase,
   salvarProjetoNoFirebase,
   verificarUsuario,
 } from './services/firebaseService';
@@ -64,6 +70,7 @@ import {
 import {
   isProjectBlank,
   loadActiveProjectState,
+  mergeProjectStatesMap,
   updateProjectStateFromRecord,
 } from './utils/projectMemory';
 import { TopBar } from './components/TopBar';
@@ -78,10 +85,24 @@ import { PwaInstallBar } from './components/PwaInstallBar';
 const PROJECTS_STORAGE_KEY = 'sara_biulder_projects_v2';
 const ACTIVE_PROJECT_KEY = 'sara_biulder_active_id_v2';
 const CHAT_STORAGE_KEY = 'sara_biulder_chat_v2';
+const CHAT_MAP_STORAGE_KEY = 'sara_biulder_chat_map_v1';
 const AGENT_MODE_KEY = 'sara_biulder_agent_mode_v1';
 const SAVED_MISSION_KEY = 'sara_biulder_saved_mission_v2';
 const ERRORS_FIXED_KEY = 'sara_biulder_errors_fixed_v1';
 const VOICE_LEVEL_KEY = 'sara_biulder_voice_level_v1';
+
+function loadCachedProjectChat(projectId: string): ChatMessage[] {
+  try {
+    const raw = localStorage.getItem(CHAT_MAP_STORAGE_KEY);
+    if (raw) {
+      const map = JSON.parse(raw) as Record<string, ChatMessage[]>;
+      if (Array.isArray(map?.[projectId])) return map[projectId];
+    }
+  } catch {
+    // ignore
+  }
+  return [];
+}
 
 function loadInitialVoiceLevel(): VoiceLevel {
   try {
@@ -264,7 +285,10 @@ export default function App() {
   const stopMicRef = useRef<(() => void) | null>(null);
 
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUserProfile | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [isSyncingFirebase, setIsSyncingFirebase] = useState(false);
+  const hydratedUidRef = useRef<string | null>(null);
+  const syncedUpdatedAtRef = useRef<Record<string, string>>({});
 
   const [showProjectsModal, setShowProjectsModal] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -416,18 +440,186 @@ export default function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(messages.slice(-50)));
+      const trimmedMsgs = messages.slice(-50);
+      localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(trimmedMsgs));
+      const mapRaw = localStorage.getItem(CHAT_MAP_STORAGE_KEY);
+      const map: Record<string, ChatMessage[]> = mapRaw ? JSON.parse(mapRaw) : {};
+      map[currentProjectId] = trimmedMsgs;
+      localStorage.setItem(CHAT_MAP_STORAGE_KEY, JSON.stringify(map));
     } catch {
       // ignore
     }
-  }, [messages]);
+  }, [messages, currentProjectId]);
 
   useEffect(() => {
     const unsub = verificarUsuario((user) => {
       setFirebaseUser(user);
+      setAuthReady(true);
     });
     return unsub;
   }, []);
+
+  // Hidratação automática do Firebase (projetos, estados, preferências e histórico de chat)
+  useEffect(() => {
+    if (!authReady) return;
+    const effectiveUid = firebaseUser?.uid || 'eletro-jr-local';
+    if (hydratedUidRef.current === effectiveUid) return;
+    hydratedUidRef.current = effectiveUid;
+
+    let cancelled = false;
+    (async () => {
+      setIsSyncingFirebase(true);
+      try {
+        const [projRes, stateRes, prefsRes] = await Promise.allSettled([
+          buscarProjetosNoFirebase(firebaseUser?.uid),
+          buscarEstadosProjetosFirebase(firebaseUser?.uid),
+          buscarPreferenciasUsuarioFirebase(firebaseUser?.uid),
+        ]);
+        if (cancelled) return;
+
+        const remoteProjects = projRes.status === 'fulfilled' ? projRes.value : [];
+        const remoteStates = stateRes.status === 'fulfilled' ? stateRes.value : {};
+        const remotePrefs = prefsRes.status === 'fulfilled' ? prefsRes.value : null;
+
+        remoteProjects.forEach((rp) => {
+          syncedUpdatedAtRef.current[rp.id] = rp.updatedAt;
+        });
+
+        let resolvedTargetId = currentProjectId;
+        if (remoteProjects.length > 0) {
+          setProjects((prev) => {
+            const merged = new Map<string, ProjectRecord>();
+            prev.forEach((p) => {
+              if (!isProjectBlank(p.files) || remoteProjects.some((rp) => rp.id === p.id)) {
+                merged.set(p.id, p);
+              }
+            });
+            remoteProjects.forEach((rp) => {
+              const local = merged.get(rp.id);
+              const remoteMs = Date.parse(rp.updatedAt || '') || 0;
+              const localMs = Date.parse(local?.updatedAt || '') || 0;
+              if (!local || remoteMs >= localMs) {
+                merged.set(rp.id, rp);
+              }
+            });
+            const arr = Array.from(merged.values()).sort(
+              (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+            );
+            return arr.length > 0 ? arr : prev;
+          });
+
+          if (
+            remotePrefs?.activeProjectId &&
+            remoteProjects.some((rp) => rp.id === remotePrefs.activeProjectId)
+          ) {
+            resolvedTargetId = remotePrefs.activeProjectId;
+            setCurrentProjectId(resolvedTargetId);
+          } else if (
+            isProjectBlank(currentProject?.files) &&
+            remoteProjects[0]?.id
+          ) {
+            resolvedTargetId = remoteProjects[0].id;
+            setCurrentProjectId(resolvedTargetId);
+          }
+        }
+
+        if (Object.keys(remoteStates).length > 0) {
+          mergeProjectStatesMap(remoteStates, resolvedTargetId);
+        }
+
+        if (remotePrefs) {
+          if (remotePrefs.agentMode === 'manual' || remotePrefs.agentMode === 'automatic') {
+            setAgentMode(remotePrefs.agentMode);
+          }
+          if (
+            remotePrefs.voiceLevel === 'short' ||
+            remotePrefs.voiceLevel === 'medium' ||
+            remotePrefs.voiceLevel === 'full'
+          ) {
+            setVoiceLevel(remotePrefs.voiceLevel);
+          }
+          if (
+            typeof remotePrefs.errorsFixedCount === 'number' &&
+            remotePrefs.errorsFixedCount > errorsFixedCount
+          ) {
+            setErrorsFixedCount(remotePrefs.errorsFixedCount);
+          }
+        }
+
+        const remoteMsgs = await buscarMensagensChatFirebase(resolvedTargetId, firebaseUser?.uid);
+        if (!cancelled && remoteMsgs.length > 0) {
+          setMessages((prev) => {
+            if (prev.length === 0) return remoteMsgs;
+            const byId = new Map(prev.map((m) => [m.id, m]));
+            remoteMsgs.forEach((rm) => {
+              if (!byId.has(rm.id)) byId.set(rm.id, rm);
+            });
+            return Array.from(byId.values()).slice(-50);
+          });
+        }
+      } catch {
+        // fallback silencioso ao localStorage se offline
+      } finally {
+        if (!cancelled) setIsSyncingFirebase(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, firebaseUser?.uid]);
+
+  // Auto-save contínuo e silencioso do projeto ativo + memória para o Firebase (sara-biulder)
+  useEffect(() => {
+    if (!authReady || !currentProject || liveBuild.isBuilding) return;
+    if (isProjectBlank(currentProject.files) && currentProject.name === 'Novo Projeto') return;
+    if (syncedUpdatedAtRef.current[currentProject.id] === currentProject.updatedAt) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        setIsSyncingFirebase(true);
+        syncedUpdatedAtRef.current[currentProject.id] = currentProject.updatedAt;
+        await salvarProjetoNoFirebase(currentProject, firebaseUser?.uid);
+        const state = updateProjectStateFromRecord(currentProject);
+        await salvarEstadoProjetoFirebase(state, firebaseUser?.uid);
+        setProjects((prev) =>
+          prev.map((p) =>
+            p.id === currentProject.id && p.updatedAt === currentProject.updatedAt
+              ? { ...p, syncedToFirebase: true }
+              : p
+          )
+        );
+      } catch {
+        delete syncedUpdatedAtRef.current[currentProject.id];
+      } finally {
+        setIsSyncingFirebase(false);
+      }
+    }, 1600);
+
+    return () => clearTimeout(timer);
+  }, [
+    authReady,
+    currentProject,
+    liveBuild.isBuilding,
+    firebaseUser?.uid,
+  ]);
+
+  // Auto-save das preferências do utilizador no Firebase
+  useEffect(() => {
+    if (!authReady) return;
+    const timer = setTimeout(() => {
+      salvarPreferenciasUsuarioFirebase(
+        {
+          activeProjectId: currentProjectId,
+          agentMode,
+          voiceLevel,
+          errorsFixedCount,
+        },
+        firebaseUser?.uid
+      ).catch(() => {});
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [authReady, currentProjectId, agentMode, voiceLevel, errorsFixedCount, firebaseUser?.uid]);
 
   const addConsoleLog = useCallback((level: ConsoleEntry['level'], message: string) => {
     const entry: ConsoleEntry = {
@@ -614,31 +806,69 @@ export default function App() {
     [currentProjectId, activeFile, currentProject.files]
   );
 
+  const switchToProject = useCallback(
+    async (target: ProjectRecord) => {
+      setCurrentProjectId(target.id);
+      const keys = Object.keys(target.files || {});
+      setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
+      setRefreshSeed((s) => s + 1);
+      updateProjectStateFromRecord(target);
+
+      const localChat = loadCachedProjectChat(target.id);
+      setMessages(localChat);
+
+      const remoteMsgs = await buscarMensagensChatFirebase(target.id, firebaseUser?.uid).catch(
+        () => []
+      );
+      if (remoteMsgs.length > 0) {
+        setMessages((prev) => {
+          const base = prev.length > 0 ? prev : localChat;
+          const byId = new Map(base.map((m) => [m.id, m]));
+          remoteMsgs.forEach((rm) => {
+            if (!byId.has(rm.id)) byId.set(rm.id, rm);
+          });
+          return Array.from(byId.values()).slice(-50);
+        });
+      }
+    },
+    [firebaseUser?.uid]
+  );
+
   const handleCreateNewProject = useCallback(
     (name: string, type: ProjectType) => {
       const cleanName = name.trim() || 'Novo Projeto';
       const newProj = createStarterProject(cleanName, type);
       setProjects((prev) => [newProj, ...prev]);
       setCurrentProjectId(newProj.id);
+      setMessages([]);
       setActiveFile('index.html');
       setRefreshSeed((s) => s + 1);
       addConsoleLog('success', `Novo projeto "${cleanName}" (${type}) criado.`);
+      const state = updateProjectStateFromRecord(newProj);
+      salvarProjetoNoFirebase(newProj, firebaseUser?.uid).catch(() => {});
+      salvarEstadoProjetoFirebase(state, firebaseUser?.uid).catch(() => {});
     },
-    [addConsoleLog]
+    [addConsoleLog, firebaseUser?.uid]
   );
 
-  const handleDuplicateProject = useCallback((proj: ProjectRecord) => {
-    const copy: ProjectRecord = {
-      ...proj,
-      id: `proj_${Date.now()}`,
-      name: `${proj.name} (Cópia)`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      syncedToFirebase: false,
-    };
-    setProjects((prev) => [copy, ...prev]);
-    setCurrentProjectId(copy.id);
-  }, []);
+  const handleDuplicateProject = useCallback(
+    (proj: ProjectRecord) => {
+      const copy: ProjectRecord = {
+        ...proj,
+        id: `proj_${Date.now()}`,
+        name: `${proj.name} (Cópia)`,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        syncedToFirebase: false,
+      };
+      setProjects((prev) => [copy, ...prev]);
+      setCurrentProjectId(copy.id);
+      const state = updateProjectStateFromRecord(copy);
+      salvarProjetoNoFirebase(copy, firebaseUser?.uid).catch(() => {});
+      salvarEstadoProjetoFirebase(state, firebaseUser?.uid).catch(() => {});
+    },
+    [firebaseUser?.uid]
+  );
 
   const handleRenameProject = useCallback((id: string, newName: string) => {
     const clean = newName.trim();
@@ -1142,17 +1372,16 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
         }));
 
         const reportMsgText = formatMissionReportText(finalReport);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `sara_report_${Date.now()}`,
-            sender: 'sara',
-            text: reportMsgText,
-            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
-            mode: 'mission',
-            codeBlocks: filesToCodeBlocks(workingFiles),
-          },
-        ]);
+        const reportChatMsg: ChatMessage = {
+          id: `sara_report_${Date.now()}`,
+          sender: 'sara',
+          text: reportMsgText,
+          timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+          mode: 'mission',
+          codeBlocks: filesToCodeBlocks(workingFiles),
+        };
+        setMessages((prev) => [...prev, reportChatMsg]);
+        salvarMensagemChatFirebase(reportChatMsg, currentProject.id, firebaseUser?.uid);
 
         if (Object.keys(workingFiles).length >= 4) {
           setRightTab('files');
@@ -1216,10 +1445,14 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
 
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
       if (source !== 'voice' && !skipUserMsg) {
-        setMessages((prev) => [
-          ...prev,
-          { id: `usr_${Date.now()}`, sender: 'user', text: userText, timestamp: nowTime },
-        ]);
+        const manUsrMsg: ChatMessage = {
+          id: `usr_${Date.now()}`,
+          sender: 'user',
+          text: userText,
+          timestamp: nowTime,
+        };
+        setMessages((prev) => [...prev, manUsrMsg]);
+        salvarMensagemChatFirebase(manUsrMsg, currentProject.id, firebaseUser?.uid);
       }
 
       setIsThinking(true);
@@ -1306,7 +1539,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         const nextTask = hasNext ? proposal.stepsQueue[nextIdx] : null;
         const remainingManualTitles = proposal.stepsQueue.slice(nextIdx).map((s) => s.title);
 
-        updateProjectStateFromRecord(
+        const nextState = updateProjectStateFromRecord(
           { ...currentProject, files: updatedFiles },
           {
             goal: proposal.goal,
@@ -1315,6 +1548,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             missingFeatures: remainingManualTitles,
           }
         );
+        salvarEstadoProjetoFirebase(nextState, firebaseUser?.uid);
 
         if (hasNext && nextTask) {
           setManualProposal({
@@ -1329,21 +1563,20 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           ? `Etapa ${idx + 1}/${proposal.totalEstimatedSteps} (**${step.title}**) concluída e testada.\n\nPróxima etapa: **${nextTask!.title}** — ${nextTask!.description}.`
           : `Etapa final (**${step.title}**) concluída e testada no Preview e Editor.`;
 
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `sara_man_${Date.now()}`,
-            sender: 'sara',
-            text: msgReply,
-            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
-            mode: hasNext ? 'manual-proposal' : 'builder',
-            architectureSummary: res.architectureSummary,
-            strategicImprovements: res.strategicImprovements,
-            voiceDelivered: true,
-            hasCodeUpdate: Boolean(res.updateFiles),
-            codeBlocks: res.files ? filesToCodeBlocks(res.files) : undefined,
-          },
-        ]);
+        const manSaraMsg: ChatMessage = {
+          id: `sara_man_${Date.now()}`,
+          sender: 'sara',
+          text: msgReply,
+          timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+          mode: hasNext ? 'manual-proposal' : 'builder',
+          architectureSummary: res.architectureSummary,
+          strategicImprovements: res.strategicImprovements,
+          voiceDelivered: true,
+          hasCodeUpdate: Boolean(res.updateFiles),
+          codeBlocks: res.files ? filesToCodeBlocks(res.files) : undefined,
+        };
+        setMessages((prev) => [...prev, manSaraMsg]);
+        salvarMensagemChatFirebase(manSaraMsg, currentProject.id, firebaseUser?.uid);
 
         const manualSpokenRecap = hasNext
           ? `${idx === 0 ? 'Primeira parte pronta' : 'Etapa pronta'}, Eletro-Júnior. ${res.voiceSummary || ''} Posso avançar para ${nextTask!.title}?`
@@ -2084,10 +2317,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       if (cmd.type === 'open_named_project') {
         const target = findProjectByQuery(cmd.name);
         if (target) {
-          setCurrentProjectId(target.id);
-          const keys = Object.keys(target.files);
-          setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
-          setRefreshSeed((s) => s + 1);
+          await switchToProject(target);
           setShowProjectsModal(false);
           showToast(`Projeto aberto: ${target.name}`);
           speakAsSara(`Abri o projeto ${target.name}, Eletro-Júnior.`, voiceEnabledRef.current, {
@@ -2220,6 +2450,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       handleDeleteProject,
       handleDuplicateProject,
       handleRenameProject,
+      switchToProject,
       lastCompletedReport,
       messages.length,
     ]
@@ -2359,10 +2590,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           case 'open_project': {
             const target = findProjectByQuery(act.name);
             if (target) {
-              setCurrentProjectId(target.id);
-              const keys = Object.keys(target.files);
-              setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
-              setRefreshSeed((s) => s + 1);
+              await switchToProject(target);
               setShowProjectsModal(false);
               showToast(`Projeto aberto: ${target.name}`);
             }
@@ -2486,6 +2714,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       handleDeleteFile,
       handleRestoreVersion,
       handleDownloadZip,
+      switchToProject,
       mission.report,
       lastCompletedReport,
       handleSaraFixError,
@@ -2554,6 +2783,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       const handled = await executePlatformCommand(cmd, trimmed);
       if (handled) return;
 
+      // Separação estrita: pedidos apenas de controlo de interface nunca acionam criação/edição de código
+      const isPlatformOnly =
+        isPlatformCommandIntent(trimmed) && !image && (!attachments || attachments.length === 0);
+
       const hasExistingCode = !isProjectBlank(currentProject.files);
       const activeProjectState = loadActiveProjectState(currentProject.id);
       const screenContext: ScreenContextInfo = {
@@ -2577,7 +2810,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       };
 
       // Segurança inteligente: pergunta curto e direto antes de executar pedidos destrutivos/ambíguos
-      const dangerCheck = detectAmbiguousOrDangerousPrompt(trimmed, hasExistingCode);
+      const dangerCheck = isPlatformOnly ? null : detectAmbiguousOrDangerousPrompt(trimmed, hasExistingCode);
       if (dangerCheck) {
         setPendingConfirmation({
           id: `conf_danger_${Date.now()}`,
@@ -2593,13 +2826,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       // No MODO AUTOMÁTICO, um pedido de criação novo dispara automaticamente o pipeline autónomo
-      if (agentModeRef.current === 'automatic' && isNewBuildRequest(trimmed) && !image && !hasExistingCode) {
+      if (!isPlatformOnly && agentModeRef.current === 'automatic' && isNewBuildRequest(trimmed) && !image && !hasExistingCode) {
         await runAutonomousMission(trimmed, { source });
         return;
       }
 
       // No MODO MANUAL: se há uma proposta aguardando aprovação e Eletro-Jr disse "sim/pode continuar/avança"
-      if (agentModeRef.current === 'manual' && manualProposal.active && isApprovalMessage(trimmed)) {
+      if (!isPlatformOnly && agentModeRef.current === 'manual' && manualProposal.active && isApprovalMessage(trimmed)) {
         await executeManualApprovedStep(trimmed, manualProposal, source);
         return;
       }
@@ -2609,6 +2842,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       // No MODO MANUAL: plano multi-etapas para novo projeto do zero
       if (
+        !isPlatformOnly &&
         agentModeRef.current === 'manual' &&
         !manualProposal.active &&
         !hasExistingCode &&
@@ -2724,24 +2958,26 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       setIsThinking(true);
       const startTime = Date.now();
 
-      setLiveBuild({
-        isBuilding: true,
-        phase: 'thinking',
-        elapsedSeconds: 0,
-        steps: [],
-        createdFiles: [],
-        completedFiles: [],
-      });
-
-      // Fala aceitação imediata em paralelo (zero bloqueio antes do streaming arrancar)
-      if (isNewBuildRequest(trimmed) || hasExistingCode) {
-        const introSpeech = hasExistingCode
-          ? getContinuationSpeech(currentProject.name)
-          : getBuildAcceptanceSpeech(trimmed, agentModeRef.current);
-        speakAsSara(introSpeech, voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
+      if (!isPlatformOnly) {
+        setLiveBuild({
+          isBuilding: true,
+          phase: 'thinking',
+          elapsedSeconds: 0,
+          steps: [],
+          createdFiles: [],
+          completedFiles: [],
         });
+
+        // Fala aceitação imediata em paralelo (zero bloqueio antes do streaming arrancar)
+        if (isNewBuildRequest(trimmed) || hasExistingCode) {
+          const introSpeech = hasExistingCode
+            ? getContinuationSpeech(currentProject.name)
+            : getBuildAcceptanceSpeech(trimmed, agentModeRef.current);
+          speakAsSara(introSpeech, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        }
       }
 
       try {
@@ -2825,7 +3061,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           createdFiles: [],
         });
 
-        if (result.updateFiles && result.files) {
+        if (!isPlatformOnly && result.updateFiles && result.files) {
           const keepName = hasExistingCode && currentProject.name !== 'Novo Projeto';
           replaceCurrentProjectFiles(
             result.files,
@@ -2841,7 +3077,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           const mergedFiles = hasExistingCode
             ? { ...currentProject.files, ...result.files }
             : { ...result.files };
-          updateProjectStateFromRecord(
+          const nextState = updateProjectStateFromRecord(
             {
               ...currentProject,
               name: keepName ? currentProject.name : result.projectName || currentProject.name,
@@ -2855,6 +3091,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               missingFeatures: result.missingFeatures || [],
             }
           );
+          salvarEstadoProjetoFirebase(nextState, firebaseUser?.uid);
 
           const keys = Object.keys(result.files);
           if (keys.includes('index.html')) {
@@ -2892,7 +3129,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
 
         // REGRA: O que a Sara responde em voz (conversa pura sem código) roda APENAS em 2.º plano por voz e NÃO aparece em texto no chat!
-        if (!result.updateFiles && (isVoice || result.mode === 'conversation')) {
+        if (isPlatformOnly || (!result.updateFiles && (isVoice || result.mode === 'conversation'))) {
           const spokenOnly = result.voiceSummary || result.reply || 'Pronto, Eletro-Júnior.';
           speakAsSara(spokenOnly, voiceEnabledRef.current, {
             level: 'medium',
@@ -2911,6 +3148,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               voiceDelivered: true,
             };
             setMessages((prev) => [...prev, techReplyMsg]);
+            salvarMensagemChatFirebase(techReplyMsg, currentProject.id, firebaseUser?.uid);
           }
           return;
         }
@@ -3159,9 +3397,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       };
       setProjects((prev) => [newProj, ...prev]);
       setCurrentProjectId(newProj.id);
+      setMessages([]);
       const keys = Object.keys(imported.files);
       setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
       setRefreshSeed((s) => s + 1);
+      const st = updateProjectStateFromRecord(newProj);
+      salvarProjetoNoFirebase(newProj, firebaseUser?.uid).catch(() => {});
+      salvarEstadoProjetoFirebase(st, firebaseUser?.uid).catch(() => {});
       showToast(`ZIP "${imported.name}" importado!`);
     } catch (err: any) {
       addConsoleLog('error', err?.message || 'Falha ao importar ZIP.');
@@ -3179,9 +3421,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     };
     setProjects((prev) => [imported, ...prev]);
     setCurrentProjectId(imported.id);
+    setMessages([]);
     const keys = Object.keys(files);
     setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
     setRefreshSeed((s) => s + 1);
+    const st = updateProjectStateFromRecord(imported);
+    salvarProjetoNoFirebase(imported, firebaseUser?.uid).catch(() => {});
+    salvarEstadoProjetoFirebase(st, firebaseUser?.uid).catch(() => {});
   };
 
   const handleCopyAllCode = () => {
@@ -3233,6 +3479,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         isSaraSilenced={isSaraSilenced}
         isThinking={isThinking || liveBuild.isBuilding}
         firebaseUser={firebaseUser}
+        isSyncingFirebase={isSyncingFirebase}
         onChangeAgentMode={(m) => handleSwitchMode(m)}
         onToggleVoice={handleToggleVoice}
         onCycleVoiceLevel={handleCycleVoiceLevel}
@@ -3445,10 +3692,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         onClose={() => setShowProjectsModal(false)}
         onCreateNew={handleCreateNewProject}
         onOpenProject={(proj) => {
-          setCurrentProjectId(proj.id);
-          const keys = Object.keys(proj.files);
-          setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
-          setRefreshSeed((s) => s + 1);
+          void switchToProject(proj);
         }}
         onDuplicateProject={handleDuplicateProject}
         onRenameProject={handleRenameProject}

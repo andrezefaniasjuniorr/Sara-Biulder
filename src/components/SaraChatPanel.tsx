@@ -400,22 +400,22 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
       )}
 
       {/* Cabeçalho HUD */}
-      <div className="px-4 py-2.5 bg-[#090C12] border-b border-cyan-500/20 flex items-center justify-between gap-2 shrink-0">
+      <div className="px-4 py-2.5 bg-[#0D1117] border-b border-[#1E2433] flex items-center justify-between gap-2 shrink-0">
         <div className="min-w-0 flex items-center gap-2.5">
           <div
             className={`w-2.5 h-2.5 rounded-full shrink-0 ${
               isListening
-                ? 'bg-emerald-400 shadow-[0_0_10px_#34D399] animate-pulse'
+                ? 'bg-emerald-400 shadow-[0_0_8px_#34D399] animate-pulse'
                 : isSaraSpeaking
-                ? 'bg-purple-400 shadow-[0_0_10px_#A855F7] animate-pulse'
-                : 'bg-cyan-400 shadow-[0_0_10px_#22D3EE]'
+                ? 'bg-purple-400 shadow-[0_0_8px_#A855F7] animate-pulse'
+                : 'bg-cyan-400 shadow-[0_0_8px_#22D3EE]'
             }`}
           />
           <div className="min-w-0">
-            <h2 className="text-xs sm:text-sm font-bold tracking-wider uppercase text-white truncate">
-              SARA CORE // {agentMode === 'automatic' ? 'AUTOMÁTICO' : 'MANUAL'}
+            <h2 className="text-xs sm:text-sm font-bold tracking-wide text-white truncate">
+              Sara Biulder · {agentMode === 'automatic' ? 'Automático' : 'Manual'}
             </h2>
-            <p className="text-[11px] font-mono text-cyan-300/80 truncate">
+            <p className="text-[11px] font-mono tabular-nums text-cyan-300/80 truncate">
               {isSaraSpeaking
                 ? 'Sara a falar...'
                 : isListening
@@ -655,12 +655,12 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
       )}
 
       {/* Feed Técnico de Criação (Voz roda em 2.º plano, chat exibe apenas engenharia e entregas) */}
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 sara-scroll bg-[radial-gradient(circle_at_top,rgba(6,182,212,0.06),transparent_55%)]">
+      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3.5 sara-scroll bg-[#0A0D14]">
         {messages.length === 0 && !isThinking && !liveBuild.isBuilding && (
-          <div className="rounded-xl bg-[#090D16]/90 border border-cyan-500/25 p-4 space-y-3 shadow-[0_0_24px_rgba(6,182,212,0.07)]">
-            <div className="flex items-center justify-between gap-2 border-b border-cyan-500/15 pb-2">
-              <span className="text-xs font-mono font-bold tracking-wider uppercase text-cyan-300">
-                SARA BIULDER // CONSOLA DE ENGENHARIA
+          <div className="rounded-xl bg-[#0D1117] border border-[#1E2433] p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2 border-b border-[#1E2433] pb-2">
+              <span className="text-xs font-semibold tracking-wide text-cyan-300">
+                Consola de Engenharia
               </span>
               <span className="text-[10px] font-mono text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded">
                 VOZ EM 2.º PLANO
@@ -698,10 +698,10 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
               <div
                 className={`relative max-w-[95%] rounded-xl px-4 py-3 text-xs sm:text-sm leading-relaxed ${
                   isUser
-                    ? 'bg-gradient-to-br from-[#1D4ED8]/90 to-[#6D28D9]/90 border border-blue-400/30 text-white rounded-br-none shadow-[0_4px_20px_rgba(37,99,235,0.2)]'
+                    ? 'bg-gradient-to-br from-[#1D4ED8]/90 to-[#6D28D9]/90 border border-blue-400/30 text-white rounded-br-none'
                     : isErrorMsg
                     ? 'w-full bg-rose-950/35 border border-rose-500/45 text-rose-100 rounded-tl-none'
-                    : 'w-full bg-[#090D16]/95 border border-cyan-500/25 text-white rounded-tl-none shadow-[0_0_24px_rgba(6,182,212,0.07)]'
+                    : 'w-full bg-[#0D1117] border border-[#1E2433] text-white rounded-tl-none'
                 }`}
               >
                 <div
@@ -981,7 +981,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                     : liveBuild.currentStepLabel || 'A construir módulos do sistema...'}
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 font-mono text-xs text-cyan-300 bg-[#05080F] px-2 py-0.5 rounded border border-cyan-500/30 shrink-0">
+              <div className="flex items-center gap-1.5 font-mono tabular-nums text-xs text-cyan-300 bg-[#05080F] px-2 py-0.5 rounded border border-[#1E2433] shrink-0">
                 <Clock className="w-3 h-3" />
                 <span>{formatTimer(liveBuild.elapsedSeconds)}</span>
               </div>
@@ -1142,7 +1142,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
           ref={storageFileInputRef}
           onChange={handleStorageFileChange}
           multiple
-          accept=".html,.css,.js,.jsx,.ts,.tsx,.json,.txt,.md,.csv,.svg,.zip,image/*"
+          accept=".html,.css,.js,.jsx,.ts,.tsx,.py,.sql,.json,.txt,.md,.csv,.svg,.zip,image/*"
           className="hidden"
         />
 

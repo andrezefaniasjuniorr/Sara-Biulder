@@ -78,3 +78,32 @@ export function updateProjectStateFromRecord(
   saveProjectState(next);
   return next;
 }
+
+export function mergeProjectStatesMap(
+  remoteStates: Record<string, SaraProjectState>,
+  activeProjectId?: string
+): void {
+  if (!remoteStates || Object.keys(remoteStates).length === 0) return;
+  try {
+    const mapRaw = localStorage.getItem(SARA_PROJECT_STATES_MAP_KEY);
+    const localMap: Record<string, SaraProjectState> = mapRaw ? JSON.parse(mapRaw) : {};
+    const merged: Record<string, SaraProjectState> = { ...localMap };
+
+    for (const [id, remote] of Object.entries(remoteStates)) {
+      const local = merged[id];
+      const remoteMs = Date.parse(remote?.updatedAt || '') || 0;
+      const localMs = Date.parse(local?.updatedAt || '') || 0;
+      if (!local || remoteMs >= localMs) {
+        merged[id] = remote;
+      }
+    }
+
+    localStorage.setItem(SARA_PROJECT_STATES_MAP_KEY, JSON.stringify(merged));
+    if (activeProjectId && merged[activeProjectId]) {
+      localStorage.setItem(SARA_PROJECT_STATE_KEY, JSON.stringify(merged[activeProjectId]));
+    }
+  } catch {
+    // ignore storage quota
+  }
+}
+

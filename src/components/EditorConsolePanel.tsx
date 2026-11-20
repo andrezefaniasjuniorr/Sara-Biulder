@@ -1,4 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import CodeMirror from '@uiw/react-codemirror';
+import { oneDark } from '@codemirror/theme-one-dark';
+import { EditorView } from '@codemirror/view';
+import { javascript } from '@codemirror/lang-javascript';
+import { html } from '@codemirror/lang-html';
+import { css } from '@codemirror/lang-css';
+import { json } from '@codemirror/lang-json';
+import { markdown } from '@codemirror/lang-markdown';
+import { python } from '@codemirror/lang-python';
+import { sql } from '@codemirror/lang-sql';
 import {
   FileCode2,
   Folder,
@@ -49,63 +59,105 @@ interface EditorConsolePanelProps {
   onSaraFixError: (errorSummary?: string) => void;
 }
 
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function highlightCode(code: string, file: FileKey): string {
-  const escaped = escapeHtml(code);
-  if (!escaped) return '\n';
-
-  const lower = file.toLowerCase();
-  if (lower.endsWith('.html') || lower.endsWith('.svg')) {
-    return escaped
-      .replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="text-slate-500 italic">$1</span>')
-      .replace(/(&quot;[^&]*?&quot;|'[^']*?')/g, '<span class="text-amber-300">$1</span>')
-      .replace(/(&lt;\/?)([a-zA-Z0-9-]+)/g, '$1<span class="text-blue-400 font-semibold">$2</span>')
-      .replace(/\s([a-zA-Z-:]+)=/g, ' <span class="text-purple-300">$1</span>=');
-  }
-
-  if (lower.endsWith('.css')) {
-    return escaped
-      .replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="text-slate-500 italic">$1</span>')
-      .replace(/([a-zA-Z-]+)(\s*:)/g, '<span class="text-sky-300">$1</span>$2')
-      .replace(/(#[0-9a-fA-F]{3,8}\b)/g, '<span class="text-amber-300">$1</span>')
-      .replace(/(\b\d+(?:\.\d+)?(?:px|rem|em|%|vh|vw|s|ms)?\b)/g, '<span class="text-emerald-300">$1</span>');
-  }
-
-  if (lower.endsWith('.js') || lower.endsWith('.ts') || lower.endsWith('.jsx') || lower.endsWith('.tsx')) {
-    return escaped
-      .replace(/(\/\/[^\n]*)/g, '<span class="text-slate-500 italic">$1</span>')
-      .replace(/(&quot;[^&]*?&quot;|'[^']*?'|`[^`]*?`)/g, '<span class="text-amber-300">$1</span>')
-      .replace(
-        /\b(const|let|var|function|return|if|else|for|while|async|await|import|from|export|try|catch|new|class|true|false|null|undefined)\b/g,
-        '<span class="text-purple-400 font-semibold">$1</span>'
-      )
-      .replace(/\b(document|window|console|Math|JSON|localStorage|fetch)\b/g, '<span class="text-sky-300">$1</span>')
-      .replace(/\b(\d+)\b/g, '<span class="text-emerald-300">$1</span>');
-  }
-
-  if (lower.endsWith('.json')) {
-    return escaped
-      .replace(/(&quot;[^&]+&quot;)(\s*:)/g, '<span class="text-sky-300">$1</span>$2')
-      .replace(/:\s*(&quot;[^&]*?&quot;)/g, ': <span class="text-amber-300">$1</span>');
-  }
-
-  return escaped
-    .replace(/^(#{1,4}\s.*)$/gm, '<span class="text-blue-400 font-bold">$1</span>')
-    .replace(/(\*\*[^*]+\*\*)/g, '<span class="text-purple-300 font-semibold">$1</span>');
-}
-
 interface TreeFolder {
   name: string;
   path: string;
   folders: TreeFolder[];
   files: string[];
 }
+
+function getFileVisualMeta(filePath: string): { label: string; colorClass: string } {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.html') || lower.endsWith('.htm')) return { label: 'HTML', colorClass: 'text-orange-400' };
+  if (lower.endsWith('.css') || lower.endsWith('.scss')) return { label: 'CSS', colorClass: 'text-sky-400' };
+  if (lower.endsWith('.tsx')) return { label: 'TSX', colorClass: 'text-cyan-400' };
+  if (lower.endsWith('.ts')) return { label: 'TS', colorClass: 'text-blue-400' };
+  if (lower.endsWith('.jsx')) return { label: 'JSX', colorClass: 'text-amber-300' };
+  if (lower.endsWith('.js') || lower.endsWith('.mjs')) return { label: 'JS', colorClass: 'text-yellow-300' };
+  if (lower.endsWith('.py')) return { label: 'PY', colorClass: 'text-emerald-400' };
+  if (lower.endsWith('.sql')) return { label: 'SQL', colorClass: 'text-purple-400' };
+  if (lower.endsWith('.json')) return { label: 'JSON', colorClass: 'text-amber-400' };
+  if (lower.endsWith('.svg')) return { label: 'SVG', colorClass: 'text-pink-400' };
+  if (lower.endsWith('.md')) return { label: 'MD', colorClass: 'text-slate-300' };
+  return { label: 'TXT', colorClass: 'text-slate-400' };
+}
+
+function getLanguageExtension(filePath: string) {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.html') || lower.endsWith('.htm') || lower.endsWith('.svg') || lower.endsWith('.xml')) {
+    return html({ matchClosingTags: true, autoCloseTags: true });
+  }
+  if (lower.endsWith('.css') || lower.endsWith('.scss')) {
+    return css();
+  }
+  if (lower.endsWith('.tsx')) {
+    return javascript({ jsx: true, typescript: true });
+  }
+  if (lower.endsWith('.ts')) {
+    return javascript({ typescript: true });
+  }
+  if (lower.endsWith('.jsx')) {
+    return javascript({ jsx: true });
+  }
+  if (lower.endsWith('.js') || lower.endsWith('.mjs') || lower.endsWith('.cjs')) {
+    return javascript();
+  }
+  if (lower.endsWith('.json')) {
+    return json();
+  }
+  if (lower.endsWith('.py')) {
+    return python();
+  }
+  if (lower.endsWith('.sql')) {
+    return sql();
+  }
+  if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+    return markdown();
+  }
+  return javascript();
+}
+
+const vsCodeThemeOverrides = EditorView.theme(
+  {
+    '&': {
+      backgroundColor: '#0D1117',
+      color: '#E6EDF3',
+      height: '100%',
+      fontSize: '12.5px',
+      fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+    },
+    '.cm-scroller': {
+      overflow: 'auto',
+      lineHeight: '1.65',
+      fontFamily: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace",
+    },
+    '.cm-content': {
+      padding: '10px 0',
+      caretColor: '#38BDF8',
+    },
+    '.cm-gutters': {
+      backgroundColor: '#0A0D12',
+      color: '#4B5563',
+      borderRight: '1px solid #1E2433',
+      minWidth: '42px',
+    },
+    '.cm-activeLineGutter': {
+      backgroundColor: '#161B26',
+      color: '#93C5FD',
+    },
+    '.cm-activeLine': {
+      backgroundColor: 'rgba(56, 189, 248, 0.06)',
+    },
+    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
+      backgroundColor: 'rgba(59, 130, 246, 0.28) !important',
+    },
+    '.cm-matchingBracket, .cm-nonmatchingBracket': {
+      backgroundColor: 'rgba(56, 189, 248, 0.22)',
+      outline: '1px solid rgba(56, 189, 248, 0.45)',
+    },
+  },
+  { dark: true }
+);
 
 function buildFolderTree(paths: string[]): TreeFolder {
   const root: TreeFolder = { name: 'raiz', path: '', folders: [], files: [] };
@@ -161,6 +213,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
   const [creatingFile, setCreatingFile] = useState(false);
   const [newFilePath, setNewFilePath] = useState('');
   const [collapsedFolders, setCollapsedFolders] = useState<Record<string, boolean>>({});
+  const [cursorCoords, setCursorCoords] = useState<{ line: number; col: number }>({ line: 1, col: 1 });
 
   // Busca no Editor e Histórico de Versões
   const [showSearch, setShowSearch] = useState(false);
@@ -168,15 +221,18 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
   const [searchIdx, setSearchIdx] = useState(0);
   const [showVersions, setShowVersions] = useState(false);
 
-  const preRef = useRef<HTMLPreElement | null>(null);
-  const gutterRef = useRef<HTMLDivElement | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const editorViewRef = useRef<EditorView | null>(null);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
 
   const filePaths = useMemo(() => Object.keys(files || {}), [files]);
   const resolvedActiveFile = files[activeFile] !== undefined ? activeFile : filePaths[0] || 'index.html';
   const currentCode = files[resolvedActiveFile] ?? '';
-  const lineCount = useMemo(() => Math.max(1, currentCode.split('\n').length), [currentCode]);
+  const activeMeta = useMemo(() => getFileVisualMeta(resolvedActiveFile), [resolvedActiveFile]);
+
+  const editorExtensions = useMemo(
+    () => [getLanguageExtension(resolvedActiveFile), vsCodeThemeOverrides],
+    [resolvedActiveFile]
+  );
 
   const totalLinesAllFiles = useMemo(
     () =>
@@ -187,10 +243,6 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
     [files]
   );
 
-  const highlightedHtml = useMemo(
-    () => highlightCode(currentCode, resolvedActiveFile),
-    [currentCode, resolvedActiveFile]
-  );
   const errorCount = useMemo(
     () => consoleLogs.filter((l) => l.level === 'error').length,
     [consoleLogs]
@@ -218,13 +270,17 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
   }, [currentCode, searchQuery]);
 
   const handleFindNext = () => {
-    if (!searchMatches.length || !textareaRef.current) return;
+    if (!searchMatches.length || !editorViewRef.current) return;
     const nextIdx = (searchIdx + 1) % searchMatches.length;
     setSearchIdx(nextIdx);
     const start = searchMatches[nextIdx];
     const end = start + searchQuery.length;
-    textareaRef.current.focus();
-    textareaRef.current.setSelectionRange(start, end);
+    const view = editorViewRef.current;
+    view.focus();
+    view.dispatch({
+      selection: { anchor: start, head: end },
+      scrollIntoView: true,
+    });
   };
 
   const handleCopyFile = () => {
@@ -234,13 +290,14 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
   };
 
   const handleCopyCurrentLine = () => {
-    const el = textareaRef.current;
-    const cursorPos = el?.selectionStart ?? 0;
-    const before = currentCode.slice(0, cursorPos);
-    const lineStart = before.lastIndexOf('\n') + 1;
-    const afterIdx = currentCode.indexOf('\n', cursorPos);
-    const lineEnd = afterIdx === -1 ? currentCode.length : afterIdx;
-    const lineText = currentCode.slice(lineStart, lineEnd);
+    const view = editorViewRef.current;
+    let lineText = '';
+    if (view) {
+      const head = view.state.selection.main.head;
+      lineText = view.state.doc.lineAt(head).text;
+    } else {
+      lineText = currentCode.split('\n')[0] || '';
+    }
     navigator.clipboard?.writeText(lineText).catch(() => {});
     setCopiedLine(true);
     setTimeout(() => setCopiedLine(false), 1500);
@@ -251,17 +308,6 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
     if (!jsCommand.trim()) return;
     onRunConsoleJs(jsCommand.trim());
     setJsCommand('');
-  };
-
-  const handleEditorScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
-    const target = e.currentTarget;
-    if (preRef.current) {
-      preRef.current.scrollTop = target.scrollTop;
-      preRef.current.scrollLeft = target.scrollLeft;
-    }
-    if (gutterRef.current) {
-      gutterRef.current.scrollTop = target.scrollTop;
-    }
   };
 
   const handleCreateSubmit = (e: React.FormEvent) => {
@@ -306,7 +352,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
             type="button"
             onClick={() => toggleFolder(folder.path)}
             style={{ paddingLeft: `${depth * 12 + 8}px` }}
-            className="w-full py-1.5 pr-2 rounded-lg hover:bg-[#1F1F2E]/50 text-left flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer"
+            className="w-full py-1.5 pr-2 rounded-lg hover:bg-[#1E2433]/60 text-left flex items-center gap-1.5 text-xs text-slate-300 cursor-pointer"
           >
             {isCollapsed ? (
               <ChevronRight className="w-3.5 h-3.5 text-[#A1A1AA] shrink-0" />
@@ -329,6 +375,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
               const fileName = fullPath.split('/').pop() || fullPath;
               const isActive = resolvedActiveFile === fullPath;
               const bytes = new Blob([files[fullPath] || '']).size;
+              const meta = getFileVisualMeta(fullPath);
               return (
                 <div
                   key={fullPath}
@@ -336,7 +383,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                   className={`group pr-2 py-1.5 rounded-lg flex items-center justify-between gap-2 transition ${
                     isActive
                       ? 'bg-[#3B82F6]/15 border border-[#3B82F6]/40 text-white'
-                      : 'hover:bg-[#0A0A0F] border border-transparent text-[#A1A1AA] hover:text-white'
+                      : 'hover:bg-[#0D1117] border border-transparent text-[#A1A1AA] hover:text-white'
                   }`}
                 >
                   <button
@@ -347,11 +394,14 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                     }}
                     className="flex-1 min-w-0 flex items-center gap-2 text-left cursor-pointer"
                   >
-                    <FileCode2 className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                    <FileCode2 className={`w-3.5 h-3.5 shrink-0 ${meta.colorClass}`} />
                     <span className="text-xs font-mono truncate">{fileName}</span>
                   </button>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    <span className="text-[10px] font-mono text-[#A1A1AA]/70">{bytes}B</span>
+                    <span className={`text-[9px] font-mono font-bold ${meta.colorClass}`}>
+                      {meta.label}
+                    </span>
+                    <span className="text-[10px] font-mono text-[#A1A1AA]/70 tabular-nums">{bytes}B</span>
                     {filePaths.length > 1 && (
                       <button
                         type="button"
@@ -374,18 +424,18 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
 
   return (
     <section
-      className={`flex flex-col bg-[#12121A] overflow-hidden ${
+      className={`flex flex-col bg-[#11141D] overflow-hidden ${
         isFullscreen ? 'fixed inset-0 z-50 h-screen w-screen' : 'h-full'
       }`}
     >
       {/* Abas: Ficheiros | Editor | Console + Tela Cheia / Fechar */}
-      <div className="px-2.5 py-2 border-b border-[#1F1F2E] flex items-center justify-between gap-1.5 shrink-0">
-        <div className="flex items-center gap-1 bg-[#0A0A0F] p-1 rounded-lg border border-[#1F1F2E] flex-1 min-w-0">
+      <div className="px-2.5 py-2 border-b border-[#1E2433] flex items-center justify-between gap-1.5 shrink-0 bg-[#0D1017]">
+        <div className="flex items-center gap-1 bg-[#090B10] p-1 rounded-lg border border-[#1E2433] flex-1 min-w-0">
           <button
             type="button"
             onClick={() => onSelectTab('files')}
             className={`flex-1 py-1.5 px-2 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-              activeTab === 'files' ? 'bg-[#1F1F2E] text-white' : 'text-[#A1A1AA] hover:text-white'
+              activeTab === 'files' ? 'bg-[#1E2433] text-white' : 'text-[#A1A1AA] hover:text-white'
             }`}
           >
             <FolderOpen className="w-3.5 h-3.5 text-[#3B82F6]" />
@@ -395,7 +445,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
             type="button"
             onClick={() => onSelectTab('editor')}
             className={`flex-1 py-1.5 px-2 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-              activeTab === 'editor' ? 'bg-[#1F1F2E] text-white' : 'text-[#A1A1AA] hover:text-white'
+              activeTab === 'editor' ? 'bg-[#1E2433] text-white' : 'text-[#A1A1AA] hover:text-white'
             }`}
           >
             <Code2 className="w-3.5 h-3.5 text-[#8B5CF6]" />
@@ -405,13 +455,13 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
             type="button"
             onClick={() => onSelectTab('console')}
             className={`flex-1 py-1.5 px-2 rounded text-xs font-medium flex items-center justify-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-              activeTab === 'console' ? 'bg-[#1F1F2E] text-white' : 'text-[#A1A1AA] hover:text-white'
+              activeTab === 'console' ? 'bg-[#1E2433] text-white' : 'text-[#A1A1AA] hover:text-white'
             }`}
           >
             <Terminal className="w-3.5 h-3.5 text-emerald-400" />
             <span>Console</span>
             {errorCount > 0 && (
-              <span className="text-[10px] font-mono text-rose-400">({errorCount})</span>
+              <span className="text-[10px] font-mono text-rose-400 tabular-nums">({errorCount})</span>
             )}
           </button>
         </div>
@@ -422,7 +472,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
           className={`px-2 py-1.5 rounded-lg border text-xs font-medium flex items-center gap-1 transition cursor-pointer shrink-0 whitespace-nowrap ${
             isFullscreen
               ? 'bg-rose-500/20 border-rose-500/40 text-rose-200 hover:bg-rose-500/30'
-              : 'bg-[#0A0A0F] border-[#1F1F2E] text-[#A1A1AA] hover:text-white'
+              : 'bg-[#090B10] border-[#1E2433] text-[#A1A1AA] hover:text-white'
           }`}
           title={isFullscreen ? 'Fechar Tela Cheia' : 'Tela Cheia (Ctrl+E)'}
         >
@@ -443,23 +493,23 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
       {/* Conteúdo: Explorador Dinâmico de Pastas e Ficheiros */}
       {activeTab === 'files' && (
         <div className="flex-1 overflow-y-auto p-3 space-y-2.5 sara-scroll">
-          <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-[#1F1F2E]">
+          <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-[#1E2433]">
             <span className="text-xs font-semibold text-[#A1A1AA]">
-              Pastas & Ficheiros ({filePaths.length})
+              Pastas &amp; Ficheiros ({filePaths.length})
             </span>
             <div className="flex items-center gap-1">
               <input
                 ref={uploadInputRef}
                 type="file"
                 multiple
-                accept=".html,.css,.js,.jsx,.ts,.tsx,.json,.txt,.md,.svg,.csv"
+                accept=".html,.css,.js,.jsx,.ts,.tsx,.json,.txt,.md,.svg,.csv,.py,.sql"
                 onChange={handleUploadProjectFiles}
                 className="hidden"
               />
               <button
                 type="button"
                 onClick={() => uploadInputRef.current?.click()}
-                className="p-1.5 rounded-lg bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white cursor-pointer"
+                className="p-1.5 rounded-lg bg-[#090B10] border border-[#1E2433] text-[#A1A1AA] hover:text-white cursor-pointer"
                 title="Importar ficheiro do Storage/Drive"
               >
                 <Upload className="w-3.5 h-3.5" />
@@ -467,7 +517,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
               <button
                 type="button"
                 onClick={() => setCreatingFile((v) => !v)}
-                className="p-1.5 rounded-lg bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-[#3B82F6] cursor-pointer"
+                className="p-1.5 rounded-lg bg-[#090B10] border border-[#1E2433] text-[#A1A1AA] hover:text-[#3B82F6] cursor-pointer"
                 title="Novo ficheiro ou pasta (ex: src/utils/api.js)"
               >
                 <Plus className="w-3.5 h-3.5" />
@@ -476,7 +526,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                 <button
                   type="button"
                   onClick={onToggleFullscreen}
-                  className="p-1.5 rounded-lg bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white cursor-pointer"
+                  className="p-1.5 rounded-lg bg-[#090B10] border border-[#1E2433] text-[#A1A1AA] hover:text-white cursor-pointer"
                   title="Abrir Ficheiros em Tela Cheia"
                 >
                   <Maximize2 className="w-3.5 h-3.5" />
@@ -492,7 +542,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                 value={newFilePath}
                 onChange={(e) => setNewFilePath(e.target.value)}
                 placeholder="ex: src/components/card.js"
-                className="flex-1 min-w-0 bg-[#0A0A0F] border border-[#3B82F6] rounded-lg px-2.5 py-1.5 text-xs font-mono text-white outline-none"
+                className="flex-1 min-w-0 bg-[#090B10] border border-[#3B82F6] rounded-lg px-2.5 py-1.5 text-xs font-mono text-white outline-none"
                 autoFocus
               />
               <button
@@ -508,25 +558,29 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
         </div>
       )}
 
-      {/* Conteúdo: Editor estilo VS Code com Busca, Copiar Linha & Histórico de Versões */}
+      {/* Conteúdo: Editor VS Code Real (CodeMirror 6 One Dark Pro) */}
       {activeTab === 'editor' && (
-        <div className="flex-1 flex flex-col overflow-hidden">
-          <div className="px-2 py-1.5 bg-[#0A0A0F] border-b border-[#1F1F2E] flex items-center justify-between gap-2 overflow-x-auto sara-scroll shrink-0">
+        <div className="flex-1 flex flex-col overflow-hidden bg-[#0D1117]">
+          <div className="px-2 py-1.5 bg-[#0A0D12] border-b border-[#1E2433] flex items-center justify-between gap-2 overflow-x-auto sara-scroll shrink-0">
             <div className="flex items-center gap-1">
-              {filePaths.map((filePath) => (
-                <button
-                  key={filePath}
-                  type="button"
-                  onClick={() => onSelectFile(filePath)}
-                  className={`px-2.5 py-1 rounded text-[11px] font-mono transition cursor-pointer whitespace-nowrap ${
-                    resolvedActiveFile === filePath
-                      ? 'bg-[#12121A] text-cyan-300 border border-cyan-500/40'
-                      : 'text-[#A1A1AA] hover:text-white'
-                  }`}
-                >
-                  {filePath}
-                </button>
-              ))}
+              {filePaths.map((filePath) => {
+                const meta = getFileVisualMeta(filePath);
+                return (
+                  <button
+                    key={filePath}
+                    type="button"
+                    onClick={() => onSelectFile(filePath)}
+                    className={`px-2.5 py-1 rounded text-[11px] font-mono flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+                      resolvedActiveFile === filePath
+                        ? 'bg-[#0D1117] text-white border border-[#3B82F6]/45 border-t-2 border-t-[#38BDF8]'
+                        : 'text-[#8B949E] hover:text-white hover:bg-[#161B26]'
+                    }`}
+                  >
+                    <span className={`text-[9px] font-bold ${meta.colorClass}`}>{meta.label}</span>
+                    <span>{filePath}</span>
+                  </button>
+                );
+              })}
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
@@ -534,9 +588,9 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                 type="button"
                 onClick={() => setShowSearch((v) => !v)}
                 className={`px-2 py-1 rounded text-[11px] flex items-center gap-1 cursor-pointer ${
-                  showSearch ? 'bg-[#3B82F6]/20 text-[#3B82F6]' : 'text-[#A1A1AA] hover:text-white'
+                  showSearch ? 'bg-[#3B82F6]/20 text-[#3B82F6]' : 'text-[#8B949E] hover:text-white'
                 }`}
-                title="Buscar no código"
+                title="Buscar no código (Ctrl+F)"
               >
                 <Search className="w-3 h-3" />
               </button>
@@ -544,7 +598,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
               <button
                 type="button"
                 onClick={handleCopyCurrentLine}
-                className="px-2 py-1 rounded text-[11px] text-[#A1A1AA] hover:text-white flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                className="px-2 py-1 rounded text-[11px] text-[#8B949E] hover:text-white flex items-center gap-1 cursor-pointer whitespace-nowrap"
                 title="Copiar linha atual do cursor"
               >
                 <Scissors className="w-3 h-3" />
@@ -555,7 +609,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                 type="button"
                 onClick={() => setShowVersions((v) => !v)}
                 className={`px-2 py-1 rounded text-[11px] flex items-center gap-1 cursor-pointer whitespace-nowrap ${
-                  showVersions ? 'bg-[#8B5CF6]/20 text-[#C4B5FD]' : 'text-[#A1A1AA] hover:text-white'
+                  showVersions ? 'bg-[#8B5CF6]/20 text-[#C4B5FD]' : 'text-[#8B949E] hover:text-white'
                 }`}
                 title="Histórico de versões"
               >
@@ -566,7 +620,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
               <button
                 type="button"
                 onClick={handleCopyFile}
-                className="px-2 py-1 rounded text-[11px] text-[#A1A1AA] hover:text-white flex items-center gap-1 cursor-pointer shrink-0"
+                className="px-2 py-1 rounded text-[11px] text-[#8B949E] hover:text-white flex items-center gap-1 cursor-pointer shrink-0"
                 title="Copiar este ficheiro completo"
               >
                 {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
@@ -576,7 +630,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
 
           {/* Barra de Busca */}
           {showSearch && (
-            <div className="px-3 py-1.5 bg-[#0D111A] border-b border-[#1F1F2E] flex items-center gap-2 shrink-0">
+            <div className="px-3 py-1.5 bg-[#0D111A] border-b border-[#1E2433] flex items-center gap-2 shrink-0">
               <Search className="w-3.5 h-3.5 text-[#3B82F6]" />
               <input
                 type="text"
@@ -592,17 +646,17 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                   }
                 }}
                 placeholder="Procurar no ficheiro..."
-                className="flex-1 min-w-0 bg-[#0A0A0F] border border-[#1F1F2E] focus:border-[#3B82F6] rounded px-2 py-1 text-xs font-mono text-white outline-none"
+                className="flex-1 min-w-0 bg-[#090B10] border border-[#1E2433] focus:border-[#3B82F6] rounded px-2 py-1 text-xs font-mono text-white outline-none"
                 autoFocus
               />
-              <span className="text-[11px] font-mono text-[#A1A1AA]">
+              <span className="text-[11px] font-mono text-[#A1A1AA] tabular-nums">
                 {searchMatches.length > 0 ? `${(searchIdx % searchMatches.length) + 1}/${searchMatches.length}` : '0/0'}
               </span>
               <button
                 type="button"
                 onClick={handleFindNext}
                 disabled={searchMatches.length === 0}
-                className="px-2 py-1 rounded bg-[#1F1F2E] text-[11px] text-white disabled:opacity-40 cursor-pointer"
+                className="px-2 py-1 rounded bg-[#1E2433] text-[11px] text-white disabled:opacity-40 cursor-pointer"
               >
                 Próxima
               </button>
@@ -616,9 +670,9 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
             </div>
           )}
 
-          {/* Dropdown / Lista de Versões Anteriores */}
+          {/* Lista de Versões Anteriores */}
           {showVersions && (
-            <div className="px-3 py-2 bg-[#0D111A] border-b border-[#1F1F2E] max-h-40 overflow-y-auto sara-scroll space-y-1.5 shrink-0">
+            <div className="px-3 py-2 bg-[#0D111A] border-b border-[#1E2433] max-h-40 overflow-y-auto sara-scroll space-y-1.5 shrink-0">
               <div className="flex items-center justify-between text-[11px] text-[#A1A1AA]">
                 <span className="font-semibold text-white">Histórico de Versões Guardadas</span>
                 <button
@@ -635,7 +689,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                 versions.map((ver) => (
                   <div
                     key={ver.id}
-                    className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-[#0A0A0F] border border-[#1F1F2E] text-[11px]"
+                    className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-[#090B10] border border-[#1E2433] text-[11px]"
                   >
                     <div className="min-w-0">
                       <div className="text-white font-medium truncate">{ver.label}</div>
@@ -657,43 +711,54 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
             </div>
           )}
 
-          <div className="flex-1 flex bg-[#0B0B11] overflow-hidden font-mono text-xs relative">
-            <div
-              ref={gutterRef}
-              className="w-10 py-3 pr-2 text-right text-[#A1A1AA]/40 select-none bg-[#0A0A0F] border-r border-[#1F1F2E] overflow-hidden shrink-0 leading-[1.6]"
-              aria-hidden="true"
-            >
-              {Array.from({ length: Math.min(lineCount, 1200) }, (_, idx) => (
-                <div key={idx + 1}>{idx + 1}</div>
-              ))}
-            </div>
-
-            <div className="relative flex-1 h-full overflow-hidden">
-              <pre
-                ref={preRef}
-                aria-hidden="true"
-                style={{ tabSize: 2, fontVariantLigatures: 'none' }}
-                className="absolute inset-0 m-0 p-3 font-mono text-xs leading-[1.6] text-[#E2E8F0] whitespace-pre overflow-hidden pointer-events-none"
-                dangerouslySetInnerHTML={{ __html: highlightedHtml + '\n' }}
-              />
-              <textarea
-                ref={textareaRef}
-                value={currentCode}
-                onChange={(e) => onChangeFileContent(resolvedActiveFile, e.target.value)}
-                onScroll={handleEditorScroll}
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-                    e.preventDefault();
-                    setShowSearch(true);
-                  }
-                }}
-                spellCheck={false}
-                wrap="off"
-                style={{ tabSize: 2, fontVariantLigatures: 'none' }}
-                className="relative z-10 w-full h-full bg-transparent text-transparent caret-[#3B82F6] p-3 outline-none resize-none leading-[1.6] font-mono text-xs sara-scroll whitespace-pre overflow-auto selection:bg-[#3B82F6]/30"
-                aria-label={`Editor de código para ${resolvedActiveFile}`}
-              />
-            </div>
+          <div
+            className="flex-1 min-h-0 overflow-hidden bg-[#0D1117]"
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+                e.preventDefault();
+                setShowSearch(true);
+              }
+            }}
+          >
+            <CodeMirror
+              value={currentCode}
+              height="100%"
+              className="h-full text-xs"
+              theme={oneDark}
+              extensions={editorExtensions}
+              onChange={(val) => onChangeFileContent(resolvedActiveFile, val)}
+              onCreateEditor={(view) => {
+                editorViewRef.current = view;
+              }}
+              onUpdate={(update) => {
+                editorViewRef.current = update.view;
+                if (update.selectionSet) {
+                  const head = update.state.selection.main.head;
+                  const lineObj = update.state.doc.lineAt(head);
+                  setCursorCoords({
+                    line: lineObj.number,
+                    col: head - lineObj.from + 1,
+                  });
+                }
+              }}
+              basicSetup={{
+                lineNumbers: true,
+                highlightActiveLineGutter: true,
+                highlightSpecialChars: true,
+                foldGutter: true,
+                drawSelection: true,
+                dropCursor: true,
+                allowMultipleSelections: true,
+                indentOnInput: true,
+                syntaxHighlighting: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: true,
+                highlightActiveLine: true,
+                highlightSelectionMatches: true,
+                tabSize: 2,
+              }}
+            />
           </div>
         </div>
       )}
@@ -701,7 +766,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
       {/* Conteúdo: Console Real fundo preto */}
       {activeTab === 'console' && (
         <div className="flex-1 flex flex-col bg-[#050508] overflow-hidden">
-          <div className="px-3 py-2 border-b border-[#1F1F2E] bg-[#0A0A0F] flex items-center justify-between gap-2 shrink-0">
+          <div className="px-3 py-2 border-b border-[#1E2433] bg-[#0A0D12] flex items-center justify-between gap-2 shrink-0">
             <button
               type="button"
               onClick={() => onSaraFixError()}
@@ -713,7 +778,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
             <button
               type="button"
               onClick={onClearConsole}
-              className="p-1.5 rounded-lg border border-[#1F1F2E] text-[#A1A1AA] hover:text-white cursor-pointer"
+              className="p-1.5 rounded-lg border border-[#1E2433] text-[#A1A1AA] hover:text-white cursor-pointer"
               title="Limpar console"
               aria-label="Limpar console"
             >
@@ -737,7 +802,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                     ? 'text-emerald-400 border-emerald-500/20 bg-emerald-950/15'
                     : entry.level === 'command'
                     ? 'text-blue-400 border-blue-500/20 bg-blue-950/15'
-                    : 'text-emerald-300/90 border-[#1F1F2E] bg-[#0A0A0F]';
+                    : 'text-emerald-300/90 border-[#1E2433] bg-[#0A0D12]';
 
                 return (
                   <div
@@ -759,7 +824,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
 
           <form
             onSubmit={handleExecuteJs}
-            className="p-2 border-t border-[#1F1F2E] bg-[#0A0A0F] flex items-center gap-2 shrink-0"
+            className="p-2 border-t border-[#1E2433] bg-[#0A0D12] flex items-center gap-2 shrink-0"
           >
             <span className="font-mono text-xs text-emerald-400 pl-1 select-none">&gt;</span>
             <input
@@ -772,7 +837,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
             <button
               type="submit"
               disabled={!jsCommand.trim()}
-              className="px-2.5 py-1 rounded bg-[#1F1F2E] hover:bg-[#3B82F6] text-white text-xs font-mono flex items-center gap-1 transition disabled:opacity-40 cursor-pointer"
+              className="px-2.5 py-1 rounded bg-[#1E2433] hover:bg-[#3B82F6] text-white text-xs font-mono flex items-center gap-1 transition disabled:opacity-40 cursor-pointer"
             >
               <Play className="w-3 h-3" />
               <span>Run</span>
@@ -781,13 +846,22 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
         </div>
       )}
 
-      {/* Barra de Estatísticas no Rodapé */}
-      <div className="px-3 py-1.5 bg-[#090C12] border-t border-[#1F1F2E] flex items-center justify-between gap-2 text-[10px] font-mono text-[#A1A1AA] shrink-0">
-        <span>{totalLinesAllFiles} linhas</span>
-        <span>·</span>
-        <span>{filePaths.length} ficheiro(s)</span>
-        <span>·</span>
-        <span className="text-emerald-400">{errorsFixedCount} erro(s) corrigido(s)</span>
+      {/* Barra de Status estilo VS Code */}
+      <div className="px-3 py-1.5 bg-[#090C12] border-t border-[#1E2433] flex items-center justify-between gap-2 text-[10px] font-mono text-[#8B949E] shrink-0 tabular-nums">
+        <div className="flex items-center gap-2">
+          <span className={`font-bold ${activeMeta.colorClass}`}>{activeMeta.label}</span>
+          <span>·</span>
+          <span>
+            Ln {cursorCoords.line}, Col {cursorCoords.col}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span>{totalLinesAllFiles} linhas</span>
+          <span>·</span>
+          <span>{filePaths.length} ficheiro(s)</span>
+          <span>·</span>
+          <span className="text-emerald-400">{errorsFixedCount} corrigido(s)</span>
+        </div>
       </div>
     </section>
   );
