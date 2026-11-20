@@ -57,6 +57,47 @@ export interface LiveBuildInfo {
   modelUsed?: string;
 }
 
+export type SaraPlatformActionType =
+  | 'open_editor'
+  | 'open_editor_fullscreen'
+  | 'open_files'
+  | 'open_console'
+  | 'show_preview'
+  | 'toggle_presentation'
+  | 'close_overlay'
+  | 'preview_mobile'
+  | 'preview_tablet'
+  | 'preview_desktop'
+  | 'open_projects'
+  | 'open_settings'
+  | 'open_deploy'
+  | 'create_project'
+  | 'open_project'
+  | 'delete_project'
+  | 'rename_project'
+  | 'duplicate_project'
+  | 'save_project'
+  | 'focus_file'
+  | 'delete_file'
+  | 'refresh_preview'
+  | 'undo_version'
+  | 'download_zip'
+  | 'push_github'
+  | 'clear_chat'
+  | 'switch_manual'
+  | 'switch_automatic'
+  | 'pause_mission'
+  | 'resume_mission'
+  | 'open_report'
+  | 'fix_error';
+
+export interface SaraPlatformAction {
+  type: SaraPlatformActionType;
+  name?: string;
+  path?: string;
+  projectType?: ProjectType;
+}
+
 export interface ScreenContextInfo {
   activeTab: RightPanelTab;
   previewDevice: PreviewDevice;
@@ -64,6 +105,8 @@ export interface ScreenContextInfo {
   projectName: string;
   isEditorFullscreen: boolean;
   hasExistingCode: boolean;
+  availableProjects?: string[];
+  openModal?: 'projects' | 'settings' | 'deploy' | 'presentation' | null;
 }
 
 export interface PendingVoiceConfirmation {

@@ -44,6 +44,7 @@ export default async function handler(req, res) {
 
     for (const model of MODEL_PRIORITY_CHAIN) {
       const streamStart = Date.now();
+      let chunkWatchdog;
       try {
         sendEvent({ type: 'status', model });
         const streamResp = await withTimeout(
@@ -57,13 +58,22 @@ export default async function handler(req, res) {
                 : {}),
             },
           }),
-          18000,
+          9500,
           model
         );
 
         let chunkCount = 0;
-        for await (const chunk of streamResp) {
-          const text = chunk?.text || '';
+        const iterator = streamResp[Symbol.asyncIterator]();
+        while (true) {
+          const nextStep = await Promise.race([
+            iterator.next(),
+            new Promise((_, reject) => {
+              chunkWatchdog = setTimeout(() => reject(new Error(`Timeout stream chunk em ${model}`)), 12000);
+            }),
+          ]);
+          clearTimeout(chunkWatchdog);
+          if (nextStep.done) break;
+          const text = nextStep.value?.text || '';
           if (text) {
             chunkCount++;
             sendEvent({ type: 'chunk', text, model });
@@ -77,6 +87,7 @@ export default async function handler(req, res) {
           break;
         }
       } catch (err) {
+        clearTimeout(chunkWatchdog);
         lastError = err;
         console.warn(`[Vercel Stream Failover] ${model} falhou:`, err?.message?.slice(0, 140));
         if (!isRetryableModelError(err)) break;

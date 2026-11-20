@@ -27,6 +27,7 @@ export async function onRequestPost(context) {
       consoleLogs,
       history,
       agentMode,
+      screenContext,
     } = body || {};
 
     let finalContents = contents;
@@ -62,13 +63,16 @@ export async function onRequestPost(context) {
           : '';
 
       const modePrefix = agentMode === 'manual' ? '[MODO MANUAL ATIVO] ' : '';
+      const screenInfo = screenContext
+        ? `\nEstado da plataforma: separador=${screenContext.activeTab}, preview=${screenContext.previewDevice}, telaCheia=${Boolean(screenContext.isEditorFullscreen)}, projetoAtual="${screenContext.projectName}", projetos="${(screenContext.availableProjects || []).join(', ')}".`
+        : '';
       const explicitKgInChat = /\b(kg\s*services|lembra\s+da\s+kg|dados\s+da\s+kg)\b/i.test(prompt || '');
       const memInfo = explicitKgInChat
         ? '\n[Dado pedido pelo utilizador: KG Services WhatsApp 878 468 124]'
         : '';
 
       parts.push({
-        text: `${modePrefix}${prompt || 'Olá, Sara!'}${fileList ? `\nFicheiros atuais: ${fileList}` : ''}${memInfo}${errSummary}\n[Responde com espontaneidade, humor/opinião natural e ZERO frases padrão como "Boa" ou "Perfeito".]`,
+        text: `${modePrefix}${prompt || 'Olá, Sara!'}${screenInfo}${fileList ? `\nFicheiros atuais: ${fileList}` : ''}${memInfo}${errSummary}\n[Responde com vida, emoção real, espontaneidade total e ZERO frases padrão. Se o utilizador pedir qualquer ação na plataforma (abrir/fechar editor, tela cheia, projetos, apagar projeto X, criar projeto, mudar dispositivo, salvar, etc.), inclui <SARA_ACTIONS>[...]</SARA_ACTIONS>.]`,
       });
       turns.push({ role: 'user', parts });
       finalContents = turns;
@@ -83,9 +87,9 @@ export async function onRequestPost(context) {
         contents: finalContents,
         generationConfig: model.startsWith('gemini-4')
           ? { thinkingConfig: { thinkingLevel: 'LOW' } }
-          : { temperature: 1.0 },
+          : { temperature: 1.05 },
       }),
-      15000
+      8000
     );
 
     return jsonResponse({ reply: text, modelUsed });

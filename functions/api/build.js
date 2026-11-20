@@ -28,6 +28,7 @@ export async function onRequestPost(context) {
       attachedFiles = [],
       forceBuilderMode,
       projectState,
+      screenContext,
     } = body || {};
 
     const recentErrors = (consoleLogs || [])
@@ -57,7 +58,11 @@ export async function onRequestPost(context) {
         ? `ESTADO GUARDADO (sara_estado_projeto): projeto "${projectState.projectName}", última etapa: "${projectState.lastStepDone}", próximo passo: "${projectState.nextStep}".\n`
         : '';
 
-    const contextMessage = `${stateInfo}HISTÓRICO RECENTE:
+    const screenBlock = screenContext
+      ? `CONTEXTO ATUAL DA PLATAFORMA: separador="${screenContext.activeTab}", preview="${screenContext.previewDevice}", ficheiro ativo="${screenContext.activeFile}", projeto="${screenContext.projectName}", telaCheia="${Boolean(screenContext.isEditorFullscreen)}", projetosDisponiveis="${(screenContext.availableProjects || []).join(', ')}".\n`
+      : '';
+
+    const contextMessage = `${screenBlock}${stateInfo}HISTÓRICO RECENTE:
 ${recentHistory || 'Início da sessão.'}
 
 FICHEIROS ATUAIS DO PROJETO (${Object.keys(files || {}).length}):
@@ -100,6 +105,19 @@ ${prompt || 'Constrói o sistema pedido.'}`;
         proactiveSuggestion: { type: 'STRING' },
         steps: { type: 'ARRAY', items: { type: 'STRING' } },
         assumedNotes: { type: 'ARRAY', items: { type: 'STRING' } },
+        actions: {
+          type: 'ARRAY',
+          items: {
+            type: 'OBJECT',
+            properties: {
+              type: { type: 'STRING' },
+              name: { type: 'STRING' },
+              path: { type: 'STRING' },
+              projectType: { type: 'STRING' },
+            },
+            required: ['type'],
+          },
+        },
         filesList: {
           type: 'ARRAY',
           items: {

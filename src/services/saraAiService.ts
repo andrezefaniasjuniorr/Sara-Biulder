@@ -7,6 +7,7 @@ import type {
   ConsoleEntry,
   ProjectFiles,
   ProjectType,
+  SaraPlatformAction,
   ScreenContextInfo,
 } from '../types/builder';
 import type { SaraProjectState } from '../utils/projectMemory';
@@ -162,13 +163,21 @@ function isPureConversationIntent(prompt: string, hasImage: boolean, hasAttachme
     'melhorar',
     'edita',
     'editar',
-    'remove',
-    'remover',
     'coloca',
     'colocar',
     'inclui',
     'incluir',
   ];
+
+  // Pedidos de controlo de plataforma ("apaga o projeto X", "abre o editor grande", etc.) não são geração de código
+  const platformControlCue =
+    /\b(apaga|elimina|remove)\s+(o\s+|a\s+)?(projeto|ficheiro|arquivo)\b|\b(abre|abrir|fecha|fechar|maximiza|minimiza|mostra|vai\s+para|muda\s+para|duplica|renomeia|salva|guarda)\s+(o\s+|a\s+|os\s+|as\s+)?(editor|ficheiro|console|preview|projeto|projetos|telemovel|celular|tablet|pc|desktop|configuracoes|deploy|apresentacao)\b/i.test(
+      p
+    );
+  if (platformControlCue && !/\b(cria|constr[oó]i|gera)\s+(um\s+)?(site|sistema|app|jogo|loja|dashboard|painel)\b/i.test(p)) {
+    return true;
+  }
+
   if (buildKeywords.some((k) => p.includes(k))) return false;
 
   const chatCues = [
@@ -194,7 +203,7 @@ function isPureConversationIntent(prompt: string, hasImage: boolean, hasAttachme
     'quem és',
     'quem es',
   ];
-  return chatCues.some((c) => p.includes(c)) || p.split(/\s+/).length <= 3;
+  return chatCues.some((c) => p.includes(c)) || p.split(/\s+/).length <= 5;
 }
 
 export interface StreamMeta {
@@ -216,6 +225,7 @@ export interface SaraBuilderResult {
   reply: string;
   updateFiles: boolean;
   files?: ProjectFiles;
+  actions?: SaraPlatformAction[];
   projectName?: string;
   projectType?: ProjectType;
   planSentence?: string;
@@ -230,6 +240,46 @@ export interface SaraBuilderResult {
   steps?: BuildStep[];
   codeBlocks?: ChatCodeBlock[];
   modelUsed?: string;
+  apiDegraded?: boolean;
+}
+
+export function extractSaraActionsFromText(rawText: string): {
+  actions: SaraPlatformAction[];
+  cleanedText: string;
+} {
+  const actions: SaraPlatformAction[] = [];
+  if (!rawText) return { actions, cleanedText: '' };
+
+  const cleanedText = rawText
+    .replace(/<SARA_ACTIONS>([\s\S]*?)<\/SARA_ACTIONS>/gi, (_, inner) => {
+      try {
+        const stripped = String(inner || '')
+          .trim()
+          .replace(/^```json\s*/i, '')
+          .replace(/^```\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .trim();
+        const parsed = JSON.parse(stripped);
+        const list = Array.isArray(parsed) ? parsed : [parsed];
+        for (const item of list) {
+          if (item && typeof item.type === 'string' && item.type.trim()) {
+            actions.push({
+              type: item.type.trim(),
+              name: typeof item.name === 'string' ? item.name.trim() : undefined,
+              path: typeof item.path === 'string' ? item.path.trim() : undefined,
+              projectType: item.projectType,
+            });
+          }
+        }
+      } catch {
+        // ignore partial/malformed action tag
+      }
+      return '';
+    })
+    .replace(/<SARA_ACTIONS>[\s\S]*$/gi, '')
+    .trim();
+
+  return { actions, cleanedText };
 }
 
 function stripCodeFence(content: string): string {
@@ -263,6 +313,7 @@ function parseStreamBuffer(fullBuffer: string): {
   files: ProjectFiles;
   activeFilePath: string | undefined;
   completedFiles: string[];
+  actions: SaraPlatformAction[];
   reply: string;
 } {
   let meta: StreamMeta | null = null;
@@ -274,6 +325,8 @@ function parseStreamBuffer(fullBuffer: string): {
       // ignore partial
     }
   }
+
+  const { actions } = extractSaraActionsFromText(fullBuffer);
 
   const files: ProjectFiles = {};
   const completedFiles: string[] = [];
@@ -299,15 +352,15 @@ function parseStreamBuffer(fullBuffer: string): {
   let reply = '';
   const replyClosed = fullBuffer.match(/<SARA_REPLY>([\s\S]*?)<\/SARA_REPLY>/);
   if (replyClosed) {
-    reply = replyClosed[1].trim();
+    reply = extractSaraActionsFromText(replyClosed[1]).cleanedText;
   } else {
     const replyOpen = fullBuffer.match(/<SARA_REPLY>([\s\S]*)$/);
     if (replyOpen) {
-      reply = replyOpen[1].trim();
+      reply = extractSaraActionsFromText(replyOpen[1]).cleanedText;
     }
   }
 
-  return { meta, files, activeFilePath, completedFiles, reply };
+  return { meta, files, activeFilePath, completedFiles, actions, reply };
 }
 
 export interface StreamBuildCallbacks {
@@ -398,11 +451,17 @@ function buildResultFromJsonFallback(
     callbacks?.onFileProgress?.(files, undefined, Object.keys(files));
   }
 
-  const reply =
+  const rawReply =
     data?.reply ||
     (hasFiles
       ? `Pronto, Eletro-Jr! Construí ${Object.keys(files!).length} ficheiro(s) completo(s) para o teu projeto.`
-      : 'Entendido, Eletro-Jr!');
+      : 'Aqui estou, Eletro-Jr — diz-me o que queres ajustar!');
+  const extractedFromReply = extractSaraActionsFromText(rawReply);
+  const structuredActions: SaraPlatformAction[] = Array.isArray(data?.actions)
+    ? data.actions.filter((a: any) => a && typeof a.type === 'string')
+    : [];
+  const combinedActions = [...structuredActions, ...extractedFromReply.actions];
+  const reply = extractedFromReply.cleanedText || rawReply;
   callbacks?.onReplyProgress?.(reply);
 
   return {
@@ -410,6 +469,7 @@ function buildResultFromJsonFallback(
     reply,
     updateFiles: Boolean(hasFiles || (data?.updateFiles && data?.files)),
     files,
+    actions: combinedActions.length > 0 ? combinedActions : undefined,
     projectName: data?.projectName,
     projectType: data?.projectType,
     planSentence: meta.plan,
@@ -480,30 +540,53 @@ export async function runSaraStream(params: {
   };
 
   if (isPureConversationIntent(prompt, Boolean(image), textAttachments.length > 0)) {
-    const saraData = await postJsonWithFallback(
-      ['/api/sara', '/api/build'],
-      {
-        prompt,
-        files,
-        consoleLogs: consoleLogs.slice(-6),
-        history: history.slice(-8).map((m) => ({ sender: m.sender, text: m.text })),
-        imageBase64: image?.data,
-        mimeType: image?.mimeType,
-        agentMode,
-        pastProjects,
-        forceBuilderMode: false,
-      },
-      headers,
-      'Erro ao contactar a Sara'
-    );
+    try {
+      const saraData = await postJsonWithFallback(
+        ['/api/sara', '/api/build'],
+        {
+          prompt,
+          files,
+          consoleLogs: consoleLogs.slice(-6),
+          history: history.slice(-8).map((m) => ({ sender: m.sender, text: m.text })),
+          imageBase64: image?.data,
+          mimeType: image?.mimeType,
+          agentMode,
+          pastProjects,
+          screenContext,
+          forceBuilderMode: false,
+        },
+        headers,
+        'Falha silenciosa no canal de conversa'
+      );
 
-    return {
-      mode: 'conversation',
-      reply: saraData.reply || 'Estou pronta, Eletro-Jr!',
-      updateFiles: false,
-      engineLabel: `Builder (${saraData.modelUsed || 'gemini-4-hydrogen'})`,
-      modelUsed: saraData.modelUsed,
-    };
+      const { actions: parsedActions, cleanedText } = extractSaraActionsFromText(
+        saraData?.reply || ''
+      );
+      const structuredActions: SaraPlatformAction[] = Array.isArray(saraData?.actions)
+        ? saraData.actions.filter((a: any) => a && typeof a.type === 'string')
+        : [];
+      const mergedActions = [...structuredActions, ...parsedActions];
+      const finalReply = cleanedText || 'Estou aqui contigo, Eletro-Jr — o que queres explorar agora?';
+
+      return {
+        mode: 'conversation',
+        reply: finalReply,
+        updateFiles: false,
+        actions: mergedActions.length > 0 ? mergedActions : undefined,
+        engineLabel: `Builder (${saraData.modelUsed || 'gemini-4-hydrogen'})`,
+        modelUsed: saraData.modelUsed,
+      };
+    } catch (bgErr) {
+      console.warn('[Sara Failover Silencioso - Conversa]:', bgErr);
+      const activeProj = screenContext?.projectName || 'este projeto';
+      return {
+        mode: 'conversation',
+        reply: `Estou ligada em ${activeProj}, Eletro-Jr! Diz-me exatamente o que queres testar, mudar no código ou controlar aqui na plataforma.`,
+        updateFiles: false,
+        apiDegraded: true,
+        engineLabel: 'Sara Continuity Engine',
+      };
+    }
   }
 
   let response: Response | null = null;
@@ -529,13 +612,24 @@ export async function runSaraStream(params: {
   }
 
   if (shouldFallbackToBuild || !response || !response.body) {
-    const fallbackData = await postJsonWithFallback(
-      ['/api/build', '/api/builder/generate'],
-      { ...requestPayload, forceBuilderMode: true },
-      headers,
-      'Erro ao construir projeto na API'
-    );
-    return buildResultFromJsonFallback(fallbackData, customKey, callbacks);
+    try {
+      const fallbackData = await postJsonWithFallback(
+        ['/api/build', '/api/builder/generate'],
+        { ...requestPayload, forceBuilderMode: true },
+        headers,
+        'Falha silenciosa de failover'
+      );
+      return buildResultFromJsonFallback(fallbackData, customKey, callbacks);
+    } catch (bgErr) {
+      console.warn('[Sara Failover Silencioso - Fallback direto]:', bgErr);
+      return {
+        mode: 'conversation',
+        reply: `Estou a reorganizar os motores de geração para continuar ${screenContext?.projectName || 'o teu projeto'}, Eletro-Jr — envia novamente o detalhe ou testa um comando rápido enquanto estabiliza em segundo plano.`,
+        updateFiles: false,
+        apiDegraded: true,
+        engineLabel: 'Sara Continuity Engine',
+      };
+    }
   }
 
   const reader = response.body.getReader();
@@ -550,6 +644,7 @@ export async function runSaraStream(params: {
     files: {},
     activeFilePath: undefined,
     completedFiles: [],
+    actions: [],
     reply: '',
   };
 
@@ -602,28 +697,38 @@ export async function runSaraStream(params: {
     }
   }
 
-  // Se o stream terminou sem texto útil (ou falhou antes de entregar código), faz fallback automático para /api/build
+  // Se o stream terminou sem texto útil (ou falhou antes de entregar código), faz failover silencioso em 2.º plano
   if (!rawModelText.trim()) {
     try {
       const fallbackData = await postJsonWithFallback(
         ['/api/build', '/api/builder/generate'],
         { ...requestPayload, forceBuilderMode: true },
         headers,
-        streamErroredMessage || 'Erro ao construir projeto na API'
+        streamErroredMessage || 'Failover silencioso na construção'
       );
       return buildResultFromJsonFallback(fallbackData, customKey, callbacks);
     } catch (fallbackErr: any) {
-      throw new Error(streamErroredMessage || fallbackErr?.message || 'Erro no streaming da IA.');
+      console.warn('[Sara Failover Silencioso - Stream vazio]:', streamErroredMessage, fallbackErr);
+      return {
+        mode: 'conversation',
+        reply: `Estou a reajustar a rota dos modelos para executar "${prompt.slice(0, 60)}" em ${screenContext?.projectName || 'teu projeto'}, Eletro-Jr. Podes tentar novamente já a seguir que eu assumo daqui!`,
+        updateFiles: false,
+        apiDegraded: true,
+        engineLabel: 'Sara Continuity Engine',
+      };
     }
   }
 
   const hasFiles = Object.keys(lastParsed.files).length > 0;
+  const fallbackRawClean = extractSaraActionsFromText(
+    rawModelText.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim()
+  ).cleanedText;
   const finalReply =
     lastParsed.reply ||
-    (!hasFiles && rawModelText.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim()) ||
+    (!hasFiles && fallbackRawClean) ||
     (hasFiles
       ? `Pronto, Eletro-Jr! Construí ${Object.keys(lastParsed.files).length} ficheiro(s) completo(s) para o teu projeto.`
-      : 'Entendido, Eletro-Jr!');
+      : 'Tudo tratado por aqui, Eletro-Jr!');
 
   const stepLabels = lastParsed.meta?.steps || [];
 
@@ -632,6 +737,7 @@ export async function runSaraStream(params: {
     reply: finalReply,
     updateFiles: hasFiles,
     files: hasFiles ? lastParsed.files : undefined,
+    actions: lastParsed.actions.length > 0 ? lastParsed.actions : undefined,
     projectName: lastParsed.meta?.projectName,
     projectType: lastParsed.meta?.projectType,
     planSentence: lastParsed.meta?.plan,

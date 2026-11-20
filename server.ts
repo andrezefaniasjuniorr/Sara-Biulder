@@ -59,13 +59,17 @@ async function startServer() {
                   : {}),
               },
             }),
-            18000,
+            9500,
             model
           );
 
+          const iterator = streamResp[Symbol.asyncIterator]();
           let chunkCount = 0;
-          for await (const chunk of streamResp) {
-            const text = chunk?.text || '';
+
+          while (true) {
+            const nextStep = await withTimeout(iterator.next(), 12000, `${model}-chunk`);
+            if (nextStep.done) break;
+            const text = nextStep.value?.text || '';
             if (text) {
               chunkCount++;
               sendEvent({ type: 'chunk', text, model });
@@ -78,6 +82,7 @@ async function startServer() {
             sendEvent({ type: 'done', model });
             break;
           }
+          lastError = new Error(`Streaming vazio no modelo ${model}`);
         } catch (err: any) {
           lastError = err;
           console.warn(`[Stream Failover] ${model} falhou:`, err?.message?.slice(0, 140));

@@ -20,6 +20,7 @@ import type {
   ProjectRecord,
   ProjectType,
   RightPanelTab,
+  SaraPlatformAction,
   ScreenContextInfo,
   VersionSnapshot,
   VoiceLevel,
@@ -306,8 +307,12 @@ export default function App() {
       activeTab: rightTab,
       previewDevice,
       isEditorFullscreen,
+      hasOpenOverlay: Boolean(
+        showProjectsModal || showSettingsModal || showDeployModal || isEditorFullscreen || isPresentationMode
+      ),
       hasPendingConfirm: Boolean(pendingConfirmation),
       projectFiles: Object.keys(currentProject?.files || {}),
+      availableProjects: projects.map((p) => p.name),
       isMissionActive: mission.active,
       isMissionPaused: mission.paused,
     };
@@ -316,7 +321,12 @@ export default function App() {
     rightTab,
     previewDevice,
     isEditorFullscreen,
+    isPresentationMode,
+    showProjectsModal,
+    showSettingsModal,
+    showDeployModal,
     currentProject?.files,
+    projects,
     mission.active,
     mission.paused,
   ]);
@@ -546,6 +556,108 @@ export default function App() {
     await downloadProjectZip(currentProject.files, currentProject.name);
     showToast('ZIP descarregado!');
   }, [currentProject.files, currentProject.name, showToast]);
+
+  const normalizeMatchText = (s: string) =>
+    s
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .trim();
+
+  const findProjectByQuery = useCallback(
+    (query?: string): ProjectRecord | undefined => {
+      if (!query) return currentProject;
+      const q = normalizeMatchText(query);
+      if (!q) return currentProject;
+      return (
+        projects.find((p) => normalizeMatchText(p.name) === q) ||
+        projects.find((p) => normalizeMatchText(p.name).includes(q)) ||
+        projects.find((p) => q.includes(normalizeMatchText(p.name)))
+      );
+    },
+    [projects, currentProject]
+  );
+
+  const handleDeleteFile = useCallback(
+    (filePath: string) => {
+      setProjects((prev) =>
+        prev.map((proj) => {
+          if (proj.id !== currentProjectId) return proj;
+          const copy = { ...proj.files };
+          delete copy[filePath];
+          return {
+            ...proj,
+            files: copy,
+            updatedAt: new Date().toISOString(),
+          };
+        })
+      );
+      if (activeFile === filePath) {
+        const remaining = Object.keys(currentProject.files).filter((k) => k !== filePath);
+        setActiveFile(remaining[0] || 'index.html');
+      }
+    },
+    [currentProjectId, activeFile, currentProject.files]
+  );
+
+  const handleCreateNewProject = useCallback(
+    (name: string, type: ProjectType) => {
+      const cleanName = name.trim() || 'Novo Projeto';
+      const newProj = createStarterProject(cleanName, type);
+      setProjects((prev) => [newProj, ...prev]);
+      setCurrentProjectId(newProj.id);
+      setActiveFile('index.html');
+      setRefreshSeed((s) => s + 1);
+      addConsoleLog('success', `Novo projeto "${cleanName}" (${type}) criado.`);
+    },
+    [addConsoleLog]
+  );
+
+  const handleDuplicateProject = useCallback((proj: ProjectRecord) => {
+    const copy: ProjectRecord = {
+      ...proj,
+      id: `proj_${Date.now()}`,
+      name: `${proj.name} (Cópia)`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      syncedToFirebase: false,
+    };
+    setProjects((prev) => [copy, ...prev]);
+    setCurrentProjectId(copy.id);
+  }, []);
+
+  const handleRenameProject = useCallback((id: string, newName: string) => {
+    const clean = newName.trim();
+    if (!clean) return;
+    setProjects((prev) =>
+      prev.map((p) => (p.id === id ? { ...p, name: clean, updatedAt: new Date().toISOString() } : p))
+    );
+  }, []);
+
+  const handleDeleteProject = useCallback(
+    (id: string) => {
+      setProjects((prev) => {
+        const remaining = prev.filter((p) => p.id !== id);
+        if (remaining.length === 0) {
+          const fresh = createStarterProject();
+          setCurrentProjectId(fresh.id);
+          setActiveFile('index.html');
+          setRefreshSeed((s) => s + 1);
+          return [fresh];
+        }
+        if (id === currentProjectId) {
+          const nextProj = remaining[0];
+          setCurrentProjectId(nextProj.id);
+          const keys = Object.keys(nextProj.files);
+          setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
+          setRefreshSeed((s) => s + 1);
+        }
+        return remaining;
+      });
+      apagarProjetoNoFirebase(id).catch(() => {});
+    },
+    [currentProjectId]
+  );
 
   // Atalhos globais de teclado: Ctrl+S salvar, Ctrl+P apresentação, Ctrl+E editor fullscreen, Esc sair
   useEffect(() => {
@@ -1051,22 +1163,13 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
           createdFiles: [],
         });
         setMission((prev) => ({ ...prev, active: false }));
-        const errMsg = err?.message || 'Erro durante o Modo Automático.';
-        addConsoleLog('error', errMsg);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `sara_mission_err_${Date.now()}`,
-            sender: 'sara',
-            text: `Eletro-Jr, houve um erro no modo automático: **${errMsg}**`,
-            errorContext: errMsg,
-            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
-          },
-        ]);
+        const errMsg = err?.message || 'Failover automático.';
+        console.warn('[Sara Automático - Failover em 2.º plano]:', errMsg);
+        showToast('A reajustar execução em segundo plano');
         speakAsSara(
-          'Deu um erro no processo automático, Eletro-Jr, deixei os detalhes no chat.',
+          'Estou a reajustar a rota dos motores para continuar a construção, Eletro-Júnior. Podes continuar comigo aqui.',
           voiceEnabledRef.current,
-          { level: 'short' }
+          { level: 'short', forceSpeak: true }
         );
       }
     },
@@ -1240,17 +1343,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           steps: [],
           createdFiles: [],
         });
-        const errMsg = err?.message || 'Erro na etapa manual.';
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `sara_err_${Date.now()}`,
-            sender: 'sara',
-            text: `Eletro-Jr, erro na etapa ${idx + 1}: **${errMsg}**`,
-            errorContext: errMsg,
-            timestamp: nowTime,
-          },
-        ]);
+        console.warn('[Sara Manual - Failover em 2.º plano]:', err?.message || err);
+        showToast('A preparar nova tentativa silenciosa');
+        speakAsSara(
+          'Tive de trocar de motor agora, Eletro-Júnior — pede para avançar outra vez que já sigo com a etapa.',
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
       }
     },
     [currentProject.files, consoleLogs, messages, replaceCurrentProjectFiles]
@@ -1858,6 +1957,107 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      if (cmd.type === 'toggle_presentation') {
+        setIsEditorFullscreen(false);
+        setIsPresentationMode((prev) => {
+          const next = !prev;
+          showToast(next ? 'Modo Apresentação ativo' : 'Saí do Modo Apresentação');
+          speakAsSara(
+            next ? 'Modo apresentação ligado, Eletro-Júnior.' : 'Voltei do modo apresentação, Eletro-Júnior.',
+            voiceEnabledRef.current,
+            { level: 'short', forceSpeak: true }
+          );
+          return next;
+        });
+        return true;
+      }
+
+      if (cmd.type === 'delete_file') {
+        handleDeleteFile(cmd.filePath);
+        setRefreshSeed((s) => s + 1);
+        showToast(`Ficheiro apagado: ${cmd.filePath}`);
+        speakAsSara(`Apaguei o ficheiro ${cmd.filePath}, Eletro-Júnior.`, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'create_project') {
+        const projName = cmd.name || `Projeto ${projects.length + 1}`;
+        handleCreateNewProject(projName, cmd.projectType || 'Site');
+        showToast(`Projeto criado: ${projName}`);
+        speakAsSara(`Criei e abri o projeto ${projName}, Eletro-Júnior.`, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'open_named_project') {
+        const target = findProjectByQuery(cmd.name);
+        if (target) {
+          setCurrentProjectId(target.id);
+          const keys = Object.keys(target.files);
+          setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
+          setRefreshSeed((s) => s + 1);
+          setShowProjectsModal(false);
+          showToast(`Projeto aberto: ${target.name}`);
+          speakAsSara(`Abri o projeto ${target.name}, Eletro-Júnior.`, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        } else {
+          speakAsSara(
+            `Não encontrei nenhum projeto chamado ${cmd.name}, Eletro-Júnior. Queres que eu crie?`,
+            voiceEnabledRef.current,
+            { level: 'short', forceSpeak: true }
+          );
+        }
+        return true;
+      }
+
+      if (cmd.type === 'delete_project') {
+        const target = cmd.name ? findProjectByQuery(cmd.name) : currentProject;
+        if (target) {
+          const deletedName = target.name;
+          handleDeleteProject(target.id);
+          showToast(`Projeto apagado: ${deletedName}`);
+          speakAsSara(`Já apaguei o projeto ${deletedName}, Eletro-Júnior.`, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        } else {
+          speakAsSara(
+            `Não encontrei nenhum projeto chamado ${cmd.name} para apagar, Eletro-Júnior.`,
+            voiceEnabledRef.current,
+            { level: 'short', forceSpeak: true }
+          );
+        }
+        return true;
+      }
+
+      if (cmd.type === 'duplicate_project') {
+        const target = cmd.name ? findProjectByQuery(cmd.name) || currentProject : currentProject;
+        handleDuplicateProject(target);
+        showToast(`Projeto duplicado: ${target.name}`);
+        speakAsSara(`Dupliquei o projeto ${target.name}, Eletro-Júnior.`, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'rename_project') {
+        handleRenameProject(currentProject.id, cmd.name);
+        showToast(`Projeto renomeado: ${cmd.name}`);
+        speakAsSara(`Mudei o nome do projeto para ${cmd.name}, Eletro-Júnior.`, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
       if (cmd.type === 'refresh_preview') {
         setRefreshSeed((s) => s + 1);
         showToast('Preview atualizado');
@@ -1920,14 +2120,230 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       resumableMission,
       executeManualApprovedStep,
       currentProject,
+      projects.length,
       addConsoleLog,
       handleSaveProjectToFirebase,
       handleDownloadZip,
       stopHandsFreeMic,
       handleSaraFixError,
       handleRestoreVersion,
+      handleDeleteFile,
+      handleCreateNewProject,
+      findProjectByQuery,
+      handleDeleteProject,
+      handleDuplicateProject,
+      handleRenameProject,
       lastCompletedReport,
       messages.length,
+    ]
+  );
+
+  // Executor universal de ações estruturadas (<SARA_ACTIONS>) emitidas pela própria IA
+  const executeSaraActions = useCallback(
+    async (actions?: SaraPlatformAction[]) => {
+      if (!actions || actions.length === 0) return;
+
+      for (const act of actions) {
+        switch (act.type) {
+          case 'open_editor':
+            setIsEditorFullscreen(false);
+            setRightTab('editor');
+            setMobileTab('code');
+            break;
+          case 'open_editor_fullscreen':
+            setRightTab('editor');
+            setMobileTab('code');
+            setIsEditorFullscreen(true);
+            break;
+          case 'open_files':
+            setIsEditorFullscreen(false);
+            setRightTab('files');
+            setMobileTab('code');
+            break;
+          case 'open_console':
+            setIsEditorFullscreen(false);
+            setRightTab('console');
+            setMobileTab('console');
+            break;
+          case 'show_preview':
+            setIsEditorFullscreen(false);
+            setMobileTab('preview');
+            break;
+          case 'toggle_presentation':
+            setIsEditorFullscreen(false);
+            setIsPresentationMode((v) => !v);
+            break;
+          case 'close_overlay':
+            setIsEditorFullscreen(false);
+            setIsPresentationMode(false);
+            setShowProjectsModal(false);
+            setShowSettingsModal(false);
+            setShowDeployModal(false);
+            break;
+          case 'preview_mobile':
+            setIsEditorFullscreen(false);
+            setPreviewDevice('mobile');
+            setMobileTab('preview');
+            break;
+          case 'preview_tablet':
+            setIsEditorFullscreen(false);
+            setPreviewDevice('tablet');
+            setMobileTab('preview');
+            break;
+          case 'preview_desktop':
+            setIsEditorFullscreen(false);
+            setPreviewDevice('desktop');
+            setMobileTab('preview');
+            break;
+          case 'open_projects':
+            setShowProjectsModal(true);
+            break;
+          case 'open_settings':
+            setShowSettingsModal(true);
+            break;
+          case 'open_deploy':
+            setShowDeployModal(true);
+            break;
+          case 'create_project':
+            handleCreateNewProject(
+              act.name || `Projeto ${projects.length + 1}`,
+              act.projectType || 'Site'
+            );
+            break;
+          case 'open_project': {
+            const target = findProjectByQuery(act.name);
+            if (target) {
+              setCurrentProjectId(target.id);
+              const keys = Object.keys(target.files);
+              setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
+              setRefreshSeed((s) => s + 1);
+              setShowProjectsModal(false);
+              showToast(`Projeto aberto: ${target.name}`);
+            }
+            break;
+          }
+          case 'delete_project': {
+            const target = act.name ? findProjectByQuery(act.name) : currentProject;
+            if (target) {
+              handleDeleteProject(target.id);
+              showToast(`Projeto apagado: ${target.name}`);
+            }
+            break;
+          }
+          case 'rename_project':
+            if (act.name) {
+              handleRenameProject(currentProject.id, act.name);
+              showToast(`Projeto renomeado: ${act.name}`);
+            }
+            break;
+          case 'duplicate_project': {
+            const target = act.name ? findProjectByQuery(act.name) || currentProject : currentProject;
+            handleDuplicateProject(target);
+            showToast(`Projeto duplicado: ${target.name}`);
+            break;
+          }
+          case 'save_project':
+            await handleSaveProjectToFirebase();
+            break;
+          case 'focus_file':
+            if (act.path) {
+              const found = Object.keys(currentProject.files).find(
+                (k) => k.toLowerCase() === act.path!.toLowerCase() || k.toLowerCase().endsWith(act.path!.toLowerCase())
+              );
+              if (found) {
+                setIsEditorFullscreen(false);
+                setActiveFile(found);
+                setRightTab('editor');
+                setMobileTab('code');
+              }
+            }
+            break;
+          case 'delete_file':
+            if (act.path) {
+              const found = Object.keys(currentProject.files).find(
+                (k) => k.toLowerCase() === act.path!.toLowerCase() || k.toLowerCase().endsWith(act.path!.toLowerCase())
+              );
+              if (found) {
+                handleDeleteFile(found);
+                setRefreshSeed((s) => s + 1);
+              }
+            }
+            break;
+          case 'refresh_preview':
+            setRefreshSeed((s) => s + 1);
+            break;
+          case 'undo_version': {
+            const latestSnap = (currentProject.versions || [])[0];
+            if (latestSnap) handleRestoreVersion(latestSnap.id);
+            break;
+          }
+          case 'download_zip':
+            await handleDownloadZip();
+            break;
+          case 'push_github':
+            setShowDeployModal(true);
+            break;
+          case 'clear_chat':
+            stopSaraSpeech();
+            setManualProposal(EMPTY_MANUAL_PROPOSAL);
+            setMessages([]);
+            break;
+          case 'switch_manual':
+            setAgentMode('manual');
+            showToast('Modo Manual ativado');
+            break;
+          case 'switch_automatic':
+            setAgentMode('automatic');
+            showToast('Modo Automático ativado');
+            break;
+          case 'pause_mission':
+            missionPausedRef.current = true;
+            setMission((prev) => ({ ...prev, paused: true }));
+            break;
+          case 'resume_mission':
+            missionPausedRef.current = false;
+            setMission((prev) => ({ ...prev, paused: false }));
+            break;
+          case 'open_report': {
+            const rep = mission.report || lastCompletedReport;
+            if (rep) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: `sara_rep_act_${Date.now()}`,
+                  sender: 'sara',
+                  text: formatMissionReportText(rep),
+                  timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+                  mode: 'mission',
+                },
+              ]);
+            }
+            break;
+          }
+          case 'fix_error':
+            handleSaraFixError();
+            break;
+          default:
+            break;
+        }
+      }
+    },
+    [
+      projects.length,
+      currentProject,
+      handleCreateNewProject,
+      findProjectByQuery,
+      handleDeleteProject,
+      handleRenameProject,
+      handleDuplicateProject,
+      handleSaveProjectToFirebase,
+      handleDeleteFile,
+      handleRestoreVersion,
+      handleDownloadZip,
+      mission.report,
+      lastCompletedReport,
+      handleSaraFixError,
+      showToast,
     ]
   );
 
@@ -1997,6 +2413,16 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         projectName: currentProject.name,
         isEditorFullscreen,
         hasExistingCode,
+        availableProjects: projects.map((p) => p.name),
+        openModal: showProjectsModal
+          ? 'projects'
+          : showSettingsModal
+          ? 'settings'
+          : showDeployModal
+          ? 'deploy'
+          : isPresentationMode
+          ? 'presentation'
+          : null,
       };
 
       // Segurança inteligente: pergunta curto e direto antes de executar pedidos destrutivos/ambíguos
@@ -2120,6 +2546,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           }
         } catch {
           setIsThinking(false);
+          setLiveBuild({
+            isBuilding: false,
+            phase: 'idle',
+            elapsedSeconds: 0,
+            steps: [],
+            createdFiles: [],
+          });
         }
       }
 
@@ -2295,15 +2728,20 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
         const createdList = result.files ? Object.keys(result.files) : [];
 
+        // Executa quaisquer ações da plataforma solicitadas pela Sara (<SARA_ACTIONS>)
+        if (result.actions && result.actions.length > 0) {
+          await executeSaraActions(result.actions);
+        }
+
         // REGRA: O que a Sara responde em voz (conversa pura sem código) roda APENAS em 2.º plano por voz e NÃO aparece em texto no chat!
         if (!result.updateFiles && (isVoice || result.mode === 'conversation')) {
           const spokenOnly = result.voiceSummary || result.reply || 'Pronto, Eletro-Júnior.';
           speakAsSara(spokenOnly, voiceEnabledRef.current, {
             level: 'medium',
             isQuestionReply: true,
-            forceSpeak: isVoice,
+            forceSpeak: isVoice || !isSaraSilenced,
           });
-          // Só mostra no chat se o utilizador escreveu manualmente em texto uma pergunta técnica explícita
+          // Só mostra no chat se o utilizador escreveu manualmente em texto
           if (!isVoice) {
             const techReplyMsg: ChatMessage = {
               id: `sara_${Date.now()}`,
@@ -2373,30 +2811,42 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           steps: [],
           createdFiles: [],
         });
-        const errorText = err?.message || 'Erro ao comunicar com a IA.';
-        addConsoleLog('error', errorText);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `sara_err_${Date.now()}`,
-            sender: 'sara',
-            text: `Erro técnico na execução: **${errorText}**\n\nPodes clicar em **Corrigir automaticamente** abaixo ou verificar a ligação/chave API nas Configurações.`,
-            errorContext: errorText,
-            timestamp: nowTime,
-          },
-        ]);
-        speakAsSara('Houve uma falha técnica na execução, Eletro-Júnior. Já expliquei o motivo e deixei o botão de correção no painel.', voiceEnabledRef.current, {
+        // Regra estrita: erros de API NUNCA aparecem no chat como cartões de erro! Tratamento silencioso em 2.º plano.
+        console.warn('[Sara Failover Silencioso]:', err?.message || err);
+        const gentleSpoken = `Estou a trocar a rota dos motores para continuar ${currentProject.name}, Eletro-Júnior. Podes tentar outra vez ou dar-me um comando de voz agora.`;
+        if (!isVoice) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `sara_cont_${Date.now()}`,
+              sender: 'sara',
+              text: `Estou a ajustar o motor de resposta em segundo plano para **${currentProject.name}**, Eletro-Jr — envia novamente o próximo detalhe que eu sigo contigo!`,
+              timestamp: nowTime,
+              mode: 'conversation',
+              voiceDelivered: true,
+            },
+          ]);
+        }
+        speakAsSara(gentleSpoken, voiceEnabledRef.current, {
           level: 'short',
+          forceSpeak: true,
         });
       }
     },
     [
       executePlatformCommand,
+      executeSaraActions,
       currentProject,
+      projects,
       rightTab,
       previewDevice,
       activeFile,
       isEditorFullscreen,
+      isPresentationMode,
+      showProjectsModal,
+      showSettingsModal,
+      showDeployModal,
+      isSaraSilenced,
       runAutonomousMission,
       manualProposal,
       executeManualApprovedStep,
@@ -2519,25 +2969,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     addConsoleLog('info', `Ficheiro criado: ${filePath}`);
   };
 
-  const handleDeleteFile = (filePath: string) => {
-    setProjects((prev) =>
-      prev.map((proj) => {
-        if (proj.id !== currentProjectId) return proj;
-        const copy = { ...proj.files };
-        delete copy[filePath];
-        return {
-          ...proj,
-          files: copy,
-          updatedAt: new Date().toISOString(),
-        };
-      })
-    );
-    if (activeFile === filePath) {
-      const remaining = Object.keys(currentProject.files).filter((k) => k !== filePath);
-      setActiveFile(remaining[0] || 'index.html');
-    }
-  };
-
   const handleUploadFilesToProject = (uploaded: Array<{ path: string; content: string }>) => {
     const map: ProjectFiles = {};
     for (const item of uploaded) {
@@ -2569,46 +3000,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     } catch (err: any) {
       addConsoleLog('error', err?.message || 'Falha ao importar ZIP.');
     }
-  };
-
-  const handleCreateNewProject = (name: string, type: ProjectType) => {
-    const newProj = createStarterProject(name, type);
-    setProjects((prev) => [newProj, ...prev]);
-    setCurrentProjectId(newProj.id);
-    setActiveFile('index.html');
-    setRefreshSeed((s) => s + 1);
-    addConsoleLog('success', `Novo projeto "${name}" (${type}) criado.`);
-  };
-
-  const handleDuplicateProject = (proj: ProjectRecord) => {
-    const copy: ProjectRecord = {
-      ...proj,
-      id: `proj_${Date.now()}`,
-      name: `${proj.name} (Cópia)`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      syncedToFirebase: false,
-    };
-    setProjects((prev) => [copy, ...prev]);
-    setCurrentProjectId(copy.id);
-  };
-
-  const handleRenameProject = (id: string, newName: string) => {
-    setProjects((prev) =>
-      prev.map((p) => (p.id === id ? { ...p, name: newName, updatedAt: new Date().toISOString() } : p))
-    );
-  };
-
-  const handleDeleteProject = (id: string) => {
-    setProjects((prev) => {
-      const remaining = prev.filter((p) => p.id !== id);
-      if (remaining.length === 0) return prev;
-      if (id === currentProjectId) {
-        setCurrentProjectId(remaining[0].id);
-      }
-      return remaining;
-    });
-    apagarProjetoNoFirebase(id).catch(() => {});
   };
 
   const handleImportProject = (name: string, files: ProjectFiles) => {

@@ -56,7 +56,7 @@ export async function onRequestPost(context) {
 
       for (const model of MODEL_PRIORITY_CHAIN) {
         const abortCtrl = new AbortController();
-        const timeoutId = setTimeout(() => abortCtrl.abort(), 20000);
+        const connectTimeoutId = setTimeout(() => abortCtrl.abort(), 9500);
 
         try {
           sendEvent({ type: 'status', model });
@@ -81,7 +81,7 @@ export async function onRequestPost(context) {
             }),
           });
 
-          clearTimeout(timeoutId);
+          clearTimeout(connectTimeoutId);
 
           if (!resp.ok || !resp.body) {
             const errText = await resp.text().catch(() => '');
@@ -95,7 +95,18 @@ export async function onRequestPost(context) {
           let chunkCount = 0;
 
           while (true) {
-            const { done, value } = await reader.read();
+            let chunkTimer;
+            const readResult = await Promise.race([
+              reader.read(),
+              new Promise((_, reject) => {
+                chunkTimer = setTimeout(() => {
+                  abortCtrl.abort();
+                  reject(new Error(`Timeout de chunk no streaming do modelo ${model}`));
+                }, 12000);
+              }),
+            ]).finally(() => clearTimeout(chunkTimer));
+
+            const { done, value } = readResult;
             if (done) break;
             sseBuffer += decoder.decode(value, { stream: true });
             const lines = sseBuffer.split('\n');
@@ -126,8 +137,9 @@ export async function onRequestPost(context) {
             sendEvent({ type: 'done', model });
             break;
           }
+          lastError = new Error(`Streaming vazio no modelo ${model}`);
         } catch (err) {
-          clearTimeout(timeoutId);
+          clearTimeout(connectTimeoutId);
           lastError = err;
           if (!isRetryableHttpStatus(err?.status, err?.message)) {
             break;

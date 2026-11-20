@@ -1,3 +1,5 @@
+import type { ProjectType } from '../types/builder';
+
 export type VoiceLevel = 'short' | 'medium' | 'full';
 
 export type VoiceCommandAction =
@@ -19,9 +21,11 @@ export type VoiceCommandAction =
   | { type: 'open_editor_fullscreen' }
   | { type: 'open_files' }
   | { type: 'focus_file'; filePath: string }
+  | { type: 'delete_file'; filePath: string }
   | { type: 'close_editor_or_back' }
   | { type: 'open_console' }
   | { type: 'show_preview' }
+  | { type: 'toggle_presentation' }
   | { type: 'fix_error' }
   | { type: 'preview_mobile' }
   | { type: 'preview_tablet' }
@@ -32,6 +36,11 @@ export type VoiceCommandAction =
   | { type: 'download_zip' }
   | { type: 'clear_chat'; preAuthorized?: boolean }
   | { type: 'open_projects' }
+  | { type: 'create_project'; name?: string; projectType?: ProjectType }
+  | { type: 'open_named_project'; name: string }
+  | { type: 'delete_project'; name?: string }
+  | { type: 'duplicate_project'; name?: string }
+  | { type: 'rename_project'; name: string }
   | { type: 'open_settings' }
   | { type: 'start_listening' }
   | { type: 'stop_listening' }
@@ -43,8 +52,10 @@ export interface VoiceParseContext {
   activeTab?: 'files' | 'editor' | 'console';
   previewDevice?: 'desktop' | 'tablet' | 'mobile';
   isEditorFullscreen?: boolean;
+  hasOpenOverlay?: boolean;
   hasPendingConfirm?: boolean;
   projectFiles?: string[];
+  availableProjects?: string[];
   isMissionActive?: boolean;
   isMissionPaused?: boolean;
 }
@@ -216,7 +227,7 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
 
   // Confusão comum do nome "Sara" no início da frase (ex: "sala abre o editor", "zara modo manual")
   out = out.replace(
-    /^(sala|saia|cara|zara|lara)(?=[\s,]+(abre|abrir|fecha|fechar|faz|fazer|modo|desfaz|mostra|vai|para|continua|limpa|baixa|salva|guarda|atualiza|recarrega|cala|pausa|retoma|tudo|esta|oi|ola))/i,
+    /^(sala|saia|cara|zara|lara)(?=[\s,]+(abre|abrir|fecha|fechar|apaga|apagar|elimina|remove|cria|criar|faz|fazer|modo|desfaz|mostra|vai|para|continua|limpa|baixa|salva|guarda|atualiza|recarrega|cala|pausa|retoma|tudo|esta|oi|ola|duplica|renomeia))/i,
     'Sara'
   );
 
@@ -226,6 +237,7 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
     [/\b(consola|consolo|conselho)\b/gi, 'console'],
     [/\b(heitor|aditor|edito)\b/gi, 'editor'],
     [/\b(feicheiros|fixeiros)\b/gi, 'ficheiros'],
+    [/\b(proj[eé]to|progeto)\b/gi, 'projeto'],
     [/\b(deploi|de\s+poi|dip[l]?oy)\b/gi, 'deploy'],
     [/\b(puxa|puxe|puche|pux)\b(?=\s+(para|pro|github|git|agora|$))/gi, 'push'],
     [/\b(faz|fazer|envia|manda)\s+(puxa|puxe|puche|pux)\b/gi, '$1 push'],
@@ -315,11 +327,7 @@ export function parseVoiceCommand(
     }
   }
 
-  // Conversa rápida em segundo plano (sem chamar IA e sem poluir o chat principal)
-  const smallTalkReply = getInstantSmallTalkReply(lower);
-  if (smallTalkReply) {
-    return { type: 'background_smalltalk', reply: smallTalkReply, raw: clean };
-  }
+  // Saudação e conversa natural seguem diretamente para a Sara viva (Gemini), sem frases pré-gravadas fixas!
 
   // Calar a Sara imediatamente
   if (
@@ -397,98 +405,225 @@ export function parseVoiceCommand(
     return { type: 'open_report' };
   }
 
-  // Controlo total da plataforma (Editor, Ficheiros, Console, Preview, Deploy, Push, Projetos, Config)
-  if (
-    (lower.includes('editor') && (lower.includes('tela cheia') || lower.includes('ecra inteiro'))) ||
-    lower.includes('abre o editor em tela cheia')
-  ) {
-    return { type: 'open_editor_fullscreen' };
-  }
-  if (
-    lower.includes('fecha o editor') ||
-    lower.includes('fechar editor') ||
-    lower === 'sara, volta' ||
-    lower === 'sara volta' ||
-    lower === 'volta' ||
-    lower.includes('sair de tela cheia') ||
-    ((context?.isEditorFullscreen || context?.activeTab === 'editor') &&
-      /^(sara[,\s]+)?(fecha|sair|sai)$/.test(lower))
-  ) {
-    return { type: 'close_editor_or_back' };
-  }
-  if (/\b(abre|abrir|mostra|mostrar|vai para|foca)\s+((o|a)\s+)?editor\b/.test(lower)) {
-    return { type: 'open_editor' };
-  }
+  // Frases compostas (ex: "apaga X e abre o editor") vão para a IA executar tudo via <SARA_ACTIONS>
+  const hasCompoundConnector = /\s+e\s+(abre|abrir|fecha|fechar|apaga|cria|mostra|muda|salva|guarda|duplica|limpa)\b/i.test(lower);
 
-  // Abrir ficheiro específico do projeto por voz (ex: "abre o ficheiro style.css", "foca motor.js")
-  if (context?.projectFiles?.length && /\b(abre|abrir|foca|mostra|edita)\b/.test(lower)) {
-    const fileMatch = context.projectFiles.find((fp) => {
-      const base = fp.split('/').pop()?.toLowerCase() || fp.toLowerCase();
-      const stem = base.replace(/\.[a-z0-9]+$/, '');
-      return lower.includes(fp.toLowerCase()) || lower.includes(base) || (stem.length >= 3 && lower.includes(`ficheiro ${stem}`));
-    });
-    if (fileMatch) {
-      return { type: 'focus_file', filePath: fileMatch };
+  if (!hasCompoundConnector) {
+    // Controlo total da plataforma (Editor, Ficheiros, Console, Preview, Apresentação, Projetos, CRUD)
+    if (
+      (lower.includes('editor') &&
+        (lower.includes('tela cheia') ||
+          lower.includes('ecra inteiro') ||
+          lower.includes('maximiza') ||
+          lower.includes('grande') ||
+          lower.includes('fullscreen'))) ||
+      lower.includes('maximiza o editor') ||
+      lower.includes('maximizar editor') ||
+      lower.includes('editor grande')
+    ) {
+      return { type: 'open_editor_fullscreen' };
     }
-  }
 
-  if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((os|as)\s+)?(ficheiros|arquivos)\b/.test(lower)) {
-    return { type: 'open_files' };
-  }
-  if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((o|a)\s+)?console\b/.test(lower)) {
-    return { type: 'open_console' };
-  }
-  if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((o|a)\s+)?preview\b/.test(lower)) {
-    return { type: 'show_preview' };
-  }
-  if (
-    lower.includes('preview em telemovel') ||
-    lower.includes('modo telemovel') ||
-    lower.includes('visao telemovel') ||
-    lower.includes('visao celular') ||
-    lower.includes('modo celular') ||
-    lower === 'telemovel'
-  ) {
-    return { type: 'preview_mobile' };
-  }
-  if (lower.includes('visao tablet') || lower.includes('modo tablet') || lower.includes('preview em tablet') || lower === 'tablet') {
-    return { type: 'preview_tablet' };
-  }
-  if (
-    lower.includes('preview em pc') ||
-    lower.includes('modo pc') ||
-    lower.includes('visao pc') ||
-    lower.includes('visao computador') ||
-    lower === 'pc' ||
-    lower === 'desktop'
-  ) {
-    return { type: 'preview_desktop' };
-  }
-  if (lower.includes('faz deploy') || lower.includes('fazer deploy') || lower.includes('abre o deploy') || lower.includes('publica o site') || lower.includes('publicar site')) {
-    return { type: 'open_deploy' };
-  }
-  if (lower.includes('faz push') || lower.includes('fazer push') || lower.includes('push para o github') || lower.includes('envia para o github') || lower.includes('autorizo o push') || lower.includes('pode fazer push')) {
-    const preAuthorized = /\b(autorizo|confirmo|pode\s+fazer|podes\s+fazer|sim)\b/i.test(lower);
-    return { type: 'push_github', preAuthorized };
-  }
-  if (lower.includes('baixa o zip') || lower.includes('baixar zip') || lower.includes('baixar o zip') || lower.includes('descarrega o zip')) {
-    return { type: 'download_zip' };
-  }
-  if (lower.includes('limpa o chat') || lower.includes('limpar chat') || lower.includes('limpar o chat')) {
-    const preAuthorized = /\b(autorizo|confirmo|pode\s+limpar)\b/i.test(lower);
-    return { type: 'clear_chat', preAuthorized };
-  }
-  if (lower.includes('abre os projetos') || lower.includes('abrir projetos') || lower.includes('lista de projetos')) {
-    return { type: 'open_projects' };
-  }
-  if (lower.includes('abre as configuracoes') || lower.includes('abrir configuracoes') || lower.includes('abre definicoes')) {
-    return { type: 'open_settings' };
-  }
-  if (lower.includes('salva o projeto') || lower.includes('salvar o projeto') || lower.includes('guarda o projeto')) {
-    return { type: 'save_project' };
-  }
-  if (lower.includes('corrige o erro') || lower.includes('corrigir o erro') || lower.includes('corrigir erro')) {
-    return { type: 'fix_error' };
+    if (
+      lower.includes('fecha o editor') ||
+      lower.includes('fechar editor') ||
+      lower.includes('fecha os projetos') ||
+      lower.includes('fecha as configuracoes') ||
+      lower.includes('fecha o deploy') ||
+      lower.includes('fecha o modal') ||
+      lower.includes('fecha a apresentacao') ||
+      lower.includes('sai de tela cheia') ||
+      lower.includes('sair de tela cheia') ||
+      lower.includes('minimiza o editor') ||
+      lower === 'sara volta' ||
+      lower === 'sara, volta' ||
+      lower === 'volta' ||
+      ((context?.isEditorFullscreen || context?.activeTab === 'editor' || context?.hasOpenOverlay) &&
+        /^(sara[,\s]+)?(fecha|fechar|sair|sai|fecha isto|minimiza)$/.test(lower))
+    ) {
+      return { type: 'close_editor_or_back' };
+    }
+
+    if (/\b(abre|abrir|mostra|mostrar|vai para|foca)\s+((o|a)\s+)?editor\b/.test(lower)) {
+      return { type: 'open_editor' };
+    }
+
+    if (
+      lower.includes('modo apresentacao') ||
+      lower.includes('abre a apresentacao') ||
+      lower.includes('abrir apresentacao') ||
+      lower.includes('mostra em apresentacao') ||
+      lower === 'apresentacao'
+    ) {
+      return { type: 'toggle_presentation' };
+    }
+
+    // Apagar ficheiro específico
+    if (context?.projectFiles?.length && /\b(apaga|apagar|elimina|eliminar|remove|remover)\s+((o|a)\s+)?(ficheiro|arquivo)\b/.test(lower)) {
+      const fileToDel = context.projectFiles.find((fp) => {
+        const base = fp.split('/').pop()?.toLowerCase() || fp.toLowerCase();
+        const stem = base.replace(/\.[a-z0-9]+$/, '');
+        return lower.includes(fp.toLowerCase()) || lower.includes(base) || (stem.length >= 3 && lower.includes(stem));
+      });
+      if (fileToDel) {
+        return { type: 'delete_file', filePath: fileToDel };
+      }
+    }
+
+    // Abrir ficheiro específico do projeto por voz (ex: "abre o ficheiro style.css", "foca motor.js")
+    if (context?.projectFiles?.length && /\b(abre|abrir|foca|mostra|edita)\b/.test(lower)) {
+      const fileMatch = context.projectFiles.find((fp) => {
+        const base = fp.split('/').pop()?.toLowerCase() || fp.toLowerCase();
+        const stem = base.replace(/\.[a-z0-9]+$/, '');
+        return lower.includes(fp.toLowerCase()) || lower.includes(base) || (stem.length >= 3 && lower.includes(`ficheiro ${stem}`));
+      });
+      if (fileMatch) {
+        return { type: 'focus_file', filePath: fileMatch };
+      }
+    }
+
+    // CRUD de Projetos: Apagar / Abrir / Criar / Duplicar / Renomear projeto
+    const delProjMatch = clean.match(
+      /^(?:sara[,\s]+)?(?:apaga|apagar|elimina|eliminar|remove|remover|deita fora|tira)\s+(?:o\s+|a\s+|aquele\s+|este\s+)?projeto(?:\s+chamado)?(?:\s+["']?(.+?)["']?)?$/i
+    );
+    if (delProjMatch) {
+      return {
+        type: 'delete_project',
+        name: delProjMatch[1]?.trim() || undefined,
+      };
+    }
+
+    const openProjMatch = clean.match(
+      /^(?:sara[,\s]+)?(?:abre|abrir|carrega|carregar|vai\s+para|muda\s+para|entra\s+no|seleciona)\s+(?:o\s+)?projeto\s+["']?(.+?)["']?$/i
+    );
+    if (openProjMatch && openProjMatch[1]) {
+      return {
+        type: 'open_named_project',
+        name: openProjMatch[1].trim(),
+      };
+    }
+
+    const renameProjMatch = clean.match(
+      /^(?:sara[,\s]+)?(?:renomeia|renomear|muda\s+o\s+nome\s+(?:do\s+projeto\s+)?para)\s+(?:o\s+projeto\s+para\s+)?["']?(.+?)["']?$/i
+    );
+    if (renameProjMatch && renameProjMatch[1]) {
+      return {
+        type: 'rename_project',
+        name: renameProjMatch[1].trim(),
+      };
+    }
+
+    if (/\b(duplica|duplicar|clona|clonar|copia)\s+((o|este)\s+)?projeto\b/.test(lower)) {
+      return { type: 'duplicate_project' };
+    }
+
+    const createProjMatch = clean.match(
+      /^(?:sara[,\s]+)?(?:cria|criar|abre\s+um\s+novo|novo)\s+(?:um\s+)?projeto(?:\s+(?:chamado|com\s+o\s+nome|nome)\s+["']?(.+?)["']?|\s+["']?(.+?)["']?)?$/i
+    );
+    if (createProjMatch) {
+      const rawName = (createProjMatch[1] || createProjMatch[2] || '').trim();
+      const detectedType: ProjectType | undefined = /\bjogo\b/i.test(rawName)
+        ? 'Jogo'
+        : /\bapp\b/i.test(rawName)
+        ? 'App'
+        : undefined;
+      return {
+        type: 'create_project',
+        name: rawName || undefined,
+        projectType: detectedType,
+      };
+    }
+
+    if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((os|as)\s+)?(ficheiros|arquivos)\b/.test(lower)) {
+      return { type: 'open_files' };
+    }
+    if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((o|a)\s+)?console\b/.test(lower)) {
+      return { type: 'open_console' };
+    }
+    if (/\b(abre|abrir|mostra|mostrar|vai para)\s+((o|a)\s+)?preview\b/.test(lower)) {
+      return { type: 'show_preview' };
+    }
+    if (
+      lower.includes('preview em telemovel') ||
+      lower.includes('modo telemovel') ||
+      lower.includes('visao telemovel') ||
+      lower.includes('versao telemovel') ||
+      lower.includes('versao mobile') ||
+      lower.includes('no telemovel') ||
+      lower.includes('no celular') ||
+      lower.includes('visao celular') ||
+      lower.includes('modo celular') ||
+      lower.includes('versao celular') ||
+      lower === 'telemovel' ||
+      lower === 'celular'
+    ) {
+      return { type: 'preview_mobile' };
+    }
+    if (
+      lower.includes('visao tablet') ||
+      lower.includes('modo tablet') ||
+      lower.includes('versao tablet') ||
+      lower.includes('no tablet') ||
+      lower.includes('preview em tablet') ||
+      lower === 'tablet'
+    ) {
+      return { type: 'preview_tablet' };
+    }
+    if (
+      lower.includes('preview em pc') ||
+      lower.includes('modo pc') ||
+      lower.includes('visao pc') ||
+      lower.includes('versao pc') ||
+      lower.includes('versao desktop') ||
+      lower.includes('no pc') ||
+      lower.includes('no computador') ||
+      lower.includes('visao computador') ||
+      lower === 'pc' ||
+      lower === 'desktop'
+    ) {
+      return { type: 'preview_desktop' };
+    }
+    if (lower.includes('faz deploy') || lower.includes('fazer deploy') || lower.includes('abre o deploy') || lower.includes('publica o site') || lower.includes('publicar site')) {
+      return { type: 'open_deploy' };
+    }
+    if (lower.includes('faz push') || lower.includes('fazer push') || lower.includes('push para o github') || lower.includes('envia para o github') || lower.includes('autorizo o push') || lower.includes('pode fazer push')) {
+      const preAuthorized = /\b(autorizo|confirmo|pode\s+fazer|podes\s+fazer|sim)\b/i.test(lower);
+      return { type: 'push_github', preAuthorized };
+    }
+    if (lower.includes('baixa o zip') || lower.includes('baixar zip') || lower.includes('baixar o zip') || lower.includes('descarrega o zip')) {
+      return { type: 'download_zip' };
+    }
+    if (lower.includes('limpa o chat') || lower.includes('limpar chat') || lower.includes('limpar o chat')) {
+      const preAuthorized = /\b(autorizo|confirmo|pode\s+limpar)\b/i.test(lower);
+      return { type: 'clear_chat', preAuthorized };
+    }
+    if (
+      lower.includes('abre os projetos') ||
+      lower.includes('abrir projetos') ||
+      lower.includes('lista de projetos') ||
+      lower.includes('mostra os projetos') ||
+      lower.includes('ver projetos') ||
+      lower.includes('meus projetos')
+    ) {
+      return { type: 'open_projects' };
+    }
+    if (lower.includes('abre as configuracoes') || lower.includes('abrir configuracoes') || lower.includes('abre definicoes') || lower.includes('mostra configuracoes')) {
+      return { type: 'open_settings' };
+    }
+    if (
+      lower.includes('salva o projeto') ||
+      lower.includes('salvar o projeto') ||
+      lower.includes('guarda o projeto') ||
+      lower.includes('guardar o projeto') ||
+      lower.includes('salva isto') ||
+      lower.includes('guarda isto') ||
+      lower.includes('grava o projeto')
+    ) {
+      return { type: 'save_project' };
+    }
+    if (lower.includes('corrige o erro') || lower.includes('corrigir o erro') || lower.includes('corrigir erro')) {
+      return { type: 'fix_error' };
+    }
   }
   if (
     lower.includes('desfaz') ||
@@ -1048,12 +1183,21 @@ export function speakAsSara(
     window.speechSynthesis.cancel();
 
     const period = getTimePeriod();
+    const hasExcitement = spoken.includes('!');
+    const hasQuestion = spoken.includes('?');
     const utterance = new SpeechSynthesisUtterance(spoken);
     utterance.lang = 'pt-PT';
-    // Voz natural equilibrada com ajuste de velocidade do Eletro-Jr e período do dia
-    utterance.rate = period === 'night' ? Math.max(0.8, customBaseRate - 0.04) : customBaseRate;
-    utterance.pitch = period === 'night' ? 1.0 : period === 'morning' ? 1.07 : 1.05;
-    utterance.volume = period === 'night' ? 0.85 : 1.0;
+    // Voz feminina natural com entoação emocional viva conforme o contexto da frase e período
+    utterance.rate =
+      period === 'night'
+        ? Math.max(0.85, customBaseRate - 0.03)
+        : hasExcitement
+        ? Math.min(1.38, customBaseRate + 0.03)
+        : customBaseRate;
+    utterance.pitch =
+      (period === 'night' ? 1.0 : period === 'morning' ? 1.06 : 1.04) +
+      (hasExcitement ? 0.04 : hasQuestion ? 0.03 : 0);
+    utterance.volume = period === 'night' ? 0.88 : 1.0;
 
     const voice = pickBestFemalePortugueseVoice();
     if (voice) {
