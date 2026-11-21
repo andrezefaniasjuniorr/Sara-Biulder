@@ -77,6 +77,7 @@ import {
   interruptSaraAndListen,
   parseVoiceCommand,
   speakAsSara,
+  startVoiceReading,
   type VoiceCommandAction,
 } from '../../utils/voiceService';
 import { SaraJarvisHead } from './SaraJarvisHead';
@@ -88,6 +89,8 @@ interface JarvisWorkspaceProps {
   isSaraSpeaking: boolean;
   isSaraSilenced: boolean;
   firebaseUserUid?: string;
+  activeBuilderProjectName?: string;
+  activeBuilderFiles?: string[];
   onToggleMic: () => void;
   onSilenceSara: () => void;
   onSwitchMode: (mode: WorkspaceMode) => void;
@@ -132,6 +135,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   isSaraSpeaking,
   isSaraSilenced,
   firebaseUserUid,
+  activeBuilderProjectName,
+  activeBuilderFiles,
   onToggleMic,
   onSilenceSara,
   onSwitchMode,
@@ -212,6 +217,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const spectrumCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const proactiveCheckedRef = useRef(false);
 
   // Persistência local automática
   useEffect(() => saveJarvisAgenda(agenda), [agenda]);
@@ -221,6 +227,65 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   useEffect(() => saveJarvisDocuments(documents), [documents]);
   useEffect(() => saveJarvisConversation(conversation), [conversation]);
   useEffect(() => saveJarvisPlaylist(playlist), [playlist]);
+
+  // Inteligência Proativa & Continuidade entre dias (sem exagerar nem repetir o nome)
+  useEffect(() => {
+    if (proactiveCheckedRef.current) return;
+    proactiveCheckedRef.current = true;
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const sessionKey = `sara_proactive_checked_${todayKey}`;
+    try {
+      if (sessionStorage.getItem(sessionKey)) return;
+      sessionStorage.setItem(sessionKey, '1');
+    } catch {
+      // ignore storage restriction
+    }
+
+    const urgentToday = agenda.find(
+      (a) =>
+        a.date === todayKey &&
+        !a.completed &&
+        /(teste|prova|exame|revis|apresent|reuni|entrega|aula)/i.test(a.title)
+    );
+    const urgentTask = tasks.find(
+      (t) =>
+        !t.done &&
+        (t.priority === 'alta' || /(teste|prova|exame|revis|apresent|fatura|trabalho)/i.test(t.title))
+    );
+
+    let proactiveMsg = '';
+    if (urgentToday) {
+      proactiveMsg = `Chefe, hoje às ${urgentToday.time} tens "${urgentToday.title}" na agenda. Queres rever ou preparar alguma coisa agora?`;
+    } else if (urgentTask) {
+      proactiveMsg = `Olha, tens "${urgentTask.title}" em aberto nas tarefas. Queres despachar isso já?`;
+    } else if (
+      memory.lastVisitDate &&
+      memory.lastVisitDate < todayKey &&
+      (activeBuilderProjectName || memory.lastActiveProjectName || memory.lastTopic)
+    ) {
+      const refName =
+        activeBuilderProjectName || memory.lastActiveProjectName || memory.lastTopic;
+      proactiveMsg = `Bom regresso! Continuamos "${refName}" de ontem ou vamos noutra direção hoje?`;
+    }
+
+    setMemory((prev) => ({
+      ...prev,
+      lastVisitDate: todayKey,
+      lastActiveProjectName: activeBuilderProjectName || prev.lastActiveProjectName,
+    }));
+
+    if (proactiveMsg) {
+      setConversation((prev) => [
+        ...prev.slice(-30),
+        {
+          id: `sara_proactive_${Date.now()}`,
+          sender: 'sara',
+          text: proactiveMsg,
+          timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    }
+  }, [agenda, tasks, memory.lastVisitDate, memory.lastActiveProjectName, memory.lastTopic, activeBuilderProjectName]);
 
   useEffect(() => {
     mediaVolumeRef.current = mediaVolume;
@@ -762,9 +827,48 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               id: `stg_idea_${Date.now()}`,
               kind: 'ideation',
               title: act.title || 'Conceitos e Ideias',
-              subtitle: act.notes,
-              cards: Array.isArray(act.cards) ? act.cards : [],
+              subtitle: act.notes || act.subtitle,
+              cards: (Array.isArray(act.cards) ? act.cards : []).map((c: any) => ({
+                title: String(c?.title || ''),
+                tag: String(c?.tag || ''),
+                detail: String(c?.detail || ''),
+                audioText: c?.audioText ? String(c.audioText) : undefined,
+                audioLang: c?.audioLang || undefined,
+              })),
             });
+            break;
+          }
+          case 'show_quiz': {
+            setStageContent({
+              id: `stg_quiz_${Date.now()}`,
+              kind: 'quiz',
+              title: act.title || 'Teste Rápido SARA',
+              subtitle: act.subtitle || act.notes,
+              questions: Array.isArray(act.questions) ? act.questions : [],
+            });
+            break;
+          }
+          case 'show_flashcards': {
+            setStageContent({
+              id: `stg_flash_${Date.now()}`,
+              kind: 'flashcards',
+              title: act.title || 'Flashcards de Estudo',
+              subtitle: act.subtitle || act.notes,
+              cards: (Array.isArray(act.cards) ? act.cards : []).map((c: any) => ({
+                front: String(c?.front || ''),
+                back: String(c?.back || ''),
+                hint: c?.hint ? String(c.hint) : undefined,
+                lang: c?.lang || undefined,
+              })),
+            });
+            break;
+          }
+          case 'read_aloud': {
+            const toRead = (act.text || act.summary || '').trim();
+            if (toRead) {
+              startVoiceReading(act.title || 'Leitura SARA', toRead);
+              onNotify('Leitura contínua em voz alta ativa');
+            }
             break;
           }
           case 'remember_fact': {
@@ -873,6 +977,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           weather,
           telemetry,
           mediaState: currentMediaState,
+          builderContext: {
+            activeProjectName: activeBuilderProjectName,
+            activeProjectFiles: activeBuilderFiles,
+          },
           documentAttachment: docToSend,
           activeDocument: docToSend || activeDoc,
         },
@@ -898,6 +1006,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       setStreamingReply(null);
       setMood(res.mood && res.mood !== 'speaking' ? res.mood : 'idle');
 
+      const todayKey = new Date().toISOString().slice(0, 10);
+      setMemory((prev) => ({
+        ...prev,
+        lastVisitDate: todayKey,
+        lastTopic: userLabel.slice(0, 80),
+        lastActiveProjectName: activeBuilderProjectName || prev.lastActiveProjectName,
+      }));
+
       const cleanFinalReply = sanitizeAssistantPlainText(res.reply) || 'Feito.';
       setConversation((prev) => [
         ...prev,
@@ -909,9 +1025,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         },
       ]);
 
+      const startedLongReading = Boolean(
+        res.actions?.some((a) => a.type === 'read_aloud' && (a.text || a.summary))
+      );
       await applyJarvisActions(res.actions, docToSend);
 
-      if (!spokenDuringStream) {
+      if (!spokenDuringStream && !startedLongReading) {
         const speakText = sanitizeAssistantPlainText(res.voiceSummary || cleanFinalReply);
         speakAsSara(speakText, voiceEnabled, {
           level: 'medium',
@@ -933,6 +1052,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       weather,
       telemetry,
       currentMediaState,
+      activeBuilderProjectName,
+      activeBuilderFiles,
       activeDoc,
       applyJarvisActions,
       voiceEnabled,
@@ -1294,12 +1415,13 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     </div>
                     {[
                       'Explica física quântica de forma simples e depois profunda',
-                      'Resolve passo a passo a equação 3x + 9 = 24',
-                      'Desenha em SVG um esquema do sistema solar',
-                      'Cria um gráfico comparativo de energias renováveis',
+                      'Faz-me um teste de 4 perguntas sobre eletricidade básica',
+                      'Cria 5 flashcards de inglês para negócios com pronúncia',
+                      'Notícias de Moçambique e do mundo resumidas em 1 minuto',
+                      'Quanto vale 1500 Meticais em ZAR, Dólar e Euro hoje?',
+                      'Cria uma planilha de controlo de vendas e lucro em HTML',
+                      'Conta uma piada curta e dá uma frase top de status',
                       'Toca música de Alan Walker no YouTube',
-                      'Mostra um vídeo tutorial sobre motores elétricos',
-                      'Como está o tempo aqui em Inhambane hoje?',
                     ].map((cmd) => (
                       <button
                         key={cmd}

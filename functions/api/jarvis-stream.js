@@ -7,6 +7,7 @@ import {
   formatFriendlyEdgeError,
   handleOptions,
   isRetryableHttpStatus,
+  prepareJarvisContextEdge,
   resolveEdgeApiKey,
 } from './_saraEdge.js';
 
@@ -42,7 +43,8 @@ export async function onRequestPost(context) {
     });
   }
 
-  const contents = buildJarvisEdgeContents(body);
+  const preparedBody = await prepareJarvisContextEdge(body);
+  const contents = buildJarvisEdgeContents(preparedBody);
   const encoder = new TextEncoder();
   const decoder = new TextDecoder('utf-8');
 

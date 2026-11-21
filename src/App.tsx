@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Eye, Code2, Terminal, Mic, MicOff, VolumeX, Loader2 } from 'lucide-react';
+import { MessageSquare, Eye, Code2, Terminal, Mic, MicOff, VolumeX, Loader2, Play, Pause, Square, BookOpen } from 'lucide-react';
 import type {
   AgentMode,
   AttachedFile,
@@ -63,18 +63,24 @@ import {
   getModeSwitchSpeech,
   getPlatformCommandSpeech,
   getSpokenBuildRecap,
+  getVoiceReadingStatus,
   interruptSaraAndListen,
   normalizePhoneticVoiceTranscript,
   parseVoiceCommand,
+  pauseVoiceReading,
   playCompletionChime,
+  resumeVoiceReading,
   setSaraSilenced,
   setSpeakingStateListener,
   speakAsSara,
   speakAsSaraAndWait,
   startContinuousVoiceRecognition,
   stopSaraSpeech,
+  stopVoiceReading,
+  subscribeVoiceReadingStatus,
   type VoiceCommandAction,
   type VoiceParseContext,
+  type VoiceReadingStatus,
 } from './utils/voiceService';
 import {
   isProjectBlank,
@@ -356,6 +362,8 @@ export default function App() {
   const handleJarvisStageStateChange = useCallback((state: JarvisMediaStateContext) => {
     setJarvisMediaState(state);
   }, []);
+  const [readingStatus, setReadingStatus] = useState<VoiceReadingStatus>(() => getVoiceReadingStatus());
+  useEffect(() => subscribeVoiceReadingStatus(setReadingStatus), []);
   const isSaraSpeakingRef = useRef(false);
   const startupGreetedRef = useRef(false);
 
@@ -414,6 +422,8 @@ export default function App() {
       hasActiveMedia: jarvisMediaState.hasActiveMedia,
       isMediaPaused: jarvisMediaState.isPaused,
       hasActiveStage: Boolean(jarvisMediaState.activeStageKind),
+      hasActiveReading: readingStatus.active,
+      isReadingPaused: readingStatus.paused,
     };
   }, [
     workspaceMode,
@@ -431,6 +441,8 @@ export default function App() {
     mission.active,
     mission.paused,
     jarvisMediaState,
+    readingStatus.active,
+    readingStatus.paused,
   ]);
 
   // Saudação falada inicial da SARA ao ativar o sistema
@@ -2134,6 +2146,31 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           level: 'short',
           forceSpeak: true,
         });
+        return true;
+      }
+
+      if (cmd.type === 'pause_reading') {
+        pauseVoiceReading();
+        showToast('Leitura pausada — diz "continua" para retomar');
+        return true;
+      }
+
+      if (cmd.type === 'resume_reading') {
+        const ok = resumeVoiceReading();
+        if (ok) {
+          showToast('A continuar leitura');
+        } else {
+          speakAsSara('Não há nenhuma leitura pausada no momento.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        }
+        return true;
+      }
+
+      if (cmd.type === 'stop_reading') {
+        stopVoiceReading();
+        showToast('Leitura terminada');
         return true;
       }
 
@@ -4014,6 +4051,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           isSaraSpeaking={isSaraSpeaking}
           isSaraSilenced={isSaraSilenced}
           firebaseUserUid={firebaseUser?.uid}
+          activeBuilderProjectName={currentProject.name}
+          activeBuilderFiles={Object.keys(currentProject.files || {})}
           onToggleMic={handleToggleMic}
           onSilenceSara={handleSilenceSara}
           onSwitchMode={handleChangeWorkspaceMode}
@@ -4323,6 +4362,34 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               </button>
             </>
           )}
+        </div>
+      )}
+      {/* Barra Flutuante Global de Leitura em Voz Alta (funciona em todas as abas e modos) */}
+      {readingStatus.active && (
+        <div className="fixed bottom-4 right-4 z-[76] flex items-center gap-2.5 px-3.5 py-2 rounded-2xl bg-[#071124]/95 border border-cyan-400/55 backdrop-blur-md shadow-[0_8px_32px_rgba(0,229,255,0.28)] max-w-[340px]">
+          <BookOpen className="w-4 h-4 text-cyan-300 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] font-bold text-white truncate">{readingStatus.title}</div>
+            <div className="text-[10px] font-mono text-cyan-300">
+              {readingStatus.paused ? 'Pausado' : 'A ler'} • Frase {Math.min(readingStatus.currentIndex + 1, Math.max(1, readingStatus.totalChunks))}/{Math.max(1, readingStatus.totalChunks)}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => (readingStatus.paused ? resumeVoiceReading() : pauseVoiceReading())}
+            className="p-1.5 rounded-lg bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 hover:bg-cyan-500/30 cursor-pointer"
+            title={readingStatus.paused ? 'Continuar leitura' : 'Pausar leitura'}
+          >
+            {readingStatus.paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => stopVoiceReading()}
+            className="p-1.5 rounded-lg bg-rose-500/20 border border-rose-400/50 text-rose-200 hover:bg-rose-500/30 cursor-pointer"
+            title="Parar leitura"
+          >
+            <Square className="w-3.5 h-3.5 fill-current" />
+          </button>
         </div>
       )}
     </div>

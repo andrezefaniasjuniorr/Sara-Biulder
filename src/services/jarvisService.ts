@@ -95,6 +95,9 @@ export function loadJarvisLocalBundle() {
     preferences: rawMem?.preferences || DEFAULT_JARVIS_MEMORY.preferences,
     facts: cleanedFacts.length > 0 ? cleanedFacts : DEFAULT_JARVIS_MEMORY.facts,
     lastRoutineGreetingDate: rawMem?.lastRoutineGreetingDate,
+    lastVisitDate: rawMem?.lastVisitDate,
+    lastActiveProjectName: rawMem?.lastActiveProjectName,
+    lastTopic: rawMem?.lastTopic,
   };
 
   // Remove eventual cache antigo de Luanda/Angola/Matola
@@ -195,6 +198,33 @@ function normalizeJarvisAction(act: any): JarvisActionPayload {
   if (normalized.type === 'show_explanation') {
     normalized.sections = Array.isArray(act?.sections) ? act.sections : [];
   }
+  if (normalized.type === 'show_quiz') {
+    normalized.questions = Array.isArray(act?.questions)
+      ? act.questions.map((q: any) => ({
+          question: String(q?.question || ''),
+          options: Array.isArray(q?.options) ? q.options.map(String) : [],
+          correctIndex: typeof q?.correctIndex === 'number' ? q.correctIndex : 0,
+          explanation: String(q?.explanation || ''),
+        }))
+      : [];
+  }
+  if (normalized.type === 'show_flashcards') {
+    normalized.cards = Array.isArray(act?.cards)
+      ? act.cards.map((c: any) => ({
+          front: String(c?.front || ''),
+          back: String(c?.back || ''),
+          hint: c?.hint ? String(c.hint) : undefined,
+          lang: c?.lang || undefined,
+        }))
+      : [];
+  }
+  if (normalized.type === 'show_ideation') {
+    normalized.cards = Array.isArray(act?.cards) ? act.cards : [];
+  }
+  if (normalized.type === 'read_aloud') {
+    normalized.text = String(act?.text || act?.summary || '');
+    normalized.title = String(act?.title || 'Leitura SARA');
+  }
   if (normalized.type === 'set_volume') {
     if (typeof act?.volume === 'number') normalized.volume = act.volume;
     if (typeof act?.delta === 'number') normalized.delta = act.delta;
@@ -292,6 +322,7 @@ export async function askJarvisAssistantStream(
     mediaState?: JarvisMediaStateContext | null;
     documentAttachment?: JarvisDocumentItem | null;
     activeDocument?: JarvisDocumentItem | null;
+    builderContext?: { activeProjectName?: string; activeProjectFiles?: string[] } | null;
   },
   callbacks?: JarvisStreamCallbacks
 ): Promise<JarvisAssistantResponse> {
@@ -309,6 +340,7 @@ export async function askJarvisAssistantStream(
     weather: params.weather || null,
     telemetry: params.telemetry || null,
     mediaState: params.mediaState || null,
+    builderContext: params.builderContext || null,
     documentAttachment: params.documentAttachment
       ? {
           name: params.documentAttachment.name,
@@ -493,6 +525,7 @@ export async function askJarvisAssistant(params: {
   mediaState?: JarvisMediaStateContext | null;
   documentAttachment?: JarvisDocumentItem | null;
   activeDocument?: JarvisDocumentItem | null;
+  builderContext?: { activeProjectName?: string; activeProjectFiles?: string[] } | null;
 }): Promise<JarvisAssistantResponse> {
   return askJarvisAssistantStream(params);
 }

@@ -23,8 +23,15 @@ import {
   Volume2,
   VolumeX,
   BookOpen,
+  Copy,
+  Check,
+  Printer,
+  RotateCcw,
+  HelpCircle,
+  Layers,
 } from 'lucide-react';
 import type { JarvisStageContent, JarvisTrack } from '../../types/jarvis';
+import { speakPronunciation, startVoiceReading } from '../../utils/voiceService';
 
 interface JarvisStageRendererProps {
   content: JarvisStageContent;
@@ -171,6 +178,223 @@ const ChartCanvasView: React.FC<{
           {content.summary}
         </p>
       )}
+    </div>
+  );
+};
+
+const QuizStageView: React.FC<{
+  content: Extract<JarvisStageContent, { kind: 'quiz' }>;
+}> = ({ content }) => {
+  const [answers, setAnswers] = useState<Record<number, number>>({});
+
+  useEffect(() => {
+    setAnswers({});
+  }, [content.id]);
+
+  const questions = Array.isArray(content.questions) ? content.questions : [];
+  const answeredCount = Object.keys(answers).length;
+  const correctCount = questions.reduce(
+    (acc, q, idx) => (answers[idx] === q.correctIndex ? acc + 1 : acc),
+    0
+  );
+
+  return (
+    <div className="space-y-3.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-[#071124] border border-cyan-500/25">
+        <div>
+          {content.subtitle && <p className="text-xs text-cyan-200/85">{content.subtitle}</p>}
+          <p className="text-[11px] font-mono text-slate-300 mt-0.5">
+            Respondidas: {answeredCount}/{questions.length} • Acertos:{' '}
+            <span className="text-emerald-300 font-bold">{correctCount}</span>
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setAnswers({})}
+          className="px-2.5 py-1.5 rounded-lg bg-[#0A1830] border border-cyan-500/35 text-cyan-200 text-xs font-semibold flex items-center gap-1.5 hover:bg-cyan-500/20 cursor-pointer"
+        >
+          <RotateCcw className="w-3.5 h-3.5" />
+          <span>Refazer Teste</span>
+        </button>
+      </div>
+
+      {questions.map((q, qIdx) => {
+        const chosen = answers[qIdx];
+        const hasAnswered = typeof chosen === 'number';
+        const isCorrect = chosen === q.correctIndex;
+
+        return (
+          <div
+            key={qIdx}
+            className="p-3.5 rounded-xl bg-[#061022] border border-cyan-500/25 space-y-2.5"
+          >
+            <div className="text-xs sm:text-sm font-bold text-white leading-snug">
+              <span className="text-cyan-300 mr-1.5">{qIdx + 1}.</span>
+              {q.question}
+            </div>
+
+            <div className="grid grid-cols-1 gap-1.5">
+              {(q.options || []).map((opt, optIdx) => {
+                const isSelected = chosen === optIdx;
+                const isRightOption = optIdx === q.correctIndex;
+                let btnStyle =
+                  'bg-[#040916] border-cyan-500/20 text-slate-200 hover:border-cyan-400/60';
+                if (hasAnswered) {
+                  if (isRightOption) {
+                    btnStyle = 'bg-emerald-500/20 border-emerald-400 text-emerald-100';
+                  } else if (isSelected) {
+                    btnStyle = 'bg-rose-500/20 border-rose-400 text-rose-100';
+                  } else {
+                    btnStyle = 'bg-[#040916]/60 border-slate-800 text-slate-400';
+                  }
+                }
+
+                return (
+                  <button
+                    key={optIdx}
+                    type="button"
+                    disabled={hasAnswered}
+                    onClick={() => setAnswers((prev) => ({ ...prev, [qIdx]: optIdx }))}
+                    className={`w-full text-left px-3 py-2 rounded-xl border text-xs transition flex items-center gap-2 ${
+                      hasAnswered ? 'cursor-default' : 'cursor-pointer'
+                    } ${btnStyle}`}
+                  >
+                    <span className="font-mono font-bold text-[11px] opacity-80">
+                      {String.fromCharCode(65 + optIdx)})
+                    </span>
+                    <span className="flex-1">{opt}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {hasAnswered && (
+              <div
+                className={`p-2.5 rounded-xl border text-xs leading-relaxed ${
+                  isCorrect
+                    ? 'bg-emerald-950/35 border-emerald-500/40 text-emerald-100'
+                    : 'bg-rose-950/35 border-rose-500/40 text-rose-100'
+                }`}
+              >
+                <div className="font-bold mb-0.5">
+                  {isCorrect
+                    ? 'Correto!'
+                    : `Errado — a opção certa era ${String.fromCharCode(65 + q.correctIndex)}.`}
+                </div>
+                <p className="text-slate-200">{q.explanation}</p>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+const FlashcardsStageView: React.FC<{
+  content: Extract<JarvisStageContent, { kind: 'flashcards' }>;
+}> = ({ content }) => {
+  const cards = Array.isArray(content.cards) ? content.cards : [];
+  const [index, setIndex] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [mastered, setMastered] = useState<Record<number, boolean>>({});
+
+  useEffect(() => {
+    setIndex(0);
+    setFlipped(false);
+    setMastered({});
+  }, [content.id]);
+
+  if (cards.length === 0) {
+    return (
+      <p className="text-xs text-slate-400 text-center py-6">
+        Nenhum flashcard disponível neste conjunto.
+      </p>
+    );
+  }
+
+  const safeIdx = Math.min(index, cards.length - 1);
+  const current = cards[safeIdx];
+  const masteredCount = Object.values(mastered).filter(Boolean).length;
+
+  return (
+    <div className="flex flex-col h-full justify-between gap-3">
+      <div className="flex items-center justify-between text-xs text-cyan-200/85">
+        <span>{content.subtitle || 'Clica no cartão para virar'}</span>
+        <span className="font-mono text-[11px] text-emerald-300">
+          Dominados: {masteredCount}/{cards.length}
+        </span>
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setFlipped((f) => !f)}
+        className="flex-1 min-h-[210px] p-6 rounded-2xl bg-gradient-to-br from-[#07152E] via-[#050C1C] to-[#120818] border border-cyan-400/45 shadow-[0_0_28px_rgba(0,229,255,0.14)] flex flex-col items-center justify-center text-center gap-3 cursor-pointer hover:border-cyan-300 transition"
+      >
+        <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-rose-300">
+          {flipped ? 'Verso / Resposta' : 'Frente / Pergunta'} • Cartão {safeIdx + 1} de {cards.length}
+        </span>
+        <div className="text-base sm:text-xl font-bold text-white max-w-lg leading-relaxed">
+          {flipped ? current.back : current.front}
+        </div>
+        {!flipped && current.hint && (
+          <div className="text-xs text-cyan-300/80 italic">Dica: {current.hint}</div>
+        )}
+      </button>
+
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              setFlipped(false);
+              setIndex((i) => (i - 1 + cards.length) % cards.length);
+            }}
+            className="px-3 py-1.5 rounded-xl bg-[#071124] border border-cyan-500/30 text-xs text-cyan-200 hover:bg-cyan-500/15 cursor-pointer"
+          >
+            Anterior
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setFlipped(false);
+              setIndex((i) => (i + 1) % cards.length);
+            }}
+            className="px-3 py-1.5 rounded-xl bg-[#071124] border border-cyan-500/30 text-xs text-cyan-200 hover:bg-cyan-500/15 cursor-pointer"
+          >
+            Próximo
+          </button>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() =>
+              speakPronunciation(
+                flipped ? current.back : current.front,
+                current.lang || (flipped ? 'en-US' : 'pt-PT')
+              )
+            }
+            className="px-3 py-1.5 rounded-xl bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 text-xs font-semibold flex items-center gap-1.5 hover:bg-cyan-500/30 cursor-pointer"
+          >
+            <Volume2 className="w-3.5 h-3.5" />
+            <span>Ouvir Pronúncia</span>
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              setMastered((prev) => ({ ...prev, [safeIdx]: !prev[safeIdx] }))
+            }
+            className={`px-3 py-1.5 rounded-xl border text-xs font-semibold cursor-pointer ${
+              mastered[safeIdx]
+                ? 'bg-emerald-500/25 border-emerald-400 text-emerald-100'
+                : 'bg-[#071124] border-cyan-500/30 text-slate-300 hover:text-white'
+            }`}
+          >
+            {mastered[safeIdx] ? 'Dominado' : 'Já domino'}
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -401,6 +625,40 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
   onChangeMediaVolume,
 }) => {
   const [svgZoom, setSvgZoom] = useState(false);
+  const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const htmlIframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  const copyCardText = async (text: string, idx: number) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedIdx(idx);
+      setTimeout(() => setCopiedIdx((curr) => (curr === idx ? null : curr)), 1600);
+    } catch {
+      // ignore clipboard restriction
+    }
+  };
+
+  const buildReadableStageText = (): string => {
+    if (content.kind === 'explanation') {
+      const parts = [
+        content.title,
+        content.summary,
+        ...content.sections.map((s) => `${s.heading}. ${s.body}`),
+        content.exampleBody ? `${content.exampleTitle || 'Exemplo'}. ${content.exampleBody}` : '',
+      ];
+      return parts.filter(Boolean).join('. ');
+    }
+    if (content.kind === 'document') {
+      const parts = [
+        content.title,
+        content.summary,
+        ...content.keyPoints,
+        content.rawText ? content.rawText.slice(0, 6000) : '',
+      ];
+      return parts.filter(Boolean).join('. ');
+    }
+    return '';
+  };
 
   const downloadTextFile = (filename: string, text: string, mime: string) => {
     const blob = new Blob([text], { type: mime });
@@ -428,6 +686,10 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
         return <Globe className="w-4 h-4 text-cyan-300" />;
       case 'explanation':
         return <BookOpen className="w-4 h-4 text-cyan-300" />;
+      case 'quiz':
+        return <HelpCircle className="w-4 h-4 text-emerald-300" />;
+      case 'flashcards':
+        return <Layers className="w-4 h-4 text-cyan-300" />;
       default:
         return <Sparkles className="w-4 h-4 text-cyan-300" />;
     }
@@ -451,6 +713,18 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          {(content.kind === 'explanation' || content.kind === 'document') && (
+            <button
+              type="button"
+              onClick={() => startVoiceReading(content.title, buildReadableStageText())}
+              className="px-2 py-1 rounded-lg bg-cyan-500/15 border border-cyan-400/45 text-[11px] text-cyan-200 hover:bg-cyan-500/25 transition flex items-center gap-1 cursor-pointer"
+              title="Ler em voz alta em segundo plano"
+            >
+              <Volume2 className="w-3 h-3" />
+              <span className="hidden sm:inline">Ler</span>
+            </button>
+          )}
+
           {content.kind === 'svg' && (
             <>
               <button
@@ -473,14 +747,25 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
           )}
 
           {content.kind === 'html' && (
-            <button
-              type="button"
-              onClick={() => downloadTextFile(`${content.title || 'visual-sara'}.html`, content.html, 'text/html')}
-              className="px-2 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/30 text-[11px] text-cyan-200 hover:bg-cyan-500/15 transition flex items-center gap-1 cursor-pointer"
-              title="Descarregar HTML"
-            >
-              <Download className="w-3 h-3" />
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => htmlIframeRef.current?.contentWindow?.print()}
+                className="px-2 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/30 text-[11px] text-cyan-200 hover:bg-cyan-500/15 transition flex items-center gap-1 cursor-pointer"
+                title="Imprimir ou guardar como PDF"
+              >
+                <Printer className="w-3 h-3" />
+                <span className="hidden sm:inline">PDF</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadTextFile(`${content.title || 'visual-sara'}.html`, content.html, 'text/html')}
+                className="px-2 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/30 text-[11px] text-cyan-200 hover:bg-cyan-500/15 transition flex items-center gap-1 cursor-pointer"
+                title="Descarregar HTML"
+              >
+                <Download className="w-3 h-3" />
+              </button>
+            </>
           )}
 
           <button
@@ -784,9 +1069,10 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
         {content.kind === 'html' && (
           <div className="h-full min-h-[300px] rounded-xl overflow-hidden border border-cyan-500/30 bg-white">
             <iframe
+              ref={htmlIframeRef}
               srcDoc={content.html}
               title={content.title}
-              sandbox="allow-scripts allow-same-origin"
+              sandbox="allow-scripts allow-same-origin allow-modals"
               className="w-full h-full min-h-[300px]"
             />
           </div>
@@ -811,18 +1097,57 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
               {content.cards.map((card, i) => (
                 <div
                   key={i}
-                  className="p-3.5 rounded-xl bg-[#071124] border border-cyan-500/25 hover:border-rose-400/50 transition"
+                  className="p-3.5 rounded-xl bg-[#071124] border border-cyan-500/25 hover:border-rose-400/50 transition flex flex-col justify-between gap-2.5"
                 >
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-rose-300 mb-1">
-                    {card.tag}
+                  <div>
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-rose-300 mb-1">
+                      {card.tag}
+                    </div>
+                    <h4 className="text-sm font-bold text-white mb-1">{card.title}</h4>
+                    <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+                      {card.detail}
+                    </p>
                   </div>
-                  <h4 className="text-sm font-bold text-white mb-1">{card.title}</h4>
-                  <p className="text-xs text-slate-300 leading-relaxed">{card.detail}</p>
+                  <div className="flex items-center justify-end gap-1.5 pt-1 border-t border-cyan-500/15">
+                    {card.audioText && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          speakPronunciation(card.audioText || card.detail, card.audioLang || 'en-US')
+                        }
+                        className="px-2 py-1 rounded-lg bg-cyan-500/15 border border-cyan-400/40 text-cyan-200 text-[11px] font-semibold flex items-center gap-1 hover:bg-cyan-500/25 cursor-pointer"
+                      >
+                        <Volume2 className="w-3 h-3" />
+                        <span>Ouvir</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => void copyCardText(card.detail, i)}
+                      className="px-2 py-1 rounded-lg bg-[#0A1830] border border-cyan-500/30 text-cyan-200 text-[11px] font-semibold flex items-center gap-1 hover:bg-cyan-500/20 cursor-pointer"
+                    >
+                      {copiedIdx === i ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400" />
+                          <span className="text-emerald-300">Copiado</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3 h-3" />
+                          <span>Copiar</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
         )}
+
+        {content.kind === 'quiz' && <QuizStageView content={content} />}
+
+        {content.kind === 'flashcards' && <FlashcardsStageView content={content} />}
       </div>
     </div>
   );

@@ -399,6 +399,13 @@ REGRAS ESTRITAS:
 - CÓDIGOS DE AÇÃO [SISTEMA] vs [CONTEÚDO] vs [PERGUNTA]:
   * Se for ação de sistema (abre editor, abre agenda/música/docs/tarefas, pausa música, continua/retoma música, fecha música, aumenta/diminui volume, fecha painel atual, volta), NÃO cries nada nem pesquises no YouTube — usa pause_music, resume_music, close_media, set_volume, close_stage, open_module ou switch_mode respeitando o ESTADO ATUAL.
   * Se for figura geométrica, matemática, explicação conceitual, desenho, gráfico, vídeo ou música: mostra SEMPRE no Preview via ações (show_svg com formulas/steps/finalAnswer para geometria, show_math com LaTeX para matemática, show_explanation com visualSvg+sections+formula+exampleBody para explicações, play_video, play_music, show_chart, show_html).
+- NOVAS AÇÕES & CAPACIDADES ADICIONAIS:
+  * Testes com correção imediata e explicação -> {"type":"show_quiz","title":"...","subtitle":"...","questions":[{"question":"...","options":["..."],"correctIndex":0,"explanation":"..."}]}
+  * Flashcards interativos -> {"type":"show_flashcards","title":"...","subtitle":"...","cards":[{"front":"...","back":"...","hint":"...","lang":"pt-PT|en-US|fr-FR"}]}
+  * Posts sociais / Status / Traduções copiáveis (com áudio) -> {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"...","tag":"...","detail":"...","audioText":"(opcional)","audioLang":"en-US|fr-FR|pt-PT"}]}
+  * Documentos PDF/impressão (CVs, faturas, propostas, trabalhos escolares), planilhas financeiras interativas com soma automática, mini-jogos/calculadoras -> {"type":"show_html","title":"...","subkind":"site|planilha|apresentacao|visual","html":"..."}
+  * Leitura contínua em 2º plano (textos, PDFs, notícias) -> {"type":"read_aloud","title":"...","text":"..."}
+  * Câmbio MZN/ZAR/USD/EUR e Notícias de Moçambique/Mundo em 1 min: usa EXCLUSIVAMENTE [CÂMBIO REAL AO VIVO] e [NOTÍCIAS REAIS AO VIVO] do envelope (PROIBIDO inventar valores ou manchetes). Piadas curtas, spoilers quando pedidos, frases de status e humor natural sem repetir o nome do utilizador.
 - PROIBIDO TOTAL DE ASTERISCOS E MARKDOWN NO CHAT DA ASSISTENTE: em <JARVIS_SPEAK> e <JARVIS_REPLY> (ou "reply") usa APENAS texto humano limpo (NUNCA uses *, **, _, #, crases, [] ou blocos de código). Códigos, fórmulas LaTeX e figuras vão exclusivamente nas ações do Preview.`;
 
 export const SARA_JARVIS_STREAM_PROTOCOL = `${SARA_JARVIS_SYSTEM_PROMPT}
@@ -498,6 +505,89 @@ export async function enrichJarvisActionsEdge(actions) {
   return list;
 }
 
+function decodeRssEdge(str) {
+  return String(str || '')
+    .replace(/^<!\[CDATA\[([\s\S]*?)\]\]>$/i, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export async function fetchLiveFxRatesEdge() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3200);
+  try {
+    const resp = await fetch('https://open.er-api.com/v6/latest/MZN', { signal: controller.signal });
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const r = json?.rates;
+    if (!r || typeof r.USD !== 'number') return null;
+    const mznPerUsd = (1 / r.USD).toFixed(2);
+    const mznPerEur = typeof r.EUR === 'number' ? (1 / r.EUR).toFixed(2) : null;
+    const mznPerZar = typeof r.ZAR === 'number' ? (1 / r.ZAR).toFixed(2) : null;
+    return `Taxas reais (open.er-api.com, base MZN): 1 USD = ${mznPerUsd} MZN${mznPerEur ? ` | 1 EUR = ${mznPerEur} MZN` : ''}${mznPerZar ? ` | 1 ZAR = ${mznPerZar} MZN` : ''}`;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchRssEdge(url, limit = 5) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SaraJarvis/1.0)', 'Accept-Language': 'pt-PT,pt;q=0.9' },
+    });
+    if (!resp.ok) return [];
+    const xml = await resp.text();
+    const items = [];
+    const rx = /<item>([\s\S]*?)<\/item>/gi;
+    let m;
+    while ((m = rx.exec(xml)) !== null && items.length < limit) {
+      const t = m[1].match(/<title>([\s\S]*?)<\/title>/i);
+      const clean = decodeRssEdge(t?.[1] || '');
+      if (clean) items.push(clean);
+    }
+    return items;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function prepareJarvisContextEdge(body) {
+  const promptText = String(body?.prompt || '');
+  const needsFx = /(c[aâ]mbio|metical|meticais|\bmzn\b|d[oó]lar|\busd\b|\beur\b|euro|rand|\bzar\b|converter?\s+\d)/i.test(promptText);
+  const needsNews = /(not[ií]cia|jornal|manchete|atualidade|actualidade|novidades\s+(em|de)\s+mo[çc]ambique|mundo\s+hoje|resumo\s+do\s+dia)/i.test(promptText);
+  if (!needsFx && !needsNews) return body;
+
+  const [fxBlock, mzNews, worldNews] = await Promise.all([
+    needsFx ? fetchLiveFxRatesEdge() : Promise.resolve(null),
+    needsNews ? fetchRssEdge('https://news.google.com/rss/search?q=Mo%C3%A7ambique&hl=pt-PT&gl=MZ&ceid=MZ:pt-150', 5) : Promise.resolve([]),
+    needsNews ? fetchRssEdge('https://news.google.com/rss/headlines/section/TOPIC/WORLD?hl=pt-PT&gl=PT&ceid=PT:pt-150', 4) : Promise.resolve([]),
+  ]);
+
+  const newsStr =
+    mzNews.length || worldNews.length
+      ? [mzNews.length ? `MOÇAMBIQUE: ${mzNews.join(' | ')}` : '', worldNews.length ? `MUNDO: ${worldNews.join(' | ')}` : ''].filter(Boolean).join('\n')
+      : null;
+
+  return {
+    ...(body || {}),
+    _liveFxBlock: needsFx ? fxBlock || 'API de câmbio indisponível agora (PROIBIDO inventar valores).' : null,
+    _liveNewsBlock: needsNews ? newsStr || 'Feed real de notícias indisponível agora (PROIBIDO inventar notícias).' : null,
+  };
+}
+
 export function buildJarvisEdgeContents(body) {
   const {
     prompt = '',
@@ -509,6 +599,9 @@ export function buildJarvisEdgeContents(body) {
     weather = null,
     telemetry = null,
     mediaState = null,
+    builderContext = null,
+    _liveFxBlock = null,
+    _liveNewsBlock = null,
     documentAttachment = null,
     activeDocument = null,
     nowIso = new Date().toISOString(),
@@ -560,16 +653,22 @@ export function buildJarvisEdgeContents(body) {
       ? `PREVIEW ATIVO: ${mediaState.activeStageKind} "${mediaState.activeStageTitle || ''}"`
       : 'PREVIEW LIMPO'
     : '';
+  const builderStr = builderContext?.activeProjectName
+    ? `\nPROJETO ATIVO NO BUILDER: "${builderContext.activeProjectName}"`
+    : '';
+  const fxStr = _liveFxBlock ? `\n[CÂMBIO REAL AO VIVO]\n${_liveFxBlock}` : '';
+  const newsStr = _liveNewsBlock ? `\n[NOTÍCIAS REAIS AO VIVO]\n${_liveNewsBlock}` : '';
 
   parts.push({
-    text: `DATA/HORA: ${nowIso}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
+    text: `DATA/HORA: ${nowIso}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}${builderStr}${fxStr}${newsStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
   });
   contents.push({ role: 'user', parts });
   return contents;
 }
 
 export async function runJarvisAssistantEdge(apiKey, body) {
-  const contents = buildJarvisEdgeContents(body);
+  const preparedBody = await prepareJarvisContextEdge(body);
+  const contents = buildJarvisEdgeContents(preparedBody);
 
   const { text, modelUsed } = await callGeminiRestWithFailover(
     apiKey,

@@ -145,7 +145,31 @@ export type JarvisStageContent =
       kind: 'ideation';
       title: string;
       subtitle?: string;
-      cards: Array<{ title: string; tag: string; detail: string }>;
+      cards: Array<{ title: string; tag: string; detail: string; audioText?: string; audioLang?: 'pt-PT' | 'en-US' | 'fr-FR' }>;
+    }
+  | {
+      id: string;
+      kind: 'quiz';
+      title: string;
+      subtitle?: string;
+      questions: Array<{
+        question: string;
+        options: string[];
+        correctIndex: number;
+        explanation: string;
+      }>;
+    }
+  | {
+      id: string;
+      kind: 'flashcards';
+      title: string;
+      subtitle?: string;
+      cards: Array<{
+        front: string;
+        back: string;
+        hint?: string;
+        lang?: 'pt-PT' | 'en-US' | 'fr-FR';
+      }>;
     };
 
 export interface JarvisConversationEntry {
@@ -161,6 +185,9 @@ export interface JarvisMemoryState {
   preferences: string[];
   facts: string[];
   lastRoutineGreetingDate?: string;
+  lastVisitDate?: string;
+  lastActiveProjectName?: string;
+  lastTopic?: string;
 }
 
 export interface JarvisActionPayload {
@@ -184,6 +211,9 @@ export interface JarvisActionPayload {
     | 'show_document'
     | 'show_html'
     | 'show_ideation'
+    | 'show_quiz'
+    | 'show_flashcards'
+    | 'read_aloud'
     | 'remember_fact'
     | 'toggle_focus'
     | 'switch_mode';
@@ -222,7 +252,14 @@ export interface JarvisActionPayload {
   extractedData?: Array<{ label: string; value: string }>;
   subkind?: 'site' | 'planilha' | 'apresentacao' | 'visual';
   html?: string;
-  cards?: Array<{ title: string; tag: string; detail: string }>;
+  cards?: Array<Record<string, any>>;
+  questions?: Array<{
+    question: string;
+    options: string[];
+    correctIndex: number;
+    explanation: string;
+  }>;
+  text?: string;
   fact?: string;
   enabled?: boolean;
   target?: WorkspaceMode;

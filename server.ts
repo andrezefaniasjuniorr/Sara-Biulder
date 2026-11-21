@@ -14,6 +14,7 @@ import {
   formatFriendlyAiError,
   getGeminiClient,
   isRetryableModelError,
+  prepareJarvisContextNode,
   runBuilderGenerate,
   runFinalTestAudit,
   runJarvisAssistant,
@@ -196,7 +197,8 @@ async function startServer() {
       const headerKey = req.headers['x-gemini-api-key'];
       const customKey = typeof headerKey === 'string' ? headerKey : undefined;
       const ai = getGeminiClient(customKey);
-      const contents = buildJarvisEnvelopeParts(req.body);
+      const preparedBody = await prepareJarvisContextNode(req.body);
+      const contents = buildJarvisEnvelopeParts(preparedBody);
 
       let streamed = false;
       let lastError: any = null;

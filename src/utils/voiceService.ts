@@ -62,6 +62,9 @@ export type VoiceCommandAction =
   | { type: 'close_stage'; raw: string }
   | { type: 'repeat_sara'; raw: string }
   | { type: 'continue_sara'; raw: string }
+  | { type: 'pause_reading'; raw: string }
+  | { type: 'resume_reading'; raw: string }
+  | { type: 'stop_reading'; raw: string }
   | { type: 'focus_mode_on'; raw: string }
   | { type: 'focus_mode_off'; raw: string }
   | { type: 'prompt'; text: string };
@@ -77,6 +80,8 @@ export interface VoiceParseContext {
   hasActiveMedia?: boolean;
   isMediaPaused?: boolean;
   hasActiveStage?: boolean;
+  hasActiveReading?: boolean;
+  isReadingPaused?: boolean;
   projectFiles?: string[];
   availableProjects?: string[];
   isMissionActive?: boolean;
@@ -523,6 +528,29 @@ export function parseVoiceCommand(
   // Repetir última resposta
   if (/^(sara[,\s]+)?(repete|repete isso|podes repetir|diz outra vez|o que disseste)$/i.test(lower)) {
     return { type: 'repeat_sara', raw: clean };
+  }
+
+  // [SISTEMA] Leitura em voz alta (pausar e retomar do ponto exato mesmo noutras abas/modos)
+  if (
+    /\b(pausa|pausar|para|parar)\s+(a\s+)?leitura\b/.test(lower) ||
+    (context?.hasActiveReading &&
+      !context?.isReadingPaused &&
+      /^(sara[,\s]+)?(pausa|pausar|para|espera)$/i.test(lower))
+  ) {
+    return { type: 'pause_reading', raw: clean };
+  }
+
+  if (
+    /\b(continua|retoma|retomar|segue)\s+(a\s+)?leitura\b/.test(lower) ||
+    (context?.hasActiveReading &&
+      context?.isReadingPaused &&
+      /^(sara[,\s]+)?(continua|retoma|retomar|prossegue|segue)$/i.test(lower))
+  ) {
+    return { type: 'resume_reading', raw: clean };
+  }
+
+  if (/\b(para\s+de\s+ler|fecha\s+(a\s+)?leitura|encerra\s+(a\s+)?leitura)\b/.test(lower)) {
+    return { type: 'stop_reading', raw: clean };
   }
 
   // [SISTEMA] Controlo de mídia YouTube & Palco (MEMÓRIA DE ESTADO: nunca pesquisa "pausa" nem troca de música!)
@@ -1814,6 +1842,248 @@ export function getSpokenBuildRecap(
     return `${base} Próxima melhoria recomendada: ${strategicImprovements[0]}.`;
   }
   return `${base} Podes testar tudo ao vivo ou pedir o próximo ajuste por voz.`;
+}
+
+// ================================
+// LEITOR CONTÍNUO DE TEXTOS/PDFs/NOTÍCIAS COM PAUSA & RETOMADA EXATA
+// ================================
+export interface VoiceReadingStatus {
+  active: boolean;
+  paused: boolean;
+  title: string;
+  currentIndex: number;
+  totalChunks: number;
+  currentSentence: string;
+}
+
+let readingChunks: string[] = [];
+let readingCursor = 0;
+let readingTitle = '';
+let readingActive = false;
+let readingPaused = false;
+let readingSeq = 0;
+const readingListeners = new Set<(status: VoiceReadingStatus) => void>();
+
+export function getVoiceReadingStatus(): VoiceReadingStatus {
+  return {
+    active: readingActive,
+    paused: readingPaused,
+    title: readingTitle,
+    currentIndex: readingCursor,
+    totalChunks: readingChunks.length,
+    currentSentence: readingChunks[readingCursor] || '',
+  };
+}
+
+function emitReadingStatus(): void {
+  const snap = getVoiceReadingStatus();
+  readingListeners.forEach((cb) => {
+    try {
+      cb(snap);
+    } catch {
+      // ignore
+    }
+  });
+}
+
+export function subscribeVoiceReadingStatus(cb: (status: VoiceReadingStatus) => void): () => void {
+  readingListeners.add(cb);
+  cb(getVoiceReadingStatus());
+  return () => {
+    readingListeners.delete(cb);
+  };
+}
+
+function splitTextForVoiceReading(raw: string): string[] {
+  const cleaned = String(raw || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/https?:\/\/\S+/gi, ' ')
+    .replace(/[*_`#|>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return [];
+
+  const rawSentences = cleaned.split(/(?<=[.!?])\s+|\n+/);
+  const chunks: string[] = [];
+  for (const s of rawSentences) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    if (trimmed.length <= 210) {
+      chunks.push(trimmed);
+    } else {
+      const subParts = trimmed.split(/(?<=[,;:])\s+/);
+      let buf = '';
+      for (const part of subParts) {
+        if ((buf + ' ' + part).trim().length > 200 && buf) {
+          chunks.push(buf.trim());
+          buf = part;
+        } else {
+          buf = (buf ? buf + ' ' : '') + part;
+        }
+      }
+      if (buf.trim()) chunks.push(buf.trim());
+    }
+  }
+  return chunks;
+}
+
+function speakNextReadingChunk(mySeq: number): void {
+  if (!readingActive || readingPaused || mySeq !== readingSeq) return;
+  if (readingCursor >= readingChunks.length) {
+    readingActive = false;
+    readingPaused = false;
+    readingCursor = 0;
+    readingChunks = [];
+    saraEstaAFalar = false;
+    speakingStateListener?.(false);
+    emitReadingStatus();
+    if (micShouldBeActive && resumeMicFn) {
+      setTimeout(() => {
+        if (!saraEstaAFalar && micShouldBeActive) resumeMicFn?.();
+      }, 300);
+    }
+    return;
+  }
+
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+
+  const chunk = readingChunks[readingCursor];
+  emitReadingStatus();
+
+  if (activeRecognition) {
+    const prevRec = activeRecognition;
+    activeRecognition = null;
+    try {
+      prevRec.stop?.();
+    } catch {
+      // ignore
+    }
+  }
+
+  saraEstaAFalar = true;
+  const utter = new SpeechSynthesisUtterance(chunk);
+  utter.lang = 'pt-PT';
+  utter.rate = customBaseRate;
+  utter.pitch = 1.03;
+  const voice = pickBestFemalePortugueseVoice();
+  if (voice) {
+    utter.voice = voice;
+    utter.lang = voice.lang;
+  }
+
+  let settled = false;
+  const finishChunk = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(guardTimer);
+    if (mySeq !== readingSeq || !readingActive || readingPaused) return;
+    readingCursor += 1;
+    speakNextReadingChunk(mySeq);
+  };
+
+  utter.onstart = () => {
+    if (mySeq === readingSeq && !readingPaused) speakingStateListener?.(true);
+  };
+  utter.onend = finishChunk;
+  utter.onerror = finishChunk;
+
+  const guardTimer = setTimeout(finishChunk, Math.min(22000, Math.max(4000, chunk.length * 105)));
+  try {
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utter);
+  } catch {
+    finishChunk();
+  }
+}
+
+export function startVoiceReading(title: string, text: string): boolean {
+  const chunks = splitTextForVoiceReading(text);
+  if (chunks.length === 0) return false;
+  readingSeq += 1;
+  currentSpeechSeq += 1;
+  queuedSpeeches.length = 0;
+  readingChunks = chunks;
+  readingCursor = 0;
+  readingTitle = (title || 'Leitura em Voz Alta').trim();
+  readingActive = true;
+  readingPaused = false;
+  emitReadingStatus();
+  speakNextReadingChunk(readingSeq);
+  return true;
+}
+
+export function pauseVoiceReading(): boolean {
+  if (!readingActive || readingPaused) return false;
+  readingSeq += 1;
+  readingPaused = true;
+  saraEstaAFalar = false;
+  speakingStateListener?.(false);
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+  emitReadingStatus();
+  if (micShouldBeActive && resumeMicFn) {
+    setTimeout(() => {
+      if (!saraEstaAFalar && micShouldBeActive) resumeMicFn?.();
+    }, 120);
+  }
+  return true;
+}
+
+export function resumeVoiceReading(): boolean {
+  if (!readingActive || !readingPaused || readingChunks.length === 0) return false;
+  readingSeq += 1;
+  readingPaused = false;
+  emitReadingStatus();
+  speakNextReadingChunk(readingSeq);
+  return true;
+}
+
+export function stopVoiceReading(): void {
+  if (!readingActive && readingChunks.length === 0) return;
+  readingSeq += 1;
+  readingActive = false;
+  readingPaused = false;
+  readingCursor = 0;
+  readingChunks = [];
+  readingTitle = '';
+  saraEstaAFalar = false;
+  speakingStateListener?.(false);
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+  emitReadingStatus();
+  if (micShouldBeActive && resumeMicFn) {
+    setTimeout(() => {
+      if (!saraEstaAFalar && micShouldBeActive) resumeMicFn?.();
+    }, 200);
+  }
+}
+
+export function speakPronunciation(text: string, lang: 'pt-PT' | 'en-US' | 'fr-FR' = 'en-US'): void {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text.trim()) return;
+  try {
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text.trim());
+    utter.lang = lang;
+    utter.rate = 0.94;
+    const voices = window.speechSynthesis.getVoices();
+    const prefix = lang.slice(0, 2).toLowerCase();
+    const match = voices.find((v) => v.lang.toLowerCase().startsWith(prefix));
+    if (match) utter.voice = match;
+    window.speechSynthesis.speak(utter);
+  } catch {
+    // ignore
+  }
 }
 
 export function playCompletionChime(): void {

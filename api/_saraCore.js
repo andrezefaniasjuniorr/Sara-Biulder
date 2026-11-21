@@ -890,11 +890,38 @@ AÇÕES SUPORTADAS:
 - Gráfico Chart.js: {"type":"show_chart","title":"...","subtitle":"...","chartType":"bar|line|doughnut|radar","labels":["..."],"datasets":[{"label":"...","data":[10,20],"color":"#00E5FF"}],"summary":"..."}
 - Documento analisado: {"type":"show_document","title":"...","summary":"...","keyPoints":["..."],"extractedData":[{"label":"...","value":"..."}]}
 - HTML visual (site rápido, planilha com fórmulas, apresentação): {"type":"show_html","title":"...","subkind":"site|planilha|apresentacao|visual","html":"<!DOCTYPE html>..."}
-- Ideias / Roteiros: {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"...","tag":"...","detail":"..."}]}
+- Ideias / Roteiros / Posts / Status / Traduções copiáveis: {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"...","tag":"...","detail":"...","audioText":"(opcional frase para ouvir pronúncia)","audioLang":"en-US|fr-FR|pt-PT"}]}
+- Teste Interativo (corrige na hora quando o utilizador clica): {"type":"show_quiz","title":"...","subtitle":"...","questions":[{"question":"...","options":["...","...","...","..."],"correctIndex":0,"explanation":"Explica porque esta é a certa e o erro das outras"}]}
+- Flashcards Interativos (Frente/Verso com áudio de pronúncia): {"type":"show_flashcards","title":"...","subtitle":"...","cards":[{"front":"...","back":"...","hint":"...","lang":"pt-PT|en-US|fr-FR"}]}
+- Leitura em Voz Alta em 2º plano (textos longos, PDFs, notícias): {"type":"read_aloud","title":"...","text":"Texto completo limpo para a SARA ler continuamente enquanto o utilizador trabalha"}
 - Guardar facto na memória permanente: {"type":"remember_fact","fact":"..."}
 - Abrir módulo lateral: {"type":"open_module","module":"voz|sistema|agenda|musica|documentos|tarefas"}
 - Modo Foco: {"type":"toggle_focus","enabled":true}
-- Trocar de Modo: {"type":"switch_mode","target":"builder|jarvis"}`;
+- Trocar de Modo: {"type":"switch_mode","target":"builder|jarvis"}
+
+ACRÉSCIMO DE CAPACIDADES EXTRA (MANTÉM TUDO ACIMA INTACTO):
+1. ESTUDO:
+   - Testes/Simulados com correção na hora -> emite "show_quiz" com 4 a 6 perguntas e explicação clara de onde e porquê se erra.
+   - Flashcards / Vocabulário -> emite "show_flashcards" (usa "lang":"en-US" ou "fr-FR" ou "pt-PT" para o botão de pronúncia).
+   - Mapas mentais / Esquemas visuais -> emite "show_svg" ou "show_explanation".
+   - Traduções PT / EN / FR com fonética e pronúncia -> emite "show_ideation" com "audioText" e "audioLang" para o botão Ouvir + Copiar.
+2. TRABALHO & NEGÓCIO:
+   - Currículos, cartas, propostas, faturas, orçamentos e trabalhos escolares completos (capa, índice, desenvolvimento, conclusão) -> emite "show_html" com CSS limpo e regras "@media print" para imprimir/guardar em PDF no palco.
+   - Posts prontos para Facebook/WhatsApp/Instagram (com legenda e hashtags), textos de venda e descrições -> emite "show_ideation" com textos prontos a copiar.
+   - Planilhas de controlo de dinheiro, vendas e dívidas com totais automáticos + Precificação (custo + lucro + preço final) -> emite "show_html" ("subkind":"planilha") com inputs interativos e soma automática em JavaScript, ou "show_math" para cálculo explicado.
+3. PROGRAMAÇÃO:
+   - Explicar código linha por linha como professor -> emite "show_explanation".
+   - Corrigir erros explicando a causa raiz e a correção -> explica claro e mostra exemplo no palco se útil.
+   - Logotipos/Banners vetoriais -> "show_svg". Nomes & paletas de cores -> "show_ideation". Mini-jogos, cronómetros, calculadoras ou ferramentas rápidas -> "show_html" ("subkind":"visual").
+4. VIDA DIÁRIA (ZERO DADOS FALSOS):
+   - Notícias de Moçambique e do Mundo em 1 minuto -> usa EXCLUSIVAMENTE o bloco [NOTÍCIAS REAIS AO VIVO] do envelope (NUNCA inventes manchetes). Se o utilizador pedir para ouvir ou ler, podes também emitir "read_aloud".
+   - Conversor de Metical (MZN), ZAR, USD e EUR -> usa EXCLUSIVAMENTE as taxas do bloco [CÂMBIO REAL AO VIVO] do envelope (NUNCA inventes cotações).
+   - Receitas com os ingredientes disponíveis em casa + lista de compras copiável -> "show_ideation" ou "show_html". Planos de estudo/horários/treinos -> "show_html" ou "show_explanation".
+5. HUMOR, STATUS, SPOILERS & PERSONALIDADE CALOROSA:
+   - Piadas curtas e engraçadas quando pedidas; spoilers diretos de filmes/séries se o utilizador pedir explicitamente; frases top para status do WhatsApp/Instagram em "show_ideation" prontas a copiar; histórias, poemas, letras e roteiros criativos.
+   - Responde com emoções naturais de amiga inteligente e próxima, mas sem repetir o nome do utilizador constantemente.
+6. LEITURA POR VOZ EM SEGUNDO PLANO:
+   - Se o utilizador pedir "lê em voz alta", "lê este texto/PDF/notícias em voz alta", emite {"type":"read_aloud","title":"...","text":"..."} com o texto limpo integral.`;
 
 export const SARA_JARVIS_JSON_PROTOCOL = `${SARA_JARVIS_SYSTEM_PROMPT}
 
@@ -1016,6 +1043,125 @@ export async function enrichJarvisActionsNode(actions) {
   return list;
 }
 
+function decodeRssText(str) {
+  return String(str || '')
+    .replace(/^<!\[CDATA\[([\s\S]*?)\]\]>$/i, '$1')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export async function fetchLiveFxRatesNode() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3200);
+  try {
+    const resp = await fetch('https://open.er-api.com/v6/latest/MZN', {
+      signal: controller.signal,
+    });
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const r = json?.rates;
+    if (!r || typeof r.USD !== 'number') return null;
+    const mznPerUsd = (1 / r.USD).toFixed(2);
+    const mznPerEur = typeof r.EUR === 'number' ? (1 / r.EUR).toFixed(2) : null;
+    const mznPerZar = typeof r.ZAR === 'number' ? (1 / r.ZAR).toFixed(2) : null;
+    const mznPerGbp = typeof r.GBP === 'number' ? (1 / r.GBP).toFixed(2) : null;
+    return `Taxas reais (open.er-api.com, base MZN, atualização ${json.time_last_update_utc || 'hoje'}):
+1 USD = ${mznPerUsd} MZN (1 MZN = ${r.USD.toFixed(5)} USD)
+${mznPerEur ? `1 EUR = ${mznPerEur} MZN (1 MZN = ${r.EUR.toFixed(5)} EUR)\n` : ''}${mznPerZar ? `1 ZAR = ${mznPerZar} MZN (1 MZN = ${r.ZAR.toFixed(4)} ZAR)\n` : ''}${mznPerGbp ? `1 GBP = ${mznPerGbp} MZN (1 MZN = ${r.GBP.toFixed(5)} GBP)` : ''}`.trim();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function fetchGoogleRssHeadlinesNode(url, limit = 5) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
+  try {
+    const resp = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; SaraJarvis/1.0)',
+        'Accept-Language': 'pt-PT,pt;q=0.9',
+      },
+    });
+    if (!resp.ok) return [];
+    const xml = await resp.text();
+    const items = [];
+    const itemRegex = /<item>([\s\S]*?)<\/item>/gi;
+    let match;
+    while ((match = itemRegex.exec(xml)) !== null && items.length < limit) {
+      const block = match[1];
+      const titleMatch = block.match(/<title>([\s\S]*?)<\/title>/i);
+      const pubMatch = block.match(/<pubDate>([\s\S]*?)<\/pubDate>/i);
+      const title = decodeRssText(titleMatch?.[1] || '');
+      if (title) {
+        items.push(pubMatch?.[1] ? `${title} (${pubMatch[1].trim().slice(0, 16)})` : title);
+      }
+    }
+    return items;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function fetchMozNewsNode() {
+  const [mzItems, worldItems] = await Promise.all([
+    fetchGoogleRssHeadlinesNode(
+      'https://news.google.com/rss/search?q=Mo%C3%A7ambique&hl=pt-PT&gl=MZ&ceid=MZ:pt-150',
+      5
+    ),
+    fetchGoogleRssHeadlinesNode(
+      'https://news.google.com/rss/headlines/section/TOPIC/WORLD?hl=pt-PT&gl=PT&ceid=PT:pt-150',
+      4
+    ),
+  ]);
+  if (mzItems.length === 0 && worldItems.length === 0) return null;
+  const parts = [];
+  if (mzItems.length > 0) {
+    parts.push(`MOÇAMBIQUE:\n${mzItems.map((h, i) => `${i + 1}. ${h}`).join('\n')}`);
+  }
+  if (worldItems.length > 0) {
+    parts.push(`MUNDO:\n${worldItems.map((h, i) => `${i + 1}. ${h}`).join('\n')}`);
+  }
+  return parts.join('\n\n');
+}
+
+export async function prepareJarvisContextNode(body) {
+  const promptText = String(body?.prompt || '');
+  const needsFx = /(c[aâ]mbio|metical|meticais|\bmzn\b|d[oó]lar|\busd\b|\beur\b|euro|rand|\bzar\b|converter?\s+\d)/i.test(
+    promptText
+  );
+  const needsNews = /(not[ií]cia|jornal|manchete|atualidade|actualidade|novidades\s+(em|de)\s+mo[çc]ambique|mundo\s+hoje|resumo\s+do\s+dia)/i.test(
+    promptText
+  );
+  if (!needsFx && !needsNews) return body;
+
+  const [fxBlock, newsBlock] = await Promise.all([
+    needsFx ? fetchLiveFxRatesNode() : Promise.resolve(null),
+    needsNews ? fetchMozNewsNode() : Promise.resolve(null),
+  ]);
+
+  return {
+    ...(body || {}),
+    _liveFxBlock: needsFx
+      ? fxBlock || 'API de câmbio indisponível neste momento (PROIBIDO inventar taxas — informa ao utilizador).'
+      : null,
+    _liveNewsBlock: needsNews
+      ? newsBlock || 'Feed real de notícias indisponível neste momento (PROIBIDO inventar notícias — informa ao utilizador).'
+      : null,
+  };
+}
+
 export function buildJarvisEnvelopeParts(body) {
   const {
     prompt = '',
@@ -1027,6 +1173,9 @@ export function buildJarvisEnvelopeParts(body) {
     weather = null,
     telemetry = null,
     mediaState = null,
+    builderContext = null,
+    _liveFxBlock = null,
+    _liveNewsBlock = null,
     documentAttachment = null,
     activeDocument = null,
     nowIso = new Date().toISOString(),
@@ -1096,10 +1245,16 @@ export function buildJarvisEnvelopeParts(body) {
     ? `\nDOCUMENTO ATUAL EM ANÁLISE (${activeDocument.name}):\nResumo: ${activeDocument.summary}\n${activeDocument.textContent ? `Trecho: ${String(activeDocument.textContent).slice(0, 6000)}` : ''}`
     : '';
 
+  const builderLine = builderContext?.activeProjectName
+    ? `\nPROJETO ATIVO NO BUILDER: "${builderContext.activeProjectName}" (ficheiros: ${(builderContext.activeProjectFiles || []).slice(0, 10).join(', ') || 'padrão'})`
+    : '';
+  const liveFxLine = _liveFxBlock ? `\n[CÂMBIO REAL AO VIVO]\n${_liveFxBlock}` : '';
+  const liveNewsLine = _liveNewsBlock ? `\n[NOTÍCIAS REAIS AO VIVO]\n${_liveNewsBlock}` : '';
+
   const contextEnvelope = `DATA/HORA ATUAL: ${nowIso}
 ${weatherLine}
 ${telemetryLine}
-${mediaStateLine}
+${mediaStateLine}${builderLine}${liveFxLine}${liveNewsLine}
 MEMÓRIA PERSISTENTE SOBRE ${memory?.userName || 'o utilizador'}: ${memFacts.length ? memFacts.join(' | ') : 'Sem factos guardados ainda'}
 AGENDA ATUAL:
 ${agendaList.length ? agendaList.join('\n') : '(vazia)'}
@@ -1145,7 +1300,8 @@ function parseJarvisJsonResponse(rawText) {
 }
 
 export async function runJarvisAssistant(ai, body) {
-  const turns = buildJarvisEnvelopeParts(body);
+  const preparedBody = await prepareJarvisContextNode(body);
+  const turns = buildJarvisEnvelopeParts(preparedBody);
 
   const { response, modelUsed } = await generateWithFailover(
     ai,
