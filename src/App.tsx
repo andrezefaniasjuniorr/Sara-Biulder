@@ -28,8 +28,10 @@ import type {
 import { createStarterProject } from './utils/starterProject';
 import {
   askSaraBuilderStep,
+  fetchSaraFastKickoff,
   filesToCodeBlocks,
   isPlatformCommandIntent,
+  isPureConversationIntent,
   planAutonomousMission,
   runSaraFinalTest,
   runSaraStream,
@@ -52,9 +54,9 @@ import { getSavedGitHubToken, pushProjectToGitHub } from './utils/githubService'
 import {
   adjustVoiceSpeed,
   detectAmbiguousOrDangerousPrompt,
-  getBuildAcceptanceSpeech,
-  getContinuationSpeech,
+  getManualStepApprovalSpeech,
   getModeSwitchSpeech,
+  getPlatformCommandSpeech,
   getSpokenBuildRecap,
   normalizePhoneticVoiceTranscript,
   parseVoiceCommand,
@@ -62,6 +64,7 @@ import {
   setSaraSilenced,
   setSpeakingStateListener,
   speakAsSara,
+  speakAsSaraAndWait,
   startContinuousVoiceRecognition,
   stopSaraSpeech,
   type VoiceCommandAction,
@@ -194,19 +197,19 @@ function isApprovalMessage(text: string): boolean {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
-  return /^(sara[,\s]+)?(sim|ok|okay|pode continuar|continua|avanca|pode avancar|vai|vai la|aprovo|aprovado|faz|pode fazer|podes fazer|manda ver|bora|comeca|pode comecar|inicia|executa|segue|perfeito)([,\s]+(sara|sim|pode|por favor))?[!.]*$/.test(
+  return /^(sara[,\s]+)?(sim|ok|okay|pode continuar|continua|avanca|pode avancar|vai|vai la|aprovo|aprovado|faz|pode fazer|podes fazer|manda ver|bora|comeca|pode comecar|inicia|executa|segue|perfeito|concordo|combinado|claro|esta otimo|tudo bem|pode ir|etapa\s+\d+)([,\s]+(sara|sim|pode|por favor))?[!.]*$/.test(
     norm
   );
 }
 
-function isNewBuildRequest(text: string): boolean {
-  const lower = text
+function isRejectionOrCancelMessage(text: string): boolean {
+  const norm = text
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
-  return /\b(cria|criar|crie|faz|fazer|faze|gera|gerar|constroi|construir|desenvolve|desenvolver|monta|montar|programa|programar|quero\s+(um|uma)|preciso\s+de\s+(um|uma))\b/.test(
-    lower
+  return /^(sara[,\s]+)?(nao|cancela|cancelar|aborta|abortar|esquece|para|deixa estar|nao quero|espera)([,\s]+(sara|por favor))?[!.]*$/.test(
+    norm
   );
 }
 
@@ -975,27 +978,6 @@ export default function App() {
         setMessages((prev) => [...prev, userMsg]);
       }
 
-      // Respostas por voz confirmam de imediato em paralelo com o arranque técnico (sem atrasar o pipeline)
-      if (options?.contextCue === 'sleep') {
-        speakAsSara(
-          'Modo automático ativado, Eletro-Jr! Vou construir tudo sozinha etapa por etapa. Vai descansar tranquilo, amanhã está tudo pronto.',
-          voiceEnabledRef.current,
-          { level: 'medium', forceSpeak: true }
-        );
-      } else if (options?.contextCue === 'leave') {
-        speakAsSara(
-          'Pode sair tranquilo, Eletro-Jr! Já ativei o automático e vou criar tudo etapa por etapa.',
-          voiceEnabledRef.current,
-          { level: 'medium', forceSpeak: true }
-        );
-      } else if (!options?.resumedMission) {
-        const acceptanceSpeech = getBuildAcceptanceSpeech(cleanGoal, 'automatic');
-        speakAsSara(acceptanceSpeech, voiceEnabledRef.current, {
-          level: 'medium',
-          forceSpeak: true,
-        });
-      }
-
       setIsThinking(true);
       setLiveBuild({
         isBuilding: true,
@@ -1006,6 +988,8 @@ export default function App() {
         completedFiles: [],
       });
 
+      const hasExistingAtStart = !isProjectBlank(currentProject.files);
+
       try {
         let plannedTasks = options?.resumedMission?.tasks || [];
         let startIdx = options?.resumedMission?.currentIndex || 0;
@@ -1014,15 +998,51 @@ export default function App() {
         let totalErrorsRemaining = options?.resumedMission?.errorCount || 0;
         const startedAtIso = options?.resumedMission?.startedAt || new Date().toISOString();
 
-        if (!options?.resumedMission) {
+        if (options?.resumedMission) {
+          await speakAsSaraAndWait(
+            `Vou retomar agora a construção de ${currentProject.name} exatamente de onde parámos, Eletro-Júnior.`,
+            voiceEnabledRef.current,
+            { level: 'short', forceSpeak: true }
+          );
+        } else {
           const activeState = loadActiveProjectState(currentProject.id);
-          const plan = await planAutonomousMission(
+          const kickoffPromise = fetchSaraFastKickoff({
+            prompt: cleanGoal,
+            files: currentProject.files,
+            agentMode: 'automatic',
+            hasExistingCode: hasExistingAtStart,
+            projectName: currentProject.name,
+            contextCue: options?.contextCue,
+          });
+          const planPromise = planAutonomousMission(
             cleanGoal,
             currentProject.files,
             'automatic',
             getRequestedPastProjects(cleanGoal),
             activeState
           );
+
+          // 1. Sara fala PRIMEIRO aceitando o pedido com sugestões práticas enquanto o plano é preparado em paralelo
+          const kickoffRes = await kickoffPromise;
+          const kickoffChatMsg: ChatMessage = {
+            id: `sara_kick_${Date.now()}`,
+            sender: 'sara',
+            text: kickoffRes.reply,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+            mode: 'conversation',
+            voiceDelivered: true,
+          };
+          setMessages((prev) => [...prev, kickoffChatMsg]);
+          salvarMensagemChatFirebase(kickoffChatMsg, currentProject.id, firebaseUser?.uid);
+
+          const [plan] = await Promise.all([
+            planPromise,
+            speakAsSaraAndWait(kickoffRes.reply, voiceEnabledRef.current, {
+              level: 'medium',
+              forceSpeak: true,
+            }),
+          ]);
+
           plannedTasks = (plan.tasks || []).map((t, idx) => ({
             id: idx + 1,
             title: t.title,
@@ -1136,6 +1156,7 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
               files: workingFiles,
               consoleLogs: consoleLogs.slice(-8),
               history: messages.slice(-6),
+              agentMode: 'automatic',
               projectState: loadActiveProjectState(currentProject.id),
             });
 
@@ -1466,15 +1487,26 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
       });
 
       try {
-        const res = await askSaraBuilderStep({
-          prompt: `MODO MANUAL — ETAPA ${idx + 1} de ${proposal.totalEstimatedSteps} do projeto "${proposal.goal}":
+        // Fala primeiro confirmando a execução da etapa aprovada em paralelo com a geração da IA
+        const stepSpeechPromise = speakAsSaraAndWait(
+          getManualStepApprovalSpeech(step.title),
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+
+        const [res] = await Promise.all([
+          askSaraBuilderStep({
+            prompt: `MODO MANUAL — ETAPA ${idx + 1} de ${proposal.totalEstimatedSteps} do projeto "${proposal.goal}":
 Executa agora SOMENTE a etapa: "${step.title}" (${step.description}).
 Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
-          files: currentProject.files,
-          consoleLogs: consoleLogs.slice(-10),
-          history: messages.slice(-8),
-          projectState: loadActiveProjectState(currentProject.id),
-        });
+            files: currentProject.files,
+            consoleLogs: consoleLogs.slice(-10),
+            history: messages.slice(-8),
+            agentMode: 'manual',
+            projectState: loadActiveProjectState(currentProject.id),
+          }),
+          stepSpeechPromise,
+        ]);
 
         let updatedFiles = { ...currentProject.files };
         if (res.updateFiles && res.files) {
@@ -1560,7 +1592,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
 
         const msgReply = hasNext
-          ? `Etapa ${idx + 1}/${proposal.totalEstimatedSteps} (**${step.title}**) concluída e testada.\n\nPróxima etapa: **${nextTask!.title}** — ${nextTask!.description}.`
+          ? `Etapa ${idx + 1}/${proposal.totalEstimatedSteps} (**${step.title}**) concluída e testada.\n\n**Próxima etapa (${nextIdx + 1}/${proposal.totalEstimatedSteps}):** **${nextTask!.title}** — ${nextTask!.description}.\n\nPosso avançar com esta etapa ou queres ajustar algum detalhe antes?`
           : `Etapa final (**${step.title}**) concluída e testada no Preview e Editor.`;
 
         const manSaraMsg: ChatMessage = {
@@ -1579,14 +1611,17 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         salvarMensagemChatFirebase(manSaraMsg, currentProject.id, firebaseUser?.uid);
 
         const manualSpokenRecap = hasNext
-          ? `${idx === 0 ? 'Primeira parte pronta' : 'Etapa pronta'}, Eletro-Júnior. ${res.voiceSummary || ''} Posso avançar para ${nextTask!.title}?`
+          ? `${idx === 0 ? 'Primeira parte pronta' : 'Etapa concluída'}, Eletro-Júnior. ${res.voiceSummary || ''} Queres ajustar alguma coisa aqui ou posso avançar para ${nextTask!.title}?`
           : getSpokenBuildRecap(
               currentProject.name,
               Object.keys(updatedFiles).length,
               res.voiceSummary,
               res.strategicImprovements
             );
-        speakAsSara(manualSpokenRecap, voiceEnabledRef.current, { level: voiceLevelRef.current });
+        speakAsSara(manualSpokenRecap, voiceEnabledRef.current, {
+          level: voiceLevelRef.current === 'short' ? 'medium' : voiceLevelRef.current,
+          forceSpeak: true,
+        });
       } catch (err: any) {
         setIsThinking(false);
         setLiveBuild({
@@ -1904,14 +1939,36 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         if (cmd.goal) {
           await runAutonomousMission(cmd.goal, { contextCue: cmd.contextCue, source: 'voice' });
         } else if (manualProposal.active && manualProposal.goal) {
-          const autoMsg = 'Entendido, Eletro-Júnior, vou fazer sozinha no automático.';
           setAgentMode('automatic');
           showToast('Modo Automático ativado');
-          speakAsSara(autoMsg, voiceEnabledRef.current, {
-            level: 'short',
-            forceSpeak: true,
-          });
-          await runAutonomousMission(manualProposal.goal, { skipUserMsg: true, source: 'voice' });
+          if (manualProposal.stepsQueue.length > 0 && manualProposal.currentStepIndex > 0) {
+            const handoffMission: MissionState = {
+              active: true,
+              paused: false,
+              goal: manualProposal.goal,
+              tasks: manualProposal.stepsQueue.map((st, idx) => ({
+                id: idx + 1,
+                title: st.title,
+                description: st.description,
+                status: idx < manualProposal.currentStepIndex ? 'done' : 'pending',
+                attempts: 0,
+              })),
+              currentIndex: manualProposal.currentStepIndex,
+              errorCount: 0,
+              errorsFixed: 0,
+              elapsedSeconds: 0,
+              startedAt: new Date().toISOString(),
+              notes: [],
+              finished: false,
+            };
+            await runAutonomousMission(manualProposal.goal, {
+              resumedMission: handoffMission,
+              skipUserMsg: true,
+              source: 'voice',
+            });
+          } else {
+            await runAutonomousMission(manualProposal.goal, { skipUserMsg: true, source: 'voice' });
+          }
         } else {
           handleSwitchMode('automatic');
         }
@@ -1947,8 +2004,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
-      // 7. Controlo completo de ecrãs, editor, ficheiros, console, preview e ações
+      // 7. Controlo completo de ecrãs, editor, ficheiros, console, preview e ações (fala primeiro com naturalidade)
       if (cmd.type === 'focus_file') {
+        speakAsSara(`A abrir o ficheiro ${cmd.filePath} no editor, Eletro-Júnior.`, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -1959,14 +2020,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setRightTab('editor');
         setMobileTab('code');
         showToast(`Ficheiro aberto: ${cmd.filePath}`);
-        speakAsSara(`Abri o ficheiro ${cmd.filePath} no editor, Eletro-Júnior.`, voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
       if (cmd.type === 'open_editor') {
+        speakAsSara(getPlatformCommandSpeech('open_editor'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -1976,11 +2037,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setRightTab('editor');
         setMobileTab('code');
         showToast('Editor aberto');
-        speakAsSara('Editor aberto, Eletro-Jr.', voiceEnabledRef.current, { level: 'short', forceSpeak: true });
         return true;
       }
 
       if (cmd.type === 'open_editor_fullscreen') {
+        speakAsSara(getPlatformCommandSpeech('open_editor_fullscreen'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -1990,14 +2054,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setMobileTab('code');
         setIsEditorFullscreen(true);
         showToast('Editor em tela cheia');
-        speakAsSara('Editor em tela cheia, Eletro-Jr.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
       if (cmd.type === 'open_files') {
+        speakAsSara(getPlatformCommandSpeech('open_files'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -2007,14 +2071,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setRightTab('files');
         setMobileTab('code');
         showToast('Ficheiros abertos');
-        speakAsSara('Ficheiros do projeto abertos, Eletro-Jr.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
       if (cmd.type === 'close_editor_or_back') {
+        speakAsSara(getPlatformCommandSpeech('close_editor_or_back'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setIsEditorFullscreen(false);
         setIsPreviewFullscreen(false);
         setIsPresentationMode(false);
@@ -2023,14 +2087,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setShowDeployModal(false);
         setMobileTab('preview');
         showToast('Voltei ao painel principal');
-        speakAsSara('Voltei ao painel principal, Eletro-Jr.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
       if (cmd.type === 'open_console') {
+        speakAsSara(getPlatformCommandSpeech('open_console'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -2040,11 +2104,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setRightTab('console');
         setMobileTab('console');
         showToast('Console aberto');
-        speakAsSara('Console aberto, Eletro-Jr.', voiceEnabledRef.current, { level: 'short', forceSpeak: true });
         return true;
       }
 
       if (cmd.type === 'show_preview') {
+        speakAsSara(getPlatformCommandSpeech('show_preview'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -2054,14 +2121,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setMobileTab('preview');
         setRefreshSeed((s) => s + 1);
         showToast('Preview aberto');
-        speakAsSara('Aqui está o preview, Eletro-Jr.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
       if (cmd.type === 'open_preview_fullscreen') {
+        speakAsSara(getPlatformCommandSpeech('open_preview_fullscreen'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -2071,14 +2138,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setIsPreviewFullscreen(true);
         setRefreshSeed((s) => s + 1);
         showToast('Preview em tela cheia');
-        speakAsSara('Preview em tela cheia, Eletro-Jr.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
       if (cmd.type === 'preview_mobile') {
+        speakAsSara(getPlatformCommandSpeech('preview_mobile'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -2088,14 +2155,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setMobileTab('preview');
         setRefreshSeed((s) => s + 1);
         showToast('Preview em Telemóvel');
-        speakAsSara('Preview em telemóvel ativo, Eletro-Jr.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
       if (cmd.type === 'preview_tablet') {
+        speakAsSara(getPlatformCommandSpeech('preview_tablet'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -2105,14 +2172,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setMobileTab('preview');
         setRefreshSeed((s) => s + 1);
         showToast('Preview em Tablet');
-        speakAsSara('Preview em tablet ativo, Eletro-Jr.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
       if (cmd.type === 'preview_desktop') {
+        speakAsSara(getPlatformCommandSpeech('preview_desktop'), voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         setShowProjectsModal(false);
         setShowSettingsModal(false);
         setShowDeployModal(false);
@@ -2122,10 +2189,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         setMobileTab('preview');
         setRefreshSeed((s) => s + 1);
         showToast('Preview em PC');
-        speakAsSara('Preview em computador ativo, Eletro-Jr.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
         return true;
       }
 
@@ -2825,30 +2888,87 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return;
       }
 
-      // No MODO AUTOMÁTICO, um pedido de criação novo dispara automaticamente o pipeline autónomo
-      if (!isPlatformOnly && agentModeRef.current === 'automatic' && isNewBuildRequest(trimmed) && !image && !hasExistingCode) {
+      const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      const attachSummary = attachments?.length ? attachments.map((a) => a.name).join(', ') : undefined;
+      const hasMediaOrFiles = Boolean(image) || Boolean(attachments && attachments.length > 0);
+      const isPureChatRequest =
+        !hasMediaOrFiles &&
+        isPureConversationIntent(trimmed, false, false, hasExistingCode);
+
+      // No MODO MANUAL: se já há uma proposta aguardando aprovação/colaboração de Eletro-Jr
+      if (!isPlatformOnly && agentModeRef.current === 'manual' && manualProposal.active && !hasMediaOrFiles) {
+        if (isRejectionOrCancelMessage(trimmed)) {
+          setManualProposal(EMPTY_MANUAL_PROPOSAL);
+          const cancelReply =
+            'Combinado, Eletro-Jr! Parei essa proposta por aqui. Diz-me o que queres ajustar ou mudar de rumo.';
+          if (!isVoice) {
+            setMessages((prev) => [
+              ...prev,
+              { id: `usr_${Date.now()}`, sender: 'user', text: trimmed, timestamp: nowTime },
+              {
+                id: `sara_man_cancel_${Date.now()}`,
+                sender: 'sara',
+                text: cancelReply,
+                timestamp: nowTime,
+                mode: 'conversation',
+                voiceDelivered: true,
+              },
+            ]);
+          }
+          speakAsSara(cancelReply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+          return;
+        }
+
+        if (isApprovalMessage(trimmed)) {
+          await executeManualApprovedStep(trimmed, manualProposal, source);
+          return;
+        }
+
+        // Se Eletro-Jr respondeu com uma pergunta sobre a proposta (ex: "o que sugeres?"), responde em voz sem perder o plano
+        const isQuestionOnProposal =
+          isPureChatRequest || (/\?$/.test(trimmed) && !/\b(faz|executa|avanca|adiciona|coloca|muda|usa)\b/i.test(trimmed));
+        if (!isQuestionOnProposal) {
+          const updatedQueue = manualProposal.stepsQueue.map((item, idx) =>
+            idx === manualProposal.currentStepIndex
+              ? {
+                  ...item,
+                  description: `${item.description} (Ajuste de Eletro-Jr: ${trimmed})`,
+                }
+              : item
+          );
+          const refinedProposal: ManualProposalState = {
+            ...manualProposal,
+            stepsQueue: updatedQueue,
+          };
+          setManualProposal(refinedProposal);
+          await speakAsSaraAndWait(
+            'Excelente ajuste, Eletro-Júnior! Já incorporei a tua ideia nesta etapa e vou construir agora.',
+            voiceEnabledRef.current,
+            { level: 'short', forceSpeak: true }
+          );
+          await executeManualApprovedStep(trimmed, refinedProposal, source);
+          return;
+        }
+      }
+
+      // No MODO AUTOMÁTICO: qualquer pedido de criação, evolução ou correção dispara pipeline autónomo (fala primeiro + sugestões -> constrói -> testa -> corrige)
+      if (
+        !isPlatformOnly &&
+        !isPureChatRequest &&
+        agentModeRef.current === 'automatic' &&
+        !hasMediaOrFiles
+      ) {
         await runAutonomousMission(trimmed, { source });
         return;
       }
 
-      // No MODO MANUAL: se há uma proposta aguardando aprovação e Eletro-Jr disse "sim/pode continuar/avança"
-      if (!isPlatformOnly && agentModeRef.current === 'manual' && manualProposal.active && isApprovalMessage(trimmed)) {
-        await executeManualApprovedStep(trimmed, manualProposal, source);
-        return;
-      }
-
-      const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
-      const attachSummary = attachments?.length ? attachments.map((a) => a.name).join(', ') : undefined;
-
-      // No MODO MANUAL: plano multi-etapas para novo projeto do zero
+      // No MODO MANUAL: para novo projeto OU evolução/edição de projeto existente -> planeia, FALA PRIMEIRO com sugestões e PERGUNTA antes de mexer no código!
       if (
         !isPlatformOnly &&
+        !isPureChatRequest &&
         agentModeRef.current === 'manual' &&
         !manualProposal.active &&
-        !hasExistingCode &&
-        isNewBuildRequest(trimmed) &&
-        !image &&
-        (!attachments || attachments.length === 0)
+        !hasMediaOrFiles
       ) {
         if (!isVoice) {
           const userMsg: ChatMessage = {
@@ -2858,6 +2978,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             timestamp: nowTime,
           };
           setMessages((prev) => [...prev, userMsg]);
+          salvarMensagemChatFirebase(userMsg, currentProject.id, firebaseUser?.uid);
         }
         setIsThinking(true);
         setLiveBuild({
@@ -2870,18 +2991,24 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         });
 
         try {
-          speakAsSara(getBuildAcceptanceSpeech(trimmed, 'manual'), voiceEnabledRef.current, {
-            level: 'medium',
-            forceSpeak: true,
-          });
+          const [kickoffRes, plan] = await Promise.all([
+            fetchSaraFastKickoff({
+              prompt: trimmed,
+              files: currentProject.files,
+              agentMode: 'manual',
+              hasExistingCode,
+              projectName: currentProject.name,
+              screenContext,
+            }),
+            planAutonomousMission(
+              trimmed,
+              currentProject.files,
+              'manual',
+              getRequestedPastProjects(trimmed),
+              activeProjectState
+            ),
+          ]);
 
-          const plan = await planAutonomousMission(
-            trimmed,
-            currentProject.files,
-            'manual',
-            getRequestedPastProjects(trimmed),
-            activeProjectState
-          );
           setIsThinking(false);
           setLiveBuild({
             isBuilding: false,
@@ -2907,24 +3034,32 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             const first = queue[0];
             updateProjectStateFromRecord(currentProject, {
               goal: trimmed,
-              lastStepDone: 'Arquitetura planeada; a construir Etapa 1',
+              lastStepDone: 'Plano colaborativo proposto (a aguardar aprovação)',
               nextStep: first.title,
               missingFeatures: queue.map((q) => q.title),
             });
 
-            const proposalText = `${plan.planSentence}\n\n**Arquitetura (${queue.length} etapas):** A construir imediatamente a **Etapa 1 — ${first.title}** (${first.description}).`;
-            setMessages((prev) => [
-              ...prev,
-              {
-                id: `sara_prop_${Date.now()}`,
-                sender: 'sara',
-                text: proposalText,
-                timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
-                mode: 'manual-proposal',
-              },
-            ]);
-            // Inicia imediatamente a construção real da Etapa 1 no Editor e Preview em vez de parar vazio!
-            await executeManualApprovedStep(trimmed, initialProposal, source, true);
+            const stepsMarkdown = queue
+              .map((t, idx) => `${idx + 1}. **${t.title}** — ${t.description}`)
+              .join('\n');
+            const proposalText = `${kickoffRes.reply}\n\n**Plano sugerido (${queue.length} etapas):**\n${stepsMarkdown}\n\nPosso avançar já com a **Etapa 1 (${first.title})** ou queres ajustar algum detalhe antes?`;
+
+            const proposalMsg: ChatMessage = {
+              id: `sara_prop_${Date.now()}`,
+              sender: 'sara',
+              text: proposalText,
+              timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+              mode: 'manual-proposal',
+              voiceDelivered: true,
+            };
+            setMessages((prev) => [...prev, proposalMsg]);
+            salvarMensagemChatFirebase(proposalMsg, currentProject.id, firebaseUser?.uid);
+
+            // Fala PRIMEIRO com sugestões e pergunta de aprovação — NÃO executa código antes do Eletro-Jr confirmar!
+            speakAsSara(kickoffRes.reply, voiceEnabledRef.current, {
+              level: 'medium',
+              forceSpeak: true,
+            });
             return;
           }
         } catch {
@@ -2939,7 +3074,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
       }
 
-      // Fluxo padrão com streaming:
+      // Fluxo padrão com streaming (conversa pura, imagens, anexos ou fallback):
       // - Se veio por VOZ: não mostra o texto falado pelo utilizador no chat!
       const userMsg: ChatMessage = {
         id: `usr_${Date.now()}`,
@@ -2958,7 +3093,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       setIsThinking(true);
       const startTime = Date.now();
 
-      if (!isPlatformOnly) {
+      // Garantia absoluta: Sara FALA PRIMEIRO antes de qualquer alteração de ficheiros aparecer no ecrã
+      let kickoffSpeechPromise: Promise<void> = Promise.resolve();
+      let kickoffSpeechSettled = true;
+      let pendingStreamedFiles: {
+        files: ProjectFiles;
+        activeFile?: string;
+        completedFiles: string[];
+        modelUsed?: string;
+        steps: BuildStep[];
+        planSentence?: string;
+      } | null = null;
+
+      if (!isPlatformOnly && !isPureChatRequest) {
         setLiveBuild({
           isBuilding: true,
           phase: 'thinking',
@@ -2968,16 +3115,28 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           completedFiles: [],
         });
 
-        // Fala aceitação imediata em paralelo (zero bloqueio antes do streaming arrancar)
-        if (isNewBuildRequest(trimmed) || hasExistingCode) {
-          const introSpeech = hasExistingCode
-            ? getContinuationSpeech(currentProject.name)
-            : getBuildAcceptanceSpeech(trimmed, agentModeRef.current);
-          speakAsSara(introSpeech, voiceEnabledRef.current, {
-            level: 'short',
-            forceSpeak: true,
-          });
-        }
+        kickoffSpeechSettled = false;
+        const kickoffRes = await fetchSaraFastKickoff({
+          prompt: trimmed || 'Analisar anexos e construir',
+          files: currentProject.files,
+          agentMode: agentModeRef.current,
+          hasExistingCode,
+          projectName: currentProject.name,
+          screenContext,
+        });
+
+        kickoffSpeechPromise = speakAsSaraAndWait(kickoffRes.reply, voiceEnabledRef.current, {
+          level: 'medium',
+          forceSpeak: true,
+        }).then(() => {
+          kickoffSpeechSettled = true;
+          if (pendingStreamedFiles) {
+            const buffered = pendingStreamedFiles;
+            pendingStreamedFiles = null;
+            if (buffered.activeFile) setActiveFile(buffered.activeFile);
+            replaceCurrentProjectFiles(buffered.files, undefined, undefined, hasExistingCode);
+          }
+        });
       }
 
       try {
@@ -3021,10 +3180,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             },
             onFileProgress: (streamedFiles, currentActive, completedFiles) => {
               const createdList = Object.keys(streamedFiles);
-              if (currentActive) {
-                setActiveFile(currentActive);
+              if (!kickoffSpeechSettled) {
+                pendingStreamedFiles = {
+                  files: streamedFiles,
+                  activeFile: currentActive,
+                  completedFiles,
+                  steps: [],
+                };
+              } else {
+                if (currentActive) {
+                  setActiveFile(currentActive);
+                }
+                replaceCurrentProjectFiles(streamedFiles, undefined, undefined, hasExistingCode);
               }
-              replaceCurrentProjectFiles(streamedFiles, undefined, undefined, hasExistingCode);
 
               setLiveBuild((prev) => {
                 const totalSteps = prev.steps.length;
@@ -3050,6 +3218,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             },
           },
         });
+
+        await kickoffSpeechPromise;
 
         const totalElapsed = Math.max(1, Math.round((Date.now() - startTime) / 1000));
         setIsThinking(false);
@@ -3123,12 +3293,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
         const createdList = result.files ? Object.keys(result.files) : [];
 
-        // Executa quaisquer ações da plataforma solicitadas pela Sara (<SARA_ACTIONS>)
-        if (result.actions && result.actions.length > 0) {
-          await executeSaraActions(result.actions);
-        }
-
-        // REGRA: O que a Sara responde em voz (conversa pura sem código) roda APENAS em 2.º plano por voz e NÃO aparece em texto no chat!
+        // REGRA: O que a Sara responde em voz (conversa pura sem código) fala PRIMEIRO e só depois executa ações da plataforma!
         if (isPlatformOnly || (!result.updateFiles && (isVoice || result.mode === 'conversation'))) {
           const spokenOnly = result.voiceSummary || result.reply || 'Pronto, Eletro-Júnior.';
           speakAsSara(spokenOnly, voiceEnabledRef.current, {
@@ -3136,6 +3301,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             isQuestionReply: true,
             forceSpeak: isVoice || !isSaraSilenced,
           });
+          if (result.actions && result.actions.length > 0) {
+            await executeSaraActions(result.actions);
+          }
           // Só mostra no chat se o utilizador escreveu manualmente em texto
           if (!isVoice) {
             const techReplyMsg: ChatMessage = {
@@ -3151,6 +3319,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             salvarMensagemChatFirebase(techReplyMsg, currentProject.id, firebaseUser?.uid);
           }
           return;
+        }
+
+        if (result.actions && result.actions.length > 0) {
+          await executeSaraActions(result.actions);
         }
 
         // Quando há criação/edição de código: o chat mostra APENAS o cartão útil de engenharia (arquitetura, ficheiros, blocos e 2 melhorias estratégicas)

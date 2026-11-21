@@ -371,6 +371,12 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   };
 
   const smartChips = useMemo(() => getSmartTypingSuggestions(input), [input]);
+  const latestManualProposalMsgId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].mode === 'manual-proposal') return messages[i].id;
+    }
+    return null;
+  }, [messages]);
   const doneCount = mission.tasks.filter((t) => t.status === 'done').length;
   const totalTasks = mission.tasks.length || 1;
   const progressPct = Math.round((doneCount / totalTasks) * 100);
@@ -868,18 +874,33 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                   </div>
                 )}
 
-                {/* Botão de Aprovação no Modo Manual */}
-                {msg.mode === 'manual-proposal' && manualProposal.active && !isUser && (
-                  <div className="mt-2.5 pt-2 border-t border-emerald-500/25 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onSendMessage('Sim, pode continuar!')}
-                      className="px-3 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-200 text-xs font-semibold cursor-pointer"
-                    >
-                      Sim, aprovar e avançar
-                    </button>
-                  </div>
-                )}
+                {/* Botão de Aprovação no Modo Manual (apenas no cartão mais recente da proposta) */}
+                {msg.mode === 'manual-proposal' &&
+                  msg.id === latestManualProposalMsgId &&
+                  manualProposal.active &&
+                  !isUser && (
+                    <div className="mt-2.5 pt-2.5 border-t border-emerald-500/25 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onSendMessage('Sim, pode continuar!')}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-200 text-xs font-semibold cursor-pointer transition"
+                        >
+                          Aprovar Etapa {manualProposal.currentStepIndex + 1} de {manualProposal.totalEstimatedSteps}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onSendMessage('Sara, faz o resto no modo automático')}
+                          className="px-2.5 py-1.5 rounded-lg bg-purple-500/15 hover:bg-purple-500/25 border border-purple-400/40 text-purple-200 text-[11px] font-medium cursor-pointer transition"
+                        >
+                          Passar para Automático
+                        </button>
+                      </div>
+                      <span className="text-[10px] text-[#A1A1AA]">
+                        Ou diz/escreve ajustes antes de construir
+                      </span>
+                    </div>
+                  )}
 
                 {/* Botão Corrigir Automaticamente para Mensagens de Erro */}
                 {isErrorMsg && (

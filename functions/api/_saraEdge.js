@@ -10,6 +10,15 @@ export const MODEL_PRIORITY_CHAIN = [
   'gemini-3.5-flash',
 ];
 
+export const FAST_VOICE_MODEL_CHAIN = [
+  'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-4-hydrogen',
+  'gemini-2.5-flash-lite',
+  'gemini-flash-latest',
+  'gemini-2.5-flash',
+];
+
 export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta de software sénior, engenheira Full-Stack, designer UI/UX de elite e parceira inteligente com personalidade viva de **Eletro-Jr**.
 
 1. PERSONALIDADE VIVA, ESPONTÂNEA E COM EMOÇÕES (ZERO PADRÕES FIXOS):
@@ -282,10 +291,15 @@ ${prompt || 'Analisa os ficheiros/imagem anexados e constrói o sistema completo
   return parts;
 }
 
-export async function callGeminiRestWithFailover(apiKey, buildRequestBody, timeoutMs = 13000) {
+export async function callGeminiRestWithFailover(
+  apiKey,
+  buildRequestBody,
+  timeoutMs = 13000,
+  modelChain = MODEL_PRIORITY_CHAIN
+) {
   let lastError = null;
 
-  for (const model of MODEL_PRIORITY_CHAIN) {
+  for (const model of modelChain) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {

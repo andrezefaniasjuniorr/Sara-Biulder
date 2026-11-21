@@ -11,6 +11,16 @@ export const MODEL_PRIORITY_CHAIN = [
   'gemini-3.5-flash',
 ];
 
+// Cadeia ultra-rápida para resposta falada inicial (kickoff) e diálogo de voz com latência mínima
+export const FAST_VOICE_MODEL_CHAIN = [
+  'gemini-3.1-flash-lite',
+  'gemini-flash-lite-latest',
+  'gemini-4-hydrogen',
+  'gemini-2.5-flash-lite',
+  'gemini-flash-latest',
+  'gemini-2.5-flash',
+];
+
 export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta de software sénior, engenheira Full-Stack, designer UI/UX de elite e parceira inteligente com personalidade viva de **Eletro-Jr**.
 
 1. PERSONALIDADE VIVA, ESPONTÂNEA E COM EMOÇÕES (ZERO PADRÕES FIXOS):
@@ -182,10 +192,15 @@ export function safeParseJson(rawText) {
   }
 }
 
-export async function generateWithFailover(ai, buildParams, timeoutMs = 13000) {
+export async function generateWithFailover(
+  ai,
+  buildParams,
+  timeoutMs = 13000,
+  modelChain = MODEL_PRIORITY_CHAIN
+) {
   let lastError = null;
 
-  for (const model of MODEL_PRIORITY_CHAIN) {
+  for (const model of modelChain) {
     const start = Date.now();
     try {
       const response = await withTimeout(
@@ -483,7 +498,7 @@ ${prompt || 'Constrói o sistema pedido.'}`;
         },
       },
     }),
-    28000
+    18000
   );
 
   const parsed = safeParseJson(response.text || '{}');
@@ -523,7 +538,11 @@ Modo: ${mode === 'manual' ? 'MANUAL (passo a passo com aprovação)' : 'AUTOMÁT
 ${stateText}
 Ficheiros atuais do projeto: ${Object.keys(files || {}).join(', ') || 'nenhum'}.
 
-Cria um plano ESPONTÂNEO, GRANDE E MODULAR distribuído por VÁRIAS PASTAS especializadas (ex: para jogos: engine/, render/, components/, scenes/, utils/, styles/; para lojas: components/, pages/, services/, utils/, styles/; etc.) entre 4 e 8 etapas concretas com lógica real.
+Cria ${
+        hasExistingFiles
+          ? 'um plano CIRÚRGICO E OBJETIVO (2 a 4 etapas focadas se for evolução/correção, ou até 6 etapas se for módulo grande)'
+          : 'um plano ESPONTÂNEO, GRANDE E MODULAR distribuído por VÁRIAS PASTAS especializadas (ex: para jogos: engine/, render/, components/, scenes/, utils/, styles/; para lojas: components/, pages/, services/, utils/, styles/; etc.) entre 4 e 8 etapas concretas com lógica real'
+      }.
 Cada etapa deve focar em pastas/módulos específicos (PROIBIDO planear apenas index.html + src/app.js).
 Se já existem ficheiros neste projeto, planeia a CONTINUAÇÃO em cima do que já existe sem apagar o código bom.
 A intro ("intro") e "planSentence" DEVEM ser espontâneas e criativas (PROIBIDO começar com "Boa", "Perfeito" ou "Claro", PROIBIDO citar projetos antigos como KG Services se não foram pedidos).`,
@@ -558,7 +577,7 @@ A intro ("intro") e "planSentence" DEVEM ser espontâneas e criativas (PROIBIDO 
         },
       },
     }),
-    16000
+    11000
   );
 
   const parsed = safeParseJson(response.text || '{}');
@@ -651,7 +670,49 @@ export async function runSaraConversation(ai, body) {
     history,
     agentMode,
     screenContext,
+    kickoff,
+    hasExistingCode,
+    projectName,
+    contextCue,
   } = body || {};
+
+  if (kickoff === true) {
+    const existingList = Object.keys(files || {}).slice(0, 12).join(', ');
+    const isManual = agentMode === 'manual';
+    const kickoffPrompt = `Eletro-Jr acabou de pedir: "${prompt || 'Construir projeto'}".
+Projeto ativo: "${projectName || screenContext?.projectName || 'Novo Projeto'}" (${hasExistingCode ? `já tem código: ${existingList}` : 'projeto novo do zero'}).
+Modo atual: ${isManual ? 'MANUAL (colaborativo passo a passo: tens de sugerir ideias e PERGUNTAR se aprova começar ou quer ajustar algo antes de codar)' : 'AUTOMÁTICO (autónomo: aceitas com energia, dás 1-2 sugestões práticas de arquitetura/UI e confirmas que vais construir, testar e corrigir tudo sozinha já a seguir)'}.
+${contextCue === 'sleep' ? 'Nota: Eletro-Jr disse que vai dormir.' : contextCue === 'leave' ? 'Nota: Eletro-Jr disse que vai sair.' : ''}
+
+Responde como Sara (cofundadora viva, próxima, criativa e profissional de Eletro-Jr) em APENAS 2 a 3 frases diretas, naturais e prontas para VOZ ALTA (ZERO markdown, ZERO asteriscos, ZERO blocos de código, ZERO listas, PROIBIDO começar com "Boa", "Perfeito" ou "Claro"):
+1. Aceita o pedido específico citando o que vais atacar.
+2. Dá 1 ou 2 contribuições/sugestões técnicas ou visuais inteligentes para deixar o projeto de nível profissional (ex: gráficos ApexCharts/ECharts, animações suaves, tema, layout mobile-first, áudio, persistência).
+3. ${isManual ? 'Termina com uma pergunta curta convidando Eletro-Jr a aprovar o início ou sugerir ajustes antes de mexeres no código.' : 'Termina confirmando que assumes a construção completa e os testes automáticos a partir de agora.'}`;
+
+    const { response, modelUsed } = await generateWithFailover(
+      ai,
+      (model) => ({
+        model,
+        contents: [{ role: 'user', parts: [{ text: kickoffPrompt }] }],
+        config: {
+          systemInstruction:
+            'És a Sara Biulder a falar por voz diretamente com Eletro-Jr. Sê rápida, humana, profissional e objetiva (máximo 3 frases faladas sem formatação markdown).',
+          ...(model.startsWith('gemini-4')
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+            : model.startsWith('gemini-3.1')
+            ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } }
+            : { temperature: 1.0 }),
+        },
+      }),
+      3800,
+      FAST_VOICE_MODEL_CHAIN
+    );
+
+    return {
+      reply: (response.text || '').trim(),
+      modelUsed,
+    };
+  }
 
   let finalContents = contents;
   if (!finalContents) {
@@ -712,10 +773,13 @@ export async function runSaraConversation(ai, body) {
         systemInstruction: systemText,
         ...(model.startsWith('gemini-4')
           ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+          : model.startsWith('gemini-3.1')
+          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } }
           : { temperature: 1.05 }),
       },
     }),
-    8000
+    5500,
+    FAST_VOICE_MODEL_CHAIN
   );
 
   return {

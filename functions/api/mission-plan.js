@@ -62,7 +62,11 @@ Modo: ${mode === 'manual' ? 'MANUAL (passo a passo com aprovação)' : 'AUTOMÁT
 ${stateText}
 Ficheiros atuais do projeto: ${Object.keys(files || {}).join(', ') || 'nenhum'}.
 
-Cria um plano ESPONTÂNEO, GRANDE E MODULAR distribuído por VÁRIAS PASTAS especializadas entre 4 e 8 etapas concretas com lógica real.`,
+Cria ${
+                  hasExistingFiles
+                    ? 'um plano CIRÚRGICO E OBJETIVO (2 a 4 etapas focadas se for evolução/correção, ou até 6 etapas se for módulo grande)'
+                    : 'um plano ESPONTÂNEO, GRANDE E MODULAR distribuído por VÁRIAS PASTAS especializadas entre 4 e 8 etapas concretas com lógica real'
+                }. Se já existem ficheiros neste projeto, planeia a CONTINUAÇÃO em cima do que já existe sem apagar o código bom.`,
               },
             ],
           },
@@ -73,7 +77,7 @@ Cria um plano ESPONTÂNEO, GRANDE E MODULAR distribuído por VÁRIAS PASTAS espe
           responseSchema,
         },
       }),
-      16000
+      11000
     );
 
     const parsed = safeParseJson(text);

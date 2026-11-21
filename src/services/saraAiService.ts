@@ -11,6 +11,7 @@ import type {
   ScreenContextInfo,
 } from '../types/builder';
 import type { SaraProjectState } from '../utils/projectMemory';
+import { getBuildAcceptanceSpeech, getContinuationSpeech } from '../utils/voiceService';
 
 export interface ConvertedImage {
   data: string;
@@ -855,16 +856,82 @@ export async function runSaraStream(params: {
   };
 }
 
+export async function fetchSaraFastKickoff(params: {
+  prompt: string;
+  files: ProjectFiles;
+  agentMode: AgentMode;
+  hasExistingCode: boolean;
+  projectName?: string;
+  contextCue?: 'sleep' | 'leave';
+  screenContext?: ScreenContextInfo;
+}): Promise<{ reply: string; fromApi: boolean }> {
+  const { prompt, files, agentMode, hasExistingCode, projectName, contextCue, screenContext } = params;
+  const fallback = hasExistingCode
+    ? getContinuationSpeech(projectName || 'este projeto', agentMode)
+    : getBuildAcceptanceSpeech(prompt, agentMode);
+
+  const customKey = getSavedGeminiKey();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (customKey) headers['x-gemini-api-key'] = customKey;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 2200);
+
+  try {
+    const response = await fetch('/api/sara', {
+      method: 'POST',
+      signal: controller.signal,
+      headers,
+      body: JSON.stringify({
+        kickoff: true,
+        prompt,
+        files: Object.fromEntries(Object.keys(files || {}).slice(0, 15).map((k) => [k, ''])),
+        agentMode,
+        hasExistingCode,
+        projectName,
+        contextCue,
+        screenContext,
+      }),
+    });
+
+    if (!response.ok) {
+      return { reply: fallback, fromApi: false };
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      return { reply: fallback, fromApi: false };
+    }
+
+    const data = await response.json().catch(() => ({}));
+    const raw = String(data?.reply || '')
+      .replace(/<SARA_ACTIONS>[\s\S]*?<\/SARA_ACTIONS>/gi, '')
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/[*_#`]/g, '')
+      .trim();
+
+    if (raw.length >= 12) {
+      return { reply: raw, fromApi: true };
+    }
+    return { reply: fallback, fromApi: false };
+  } catch {
+    return { reply: fallback, fromApi: false };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function askSaraBuilderStep(params: {
   prompt: string;
   files: ProjectFiles;
   consoleLogs: ConsoleEntry[];
   history: ChatMessage[];
   image?: ConvertedImage | null;
+  agentMode?: AgentMode;
   projectState?: SaraProjectState | null;
   screenContext?: ScreenContextInfo;
 }): Promise<SaraBuilderResult> {
-  const { prompt, files, consoleLogs, history, image, projectState, screenContext } = params;
+  const { prompt, files, consoleLogs, history, image, agentMode, projectState, screenContext } = params;
   const customKey = getSavedGeminiKey();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (customKey) headers['x-gemini-api-key'] = customKey;
@@ -878,6 +945,7 @@ export async function askSaraBuilderStep(params: {
       history: history.slice(-8).map((m) => ({ sender: m.sender, text: m.text })),
       imageBase64: image?.data,
       imageMimeType: image?.mimeType,
+      agentMode,
       forceBuilderMode: true,
       projectState,
       screenContext,
