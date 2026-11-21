@@ -25,6 +25,7 @@ import type {
   VersionSnapshot,
   VoiceLevel,
 } from './types/builder';
+import type { WorkspaceMode } from './types/jarvis';
 import { createStarterProject } from './utils/starterProject';
 import {
   askSaraBuilderStep,
@@ -84,7 +85,9 @@ import { ProjectsModal } from './components/ProjectsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { DeployModal } from './components/DeployModal';
 import { PwaInstallBar } from './components/PwaInstallBar';
+import { JarvisWorkspace } from './components/jarvis/JarvisWorkspace';
 
+const WORKSPACE_MODE_KEY = 'sara_workspace_mode_v1';
 const PROJECTS_STORAGE_KEY = 'sara_biulder_projects_v2';
 const ACTIVE_PROJECT_KEY = 'sara_biulder_active_id_v2';
 const CHAT_STORAGE_KEY = 'sara_biulder_chat_v2';
@@ -93,6 +96,16 @@ const AGENT_MODE_KEY = 'sara_biulder_agent_mode_v1';
 const SAVED_MISSION_KEY = 'sara_biulder_saved_mission_v2';
 const ERRORS_FIXED_KEY = 'sara_biulder_errors_fixed_v1';
 const VOICE_LEVEL_KEY = 'sara_biulder_voice_level_v1';
+
+function loadInitialWorkspaceMode(): WorkspaceMode {
+  try {
+    const saved = localStorage.getItem(WORKSPACE_MODE_KEY);
+    if (saved === 'builder' || saved === 'jarvis') return saved;
+  } catch {
+    // ignore
+  }
+  return 'jarvis';
+}
 
 function loadCachedProjectChat(projectId: string): ChatMessage[] {
   try {
@@ -238,6 +251,7 @@ export default function App() {
     [projects]
   );
 
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>(loadInitialWorkspaceMode);
   const [agentMode, setAgentMode] = useState<AgentMode>(loadInitialAgentMode);
   const [messages, setMessages] = useState<ChatMessage[]>(loadInitialChat);
   const [isThinking, setIsThinking] = useState(false);
@@ -305,6 +319,7 @@ export default function App() {
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const latestErrorsRef = useRef<string[]>([]);
+  const workspaceModeRef = useRef<WorkspaceMode>(workspaceMode);
   const voiceEnabledRef = useRef(voiceEnabled);
   const voiceLevelRef = useRef(voiceLevel);
   const agentModeRef = useRef(agentMode);
@@ -312,6 +327,11 @@ export default function App() {
   const missionPausedRef = useRef(false);
   const pendingConfirmationRef = useRef<PendingVoiceConfirmation | null>(null);
   const voiceContextRef = useRef<VoiceParseContext>({});
+  const jarvisPromptRef = useRef<
+    ((promptText: string, source?: 'voice' | 'text') => Promise<void>) | null
+  >(null);
+  const jarvisFocusRef = useRef<((enabled: boolean) => void) | null>(null);
+  const startupGreetedRef = useRef(false);
 
   useEffect(() => {
     voiceEnabledRef.current = voiceEnabled;
@@ -336,8 +356,18 @@ export default function App() {
   }, [agentMode]);
 
   useEffect(() => {
+    workspaceModeRef.current = workspaceMode;
+    try {
+      localStorage.setItem(WORKSPACE_MODE_KEY, workspaceMode);
+    } catch {
+      // ignore
+    }
+  }, [workspaceMode]);
+
+  useEffect(() => {
     pendingConfirmationRef.current = pendingConfirmation;
     voiceContextRef.current = {
+      workspaceMode,
       activeTab: rightTab,
       previewDevice,
       isEditorFullscreen,
@@ -357,6 +387,7 @@ export default function App() {
       isMissionPaused: mission.paused,
     };
   }, [
+    workspaceMode,
     pendingConfirmation,
     rightTab,
     previewDevice,
@@ -371,6 +402,41 @@ export default function App() {
     mission.active,
     mission.paused,
   ]);
+
+  // Saudação falada inicial da SARA JARVIS ao ativar o sistema
+  useEffect(() => {
+    const greeting =
+      'Olá Eletro-Júnior, sou a SARA JARVIS, estou pronta. Queres modo Assistente ou Builder?';
+    const speakGreeting = () => {
+      if (startupGreetedRef.current) return;
+      startupGreetedRef.current = true;
+      speakAsSara(greeting, voiceEnabledRef.current, {
+        level: 'medium',
+        forceSpeak: true,
+      });
+    };
+
+    const timer = setTimeout(() => {
+      // Tenta falar ao abrir se permitido pelo navegador; caso contrário dispara logo na primeira interação
+      if (typeof window !== 'undefined' && (window as any).navigator?.userActivation?.hasBeenActive) {
+        speakGreeting();
+      }
+    }, 650);
+
+    const onFirstGesture = () => {
+      speakGreeting();
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
+    };
+    window.addEventListener('pointerdown', onFirstGesture, { once: true });
+    window.addEventListener('keydown', onFirstGesture, { once: true });
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -1643,6 +1709,29 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     [currentProject.files, consoleLogs, messages, replaceCurrentProjectFiles]
   );
 
+  const handleChangeWorkspaceMode = useCallback(
+    (nextMode: WorkspaceMode) => {
+      setWorkspaceMode(nextMode);
+      workspaceModeRef.current = nextMode;
+      if (nextMode === 'builder') {
+        showToast('Modo 2: SARA BIULDER ativado');
+        speakAsSara(
+          'Modo Builder ativado, Eletro-Júnior. Que sistema ou site vamos construir agora?',
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+      } else {
+        showToast('Modo 1: SARA JARVIS Assistente ativado');
+        speakAsSara(
+          'De volta ao modo Assistente JARVIS, Eletro-Júnior. Estou pronta para tudo.',
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+      }
+    },
+    [showToast]
+  );
+
   const handleSwitchMode = useCallback(
     (newMode: AgentMode, spokenReason?: string) => {
       if (newMode === 'manual') {
@@ -1861,6 +1950,41 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             : 'Modo curto ativo, Eletro-Jr.';
         showToast(confirmMsg);
         speakAsSara(confirmMsg, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      // 4b. Troca instantânea entre MODO 1 (Assistente JARVIS) e MODO 2 (Builder) e Modo Foco
+      if (cmd.type === 'open_builder_mode') {
+        handleChangeWorkspaceMode('builder');
+        return true;
+      }
+
+      if (cmd.type === 'open_jarvis_mode') {
+        handleChangeWorkspaceMode('jarvis');
+        return true;
+      }
+
+      if (cmd.type === 'focus_mode_on') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        setTimeout(() => jarvisFocusRef.current?.(true), 60);
+        showToast('Modo Foco ativado');
+        speakAsSara('Modo foco ligado, Eletro-Júnior.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'focus_mode_off') {
+        jarvisFocusRef.current?.(false);
+        showToast('Modo Foco desativado');
+        speakAsSara('Modo foco desligado, Eletro-Júnior.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
         return true;
       }
 
@@ -2490,6 +2614,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     },
     [
       handleForceSilenceSara,
+      handleChangeWorkspaceMode,
       executeConfirmedAction,
       cancelConfirmedAction,
       showToast,
@@ -2760,6 +2885,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           case 'fix_error':
             handleSaraFixError();
             break;
+          case 'open_builder_mode':
+            handleChangeWorkspaceMode('builder');
+            break;
+          case 'open_jarvis_mode':
+            handleChangeWorkspaceMode('jarvis');
+            break;
           default:
             break;
         }
@@ -2781,6 +2912,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       mission.report,
       lastCompletedReport,
       handleSaraFixError,
+      handleChangeWorkspaceMode,
       showToast,
     ]
   );
@@ -2812,6 +2944,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               runner(voiceCmd, transcript)
                 .then((handled) => {
                   if (!handled) {
+                    if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
+                      return jarvisPromptRef.current(transcript, 'voice');
+                    }
                     return handleSendMessageRef.current?.(transcript, undefined, undefined, 'voice');
                   }
                 })
@@ -3472,6 +3607,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         runner(cmd, transcript)
           .then((handled) => {
             if (!handled) {
+              if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
+                return jarvisPromptRef.current(transcript, 'voice');
+              }
               return handleSendMessageRef.current?.(transcript, undefined, undefined, 'voice');
             }
           })
@@ -3642,6 +3780,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     <div className="h-screen w-screen flex flex-col bg-[#0A0A0F] text-white overflow-hidden">
       {/* Barra Superior */}
       <TopBar
+        workspaceMode={workspaceMode}
         projectName={currentProject.name}
         agentMode={agentMode}
         voiceEnabled={voiceEnabled}
@@ -3652,6 +3791,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         isThinking={isThinking || liveBuild.isBuilding}
         firebaseUser={firebaseUser}
         isSyncingFirebase={isSyncingFirebase}
+        onChangeWorkspaceMode={handleChangeWorkspaceMode}
         onChangeAgentMode={(m) => handleSwitchMode(m)}
         onToggleVoice={handleToggleVoice}
         onCycleVoiceLevel={handleCycleVoiceLevel}
@@ -3670,8 +3810,24 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         </div>
       )}
 
-      {/* Abas em Telemóvel (< lg) */}
-      <nav className="lg:hidden grid grid-cols-4 bg-[#12121A] border-b border-[#1F1F2E] shrink-0">
+      {workspaceMode === 'jarvis' ? (
+        <JarvisWorkspace
+          voiceEnabled={voiceEnabled}
+          isListening={isListening}
+          isSaraSpeaking={isSaraSpeaking}
+          isSaraSilenced={isSaraSilenced}
+          firebaseUserUid={firebaseUser?.uid}
+          onToggleMic={handleToggleMic}
+          onSilenceSara={handleSilenceSara}
+          onSwitchMode={handleChangeWorkspaceMode}
+          onNotify={showToast}
+          externalCommandRef={jarvisPromptRef}
+          externalFocusCommandRef={jarvisFocusRef}
+        />
+      ) : (
+        <>
+          {/* Abas em Telemóvel (< lg) */}
+          <nav className="lg:hidden grid grid-cols-4 bg-[#12121A] border-b border-[#1F1F2E] shrink-0">
         <button
           type="button"
           onClick={() => setMobileTab('chat')}
@@ -3854,6 +4010,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       {/* Barra Discreta de Instalação PWA / App */}
       <PwaInstallBar onNotify={showToast} />
+        </>
+      )}
 
       {/* Modais */}
       <ProjectsModal

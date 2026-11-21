@@ -13,8 +13,10 @@ import {
   isRetryableModelError,
   runBuilderGenerate,
   runFinalTestAudit,
+  runJarvisAssistant,
   runMissionPlan,
   runSaraConversation,
+  searchYouTubeTrackNode,
   withTimeout,
 } from './api/_saraCore.js';
 
@@ -177,7 +179,27 @@ async function startServer() {
   app.post('/api/final-test', handleFinalTest);
   app.post('/api/sara/final-test', handleFinalTest);
 
+  const handleJarvisRequest = async (req: express.Request, res: express.Response) => {
+    try {
+      if (req.body?.action === 'youtube_search') {
+        const track = await searchYouTubeTrackNode(req.body?.query || '');
+        return res.json({ track });
+      }
+      const headerKey = req.headers['x-gemini-api-key'];
+      const customKey = typeof headerKey === 'string' ? headerKey : undefined;
+      const ai = getGeminiClient(customKey);
+      const result = await runJarvisAssistant(ai, req.body);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Erro /api/jarvis:', err);
+      res.status(err?.status === 403 ? 403 : 500).json({
+        error: formatFriendlyAiError(err),
+      });
+    }
+  };
+
   app.post('/api/sara', handleSaraChat);
+  app.post('/api/jarvis', handleJarvisRequest);
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

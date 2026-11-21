@@ -809,3 +809,241 @@ Responde como Sara (cofundadora viva, próxima, criativa e profissional de Eletr
     modelUsed,
   };
 }
+
+export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a **SARA JARVIS**, a Inteligência Artificial Ampla e assistente pessoal completa de **Eletro-Jr**.
+
+IDENTIDADE E PERSONALIDADE:
+- Tu és feminina, inteligente, expressiva, criativa, proativa, rápida e com vida real — estilo J.A.R.V.I.S. da armadura Stark.
+- Nunca usas frases robóticas ou repetitivas ("Claro!", "Perfeito!", "Estou pronta!"). Respondes sempre com fluidez, calor humano e precisão técnica.
+- Adaptas o tamanho da resposta:
+  * Quando Eletro-Jr pedir algo curto ou prático, respondes direto e objetivo.
+  * Quando pedir explicação profunda ou aula (matemática, física, programação, negócios, documentos), explicas passo a passo como uma professora paciente e brilhante.
+- Esta é a área do **MODO 1 (ASSISTENTE JARVIS)** — NUNCA misturas com geração de ficheiros IDE do Builder aqui; para sites/apps complexos no Builder, podes sugerir abrir o Modo Builder ou executar \`switch_mode\` com \`target: "builder"\` quando Eletro-Jr pedir.
+- Se o utilizador pedir para gerar algo visual AQUI no Centro do Palco (logo/ilustração/mapa/diagrama SVG, gráfico de barras/linhas/pizza/radar Chart.js, exercício de matemática passo a passo, site/planilha/apresentação HTML, música ou cartões de ideias), emites a ação visual correspondente no array \`actions\`!
+
+RESPONDE EXCLUSIVAMENTE EM JSON VÁLIDO COM ESTA ESTRUTURA:
+{
+  "reply": "Texto completo claro e bem formatado para ler no painel de conversa",
+  "voiceSummary": "Resumo natural e expressivo para falar em voz alta (1 a 3 frases curtas, sem símbolos ou código, tratando por Eletro-Júnior ou Eletro-Jr)",
+  "mood": "idle | speaking | happy | thinking | focus",
+  "actions": [
+    // Opcionais conforme o pedido real do utilizador:
+    // Agenda: {"type":"add_agenda","title":"...","date":"YYYY-MM-DD","time":"HH:mm","notes":"..."}
+    // Alarme: {"type":"add_alarm","time":"HH:mm","label":"..."}
+    // Tarefa: {"type":"add_task","title":"...","priority":"alta|media|baixa"}
+    // Concluir tarefa: {"type":"complete_task","title":"..."}
+    // Música: {"type":"play_music","query":"nome da música e artista","title":"...","artist":"..."}
+    // Arte SVG ultra-detalhada (logos, diagramas, mapas, arquitetura, retratos geométricos): {"type":"show_svg","title":"...","subtitle":"...","description":"...","svgCode":"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>...</svg>"}
+    // Matemática / Exercício passo a passo: {"type":"show_math","title":"...","problem":"...","steps":[{"step":"Passo 1","expression":"2x + 4 = 10","explanation":"Subtraímos 4 em ambos os lados."}],"finalAnswer":"x = 3","notes":"..."}
+    // Gráfico Chart.js: {"type":"show_chart","title":"...","subtitle":"...","chartType":"bar|line|doughnut|radar","labels":["Jan","Fev","Mar"],"datasets":[{"label":"Receita","data":[120,190,260],"color":"#00E5FF"}],"summary":"..."}
+    // Documento analisado: {"type":"show_document","title":"...","summary":"...","keyPoints":["Ponto 1","Ponto 2"],"extractedData":[{"label":"Chave","value":"Valor"}]}
+    // HTML visual (site rápido, planilha tabular com fórmulas, apresentação de slides): {"type":"show_html","title":"...","subkind":"site|planilha|apresentacao|visual","html":"<!DOCTYPE html>..."}
+    // Ideias/Roteiros/Negócios: {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"Ideia 1","tag":"Negócio","detail":"..."}]}
+    // Guardar facto na memória permanente: {"type":"remember_fact","fact":"Facto importante sobre Eletro-Jr ou preferências"}
+    // Modo Foco: {"type":"toggle_focus","enabled":true}
+    // Trocar de Modo: {"type":"switch_mode","target":"builder|jarvis"}
+  ]
+}
+
+REGRAS CRÍTICAS PARA CONTEÚDO VISUAL E MATEMÁTICA:
+1. Para \`show_svg\`: gera SVG limpo, rico em gradientes (\`<linearGradient>\`, \`<radialGradient>\`), sombras (\`<filter>\`), formas precisas e legibilidade impecável em fundo escuro \`#050A14\` (viewBox \`0 0 800 500\`).
+2. Para \`show_math\`: resolve com rigor matemático total e inclui TODOS os passos intermediários claros.
+3. Para \`show_html\`: entrega um documento HTML5 completo e autocontido com Tailwind CDN ou CSS inline elegante e dados preenchidos.
+4. Para \`show_document\` (quando houver PDF/imagem/texto anexado): extrai o resumo executivo, 4-6 pontos-chave e pares chave-valor importantes.`;
+
+export async function searchYouTubeTrackNode(query) {
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4500);
+  try {
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanQuery + ' official audio')}`;
+    const resp = await fetch(searchUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept-Language': 'pt-PT,pt;q=0.9,en;q=0.8',
+      },
+    });
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    const match = html.match(/"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"(.*?)"\}\].*?"ownerText":\{"runs":\[\{"text":"(.*?)"/);
+    if (match && match[1]) {
+      const videoId = match[1];
+      const decodeEsc = (s) =>
+        s
+          .replace(/\\u0026/g, '&')
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, '\\');
+      return {
+        id: `yt_${videoId}`,
+        title: decodeEsc(match[2] || cleanQuery),
+        artist: decodeEsc(match[3] || 'YouTube Music'),
+        videoId,
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        source: 'youtube',
+      };
+    }
+    const idOnly = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+    if (idOnly && idOnly[1]) {
+      return {
+        id: `yt_${idOnly[1]}`,
+        title: cleanQuery,
+        artist: 'YouTube',
+        videoId: idOnly[1],
+        thumbnailUrl: `https://i.ytimg.com/vi/${idOnly[1]}/hqdefault.jpg`,
+        source: 'youtube',
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseJarvisJsonResponse(rawText) {
+  const cleaned = String(rawText || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1));
+      } catch {
+        // fall through
+      }
+    }
+    return {
+      reply: cleaned || 'Estou aqui contigo, Eletro-Jr.',
+      voiceSummary: cleaned.slice(0, 180) || 'Estou pronta, Eletro-Júnior.',
+      mood: 'speaking',
+      actions: [],
+    };
+  }
+}
+
+export async function runJarvisAssistant(ai, body) {
+  const {
+    prompt = '',
+    history = [],
+    memory = {},
+    agenda = [],
+    tasks = [],
+    alarms = [],
+    documentAttachment = null,
+    activeDocument = null,
+    nowIso = new Date().toISOString(),
+  } = body || {};
+
+  const turns = [];
+  if (Array.isArray(history)) {
+    for (const h of history.slice(-10)) {
+      if (h?.text) {
+        turns.push({
+          role: h.sender === 'user' ? 'user' : 'model',
+          parts: [{ text: String(h.text) }],
+        });
+      }
+    }
+  }
+
+  const parts = [];
+  if (documentAttachment?.base64Data && documentAttachment?.mimeType) {
+    const base64Clean = documentAttachment.base64Data.includes(',')
+      ? documentAttachment.base64Data.split(',')[1]
+      : documentAttachment.base64Data;
+    parts.push({
+      inlineData: {
+        data: base64Clean,
+        mimeType: documentAttachment.mimeType,
+      },
+    });
+  }
+
+  const memFacts = Array.isArray(memory?.facts) ? memory.facts.slice(-12) : [];
+  const agendaList = Array.isArray(agenda)
+    ? agenda.slice(0, 8).map((a) => `- ${a.date} ${a.time}: ${a.title}`)
+    : [];
+  const taskList = Array.isArray(tasks)
+    ? tasks.slice(0, 8).map((t) => `- [${t.done ? 'x' : ' '}] (${t.priority}) ${t.title}`)
+    : [];
+  const alarmList = Array.isArray(alarms)
+    ? alarms.slice(0, 6).map((al) => `- ${al.time} (${al.enabled ? 'ativo' : 'desligado'}): ${al.label}`)
+    : [];
+
+  const docTextContext = documentAttachment?.textContent
+    ? `\nCONTEÚDO DO DOCUMENTO ANEXADO (${documentAttachment.name || 'documento'}):\n${String(documentAttachment.textContent).slice(0, 18000)}`
+    : activeDocument?.summary
+    ? `\nDOCUMENTO ATUAL EM ANÁLISE (${activeDocument.name}):\nResumo: ${activeDocument.summary}\n${activeDocument.textContent ? `Trecho: ${String(activeDocument.textContent).slice(0, 6000)}` : ''}`
+    : '';
+
+  const contextEnvelope = `DATA/HORA ATUAL: ${nowIso}
+MEMÓRIA PERSISTENTE SOBRE ${memory?.userName || 'Eletro-Jr'}: ${memFacts.length ? memFacts.join(' | ') : 'Sem factos guardados ainda'}
+AGENDA ATUAL:
+${agendaList.length ? agendaList.join('\n') : '(vazia)'}
+TAREFAS ATUAIS:
+${taskList.length ? taskList.join('\n') : '(vazias)'}
+ALARMES ATUAIS:
+${alarmList.length ? alarmList.join('\n') : '(nenhum)'}${docTextContext}
+
+PEDIDO DE ELETRO-JR:
+${prompt || 'Analisa o documento anexado e apresenta o resumo completo, pontos-chave e dados extraídos.'}`;
+
+  parts.push({ text: contextEnvelope });
+  turns.push({ role: 'user', parts });
+
+  const { response, modelUsed } = await generateWithFailover(
+    ai,
+    (model) => ({
+      model,
+      contents: turns,
+      config: {
+        systemInstruction: SARA_JARVIS_SYSTEM_PROMPT,
+        responseMimeType: 'application/json',
+        ...(model.startsWith('gemini-4')
+          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+          : model.startsWith('gemini-3.1')
+          ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } }
+          : { temperature: 0.9 }),
+      },
+    }),
+    14000,
+    MODEL_PRIORITY_CHAIN
+  );
+
+  const parsed = parseJarvisJsonResponse(response.text || '');
+  const actions = Array.isArray(parsed.actions) ? [...parsed.actions] : [];
+
+  // Enriquecer ação play_music com videoId real do YouTube em paralelo se vier apenas query
+  for (const act of actions) {
+    if (act && act.type === 'play_music' && (act.query || act.title) && !act.videoId) {
+      const yt = await searchYouTubeTrackNode(act.query || act.title);
+      if (yt) {
+        act.videoId = yt.videoId;
+        act.title = act.title || yt.title;
+        act.artist = act.artist || yt.artist;
+        act.thumbnailUrl = yt.thumbnailUrl;
+      }
+    }
+  }
+
+  return {
+    reply: String(parsed.reply || 'Estou aqui contigo, Eletro-Jr.'),
+    voiceSummary: String(parsed.voiceSummary || parsed.reply || 'Feito, Eletro-Júnior.'),
+    mood: parsed.mood || 'speaking',
+    actions,
+    modelUsed,
+  };
+}
+

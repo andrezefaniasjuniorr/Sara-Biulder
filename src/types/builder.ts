@@ -91,7 +91,9 @@ export type SaraPlatformActionType =
   | 'pause_mission'
   | 'resume_mission'
   | 'open_report'
-  | 'fix_error';
+  | 'fix_error'
+  | 'open_builder_mode'
+  | 'open_jarvis_mode';
 
 export interface SaraPlatformAction {
   type: SaraPlatformActionType;

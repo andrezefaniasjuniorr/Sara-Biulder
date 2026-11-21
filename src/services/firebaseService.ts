@@ -447,3 +447,50 @@ export async function buscarPreferenciasUsuarioFirebase(
     return null;
   }
 }
+
+export interface JarvisCloudPayload {
+  agenda?: unknown[];
+  alarms?: unknown[];
+  tasks?: unknown[];
+  memory?: Record<string, unknown> | object;
+  updatedAt?: string;
+}
+
+export async function salvarJarvisStateFirebase(
+  payload: JarvisCloudPayload,
+  userId?: string
+): Promise<void> {
+  try {
+    const { firestoreMod, db, auth } = await loadFirebaseRuntime();
+    const uid = resolveUid(userId, auth);
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_jarvis_memory', uid),
+      {
+        uid,
+        agenda: payload.agenda || [],
+        alarms: payload.alarms || [],
+        tasks: payload.tasks || [],
+        memory: payload.memory || {},
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  } catch {
+    // Fallback local silencioso se offline
+  }
+}
+
+export async function buscarJarvisStateFirebase(
+  userId?: string
+): Promise<JarvisCloudPayload | null> {
+  try {
+    const { firestoreMod, db, auth } = await loadFirebaseRuntime();
+    const uid = resolveUid(userId, auth);
+    const snap = await firestoreMod.getDoc(firestoreMod.doc(db, 'sara_jarvis_memory', uid));
+    if (!snap.exists()) return null;
+    return snap.data() as JarvisCloudPayload;
+  } catch {
+    return null;
+  }
+}
+

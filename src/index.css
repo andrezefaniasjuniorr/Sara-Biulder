@@ -51,3 +51,38 @@
 .sara-scroll::-webkit-scrollbar-thumb:hover {
   background: #3B82F6;
 }
+
+@keyframes jarvisScan {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  20% {
+    opacity: 0.45;
+  }
+  80% {
+    opacity: 0.45;
+  }
+  100% {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+}
+
+@keyframes jarvisSpinSlow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.jarvis-scan-line {
+  animation: jarvisScan 3.4s linear infinite;
+}
+
+.jarvis-spin-slow {
+  animation: jarvisSpinSlow 24s linear infinite;
+}
+

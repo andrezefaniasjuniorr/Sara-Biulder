@@ -11,10 +11,14 @@ import {
   Presentation,
   Bot,
   UserCheck,
+  Sparkles,
+  Hammer,
 } from 'lucide-react';
 import type { AgentMode, FirebaseUserProfile, VoiceLevel } from '../types/builder';
+import type { WorkspaceMode } from '../types/jarvis';
 
 interface TopBarProps {
+  workspaceMode: WorkspaceMode;
   projectName: string;
   agentMode: AgentMode;
   voiceEnabled: boolean;
@@ -25,6 +29,7 @@ interface TopBarProps {
   isThinking: boolean;
   firebaseUser: FirebaseUserProfile | null;
   isSyncingFirebase?: boolean;
+  onChangeWorkspaceMode: (mode: WorkspaceMode) => void;
   onChangeAgentMode: (mode: AgentMode) => void;
   onToggleVoice: () => void;
   onCycleVoiceLevel: () => void;
@@ -38,6 +43,7 @@ interface TopBarProps {
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
+  workspaceMode,
   projectName,
   agentMode,
   voiceEnabled,
@@ -48,6 +54,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   isThinking,
   firebaseUser,
   isSyncingFirebase = false,
+  onChangeWorkspaceMode,
   onChangeAgentMode,
   onToggleVoice,
   onCycleVoiceLevel,
@@ -61,14 +68,25 @@ export const TopBar: React.FC<TopBarProps> = ({
 }) => {
   const voiceLevelLabel =
     voiceLevel === 'full' ? 'Completo' : voiceLevel === 'medium' ? 'Médio' : 'Curto';
+  const isJarvis = workspaceMode === 'jarvis';
 
   return (
-    <header className="h-14 shrink-0 bg-[#0D1117] border-b border-[#1E2433] px-2.5 sm:px-4 flex items-center justify-between gap-2 overflow-x-auto sara-scroll">
+    <header
+      className={`h-14 shrink-0 px-2.5 sm:px-4 flex items-center justify-between gap-2 overflow-x-auto sara-scroll border-b transition-colors ${
+        isJarvis
+          ? 'bg-[#040916] border-cyan-500/35 shadow-[0_2px_22px_rgba(0,229,255,0.12)]'
+          : 'bg-[#0D1117] border-[#1E2433]'
+      }`}
+    >
       {/* Esquerda: Avatar + Logo + Indicador de Estado de Voz/Pensamento */}
       <div className="flex items-center gap-2.5 min-w-0 shrink-0">
         <div
-          className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-br from-[#3B82F6] to-[#8B5CF6] p-[1.5px] shrink-0 shadow-[0_0_16px_rgba(59,130,246,0.35)]"
-          title="Sara — Construtora Inteligente"
+          className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl p-[1.5px] shrink-0 ${
+            isJarvis
+              ? 'bg-gradient-to-br from-[#00E5FF] to-[#FF2A4B] shadow-[0_0_16px_rgba(0,229,255,0.45)]'
+              : 'bg-gradient-to-br from-[#3B82F6] to-[#8B5CF6] shadow-[0_0_16px_rgba(59,130,246,0.35)]'
+          }`}
+          title={isJarvis ? 'SARA JARVIS — Assistente IA Completa' : 'Sara — Construtora Inteligente'}
         >
           <div className="w-full h-full rounded-[10px] bg-[#0A0A0F] flex items-center justify-center">
             <svg
@@ -80,8 +98,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             >
               <defs>
                 <linearGradient id="saraRobotGrad" x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-                  <stop stopColor="#3B82F6" />
-                  <stop offset="1" stopColor="#8B5CF6" />
+                  <stop stopColor={isJarvis ? '#00E5FF' : '#3B82F6'} />
+                  <stop offset="1" stopColor={isJarvis ? '#FF2A4B' : '#8B5CF6'} />
                 </linearGradient>
               </defs>
               <path
@@ -92,12 +110,12 @@ export const TopBar: React.FC<TopBarProps> = ({
               />
               <path
                 d="M7 13C5.5 14 5.5 18 7 19M25 13C26.5 14 26.5 18 25 19"
-                stroke="#8B5CF6"
+                stroke={isJarvis ? '#FF2A4B' : '#8B5CF6'}
                 strokeWidth="1.8"
                 strokeLinecap="round"
               />
-              <circle cx="13" cy="14.5" r="1.6" fill="#3B82F6" />
-              <circle cx="19" cy="14.5" r="1.6" fill="#8B5CF6" />
+              <circle cx="13" cy="14.5" r="1.6" fill={isJarvis ? '#00E5FF' : '#3B82F6'} />
+              <circle cx="19" cy="14.5" r="1.6" fill={isJarvis ? '#00E5FF' : '#8B5CF6'} />
               <path
                 d="M13.5 19.5C14.3 20.5 17.7 20.5 18.5 19.5"
                 stroke="#FFFFFF"
@@ -109,28 +127,72 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         <div className="min-w-0 flex items-center gap-2">
-          <span className="font-extrabold text-sm sm:text-base tracking-tight bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] bg-clip-text text-transparent whitespace-nowrap">
-            SARA BIULDER
+          <span
+            className={`font-extrabold text-sm sm:text-base tracking-tight bg-clip-text text-transparent whitespace-nowrap ${
+              isJarvis
+                ? 'bg-gradient-to-r from-[#00E5FF] via-blue-300 to-[#FF2A4B]'
+                : 'bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6]'
+            }`}
+          >
+            {isJarvis ? 'SARA JARVIS' : 'SARA BIULDER'}
           </span>
-          <span className="hidden xl:inline text-[#1E2433]">|</span>
-          <span className="hidden xl:inline text-xs font-medium text-[#A1A1AA] truncate max-w-[140px]">
-            {projectName}
-          </span>
+          {!isJarvis && (
+            <>
+              <span className="hidden xl:inline text-[#1E2433]">|</span>
+              <span className="hidden xl:inline text-xs font-medium text-[#A1A1AA] truncate max-w-[120px]">
+                {projectName}
+              </span>
+            </>
+          )}
           {isSyncingFirebase && (
-            <span className="hidden lg:inline-flex items-center gap-1 text-[10px] font-mono text-cyan-300/90 px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25">
+            <span className="hidden xl:inline-flex items-center gap-1 text-[10px] font-mono text-cyan-300/90 px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25">
               Firebase
             </span>
           )}
         </div>
 
+        {/* BOTÃO GRANDE DE TROCA DE MODO: [ASSISTENTE JARVIS <-> BUILDER] */}
+        <div
+          className="flex items-center bg-[#060B16] p-1 rounded-xl border border-cyan-500/40 shadow-[0_0_14px_rgba(0,229,255,0.16)] shrink-0 ml-1"
+          role="group"
+          aria-label="Alternar entre Assistente JARVIS e Builder"
+        >
+          <button
+            type="button"
+            onClick={() => onChangeWorkspaceMode('jarvis')}
+            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+              isJarvis
+                ? 'bg-gradient-to-r from-[#00E5FF]/25 to-[#FF2A4B]/25 border border-[#00E5FF]/70 text-cyan-200 shadow-[0_0_14px_rgba(0,229,255,0.28)]'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+            title="Modo 1 — Assistente Pessoal SARA JARVIS"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-[#00E5FF]" />
+            <span>ASSISTENTE</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onChangeWorkspaceMode('builder')}
+            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+              !isJarvis
+                ? 'bg-gradient-to-r from-[#3B82F6]/30 to-[#8B5CF6]/30 border border-[#3B82F6]/70 text-blue-200 shadow-[0_0_14px_rgba(59,130,246,0.28)]'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+            title="Modo 2 — Construtor IDE SARA BIULDER"
+          >
+            <Hammer className="w-3.5 h-3.5 text-[#8B5CF6]" />
+            <span>BUILDER</span>
+          </button>
+        </div>
+
         {/* Indicadores ao vivo: A falar / A ouvir com onda / A pensar */}
         {isSaraSpeaking ? (
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#8B5CF6]/15 border border-[#8B5CF6]/40 text-[11px] font-medium text-[#C4B5FD] whitespace-nowrap">
+          <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#8B5CF6]/15 border border-[#8B5CF6]/40 text-[11px] font-medium text-[#C4B5FD] whitespace-nowrap">
             <Volume2 className="w-3.5 h-3.5 animate-pulse" />
             <span>Sara a falar...</span>
           </div>
         ) : isListening ? (
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-[11px] font-medium text-emerald-300 whitespace-nowrap">
+          <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-[11px] font-medium text-emerald-300 whitespace-nowrap">
             <span className="flex items-end gap-[2px] h-3" aria-hidden="true">
               <span className="w-[2px] h-2 bg-emerald-400 animate-pulse" />
               <span className="w-[2px] h-3 bg-emerald-400 animate-bounce" />
@@ -140,47 +202,54 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span>A ouvir...</span>
           </div>
         ) : isThinking ? (
-          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#3B82F6]/15 border border-[#3B82F6]/40 text-[11px] font-medium text-blue-300 whitespace-nowrap">
+          <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#3B82F6]/15 border border-[#3B82F6]/40 text-[11px] font-medium text-blue-300 whitespace-nowrap">
             <span>A pensar...</span>
           </div>
         ) : null}
       </div>
 
-      {/* Centro: Interruptor [🟢 MANUAL | 🤖 AUTOMÁTICO] */}
-      <div
-        className="flex items-center bg-[#0A0A0F] p-1 rounded-xl border border-[#1F1F2E] shrink-0"
-        role="group"
-        aria-label="Modo de construção"
-      >
-        <button
-          type="button"
-          onClick={() => onChangeAgentMode('manual')}
-          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-            agentMode === 'manual'
-              ? 'bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
-              : 'text-[#A1A1AA] hover:text-white border border-transparent'
-          }`}
-          title="Modo Manual: Sara pergunta e espera aprovação em cada etapa"
+      {/* Centro: Interruptor [🟢 MANUAL | 🤖 AUTOMÁTICO] (exclusivo do Modo Builder) */}
+      {!isJarvis ? (
+        <div
+          className="flex items-center bg-[#0A0A0F] p-1 rounded-xl border border-[#1F1F2E] shrink-0"
+          role="group"
+          aria-label="Modo de construção"
         >
-          <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
-          <UserCheck className="w-3.5 h-3.5 hidden sm:inline" />
-          <span>MANUAL</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => onChangeAgentMode('manual')}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+              agentMode === 'manual'
+                ? 'bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 shadow-[0_0_12px_rgba(16,185,129,0.2)]'
+                : 'text-[#A1A1AA] hover:text-white border border-transparent'
+            }`}
+            title="Modo Manual: Sara pergunta e espera aprovação em cada etapa"
+          >
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" />
+            <UserCheck className="w-3.5 h-3.5 hidden sm:inline" />
+            <span>MANUAL</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => onChangeAgentMode('automatic')}
-          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-            agentMode === 'automatic'
-              ? 'bg-gradient-to-r from-[#3B82F6]/25 to-[#8B5CF6]/25 border border-[#3B82F6]/60 text-blue-200 shadow-[0_0_12px_rgba(59,130,246,0.25)]'
-              : 'text-[#A1A1AA] hover:text-white border border-transparent'
-          }`}
-          title="Modo Automático: Sara planeia, cria, testa, corrige e faz push sozinha"
-        >
-          <Bot className="w-3.5 h-3.5 text-[#3B82F6]" />
-          <span>AUTOMÁTICO</span>
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => onChangeAgentMode('automatic')}
+            className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
+              agentMode === 'automatic'
+                ? 'bg-gradient-to-r from-[#3B82F6]/25 to-[#8B5CF6]/25 border border-[#3B82F6]/60 text-blue-200 shadow-[0_0_12px_rgba(59,130,246,0.25)]'
+                : 'text-[#A1A1AA] hover:text-white border border-transparent'
+            }`}
+            title="Modo Automático: Sara planeia, cria, testa, corrige e faz push sozinha"
+          >
+            <Bot className="w-3.5 h-3.5 text-[#3B82F6]" />
+            <span>AUTOMÁTICO</span>
+          </button>
+        </div>
+      ) : (
+        <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-xl bg-[#071124] border border-cyan-500/25 text-[11px] font-mono text-cyan-300 shrink-0">
+          <span className="w-2 h-2 rounded-full bg-[#00E5FF] animate-pulse" />
+          <span>STARK HUD // ASSISTENTE PESSOAL</span>
+        </div>
+      )}
 
       {/* Direita: Controlos de Voz, Calar Sara e Ações */}
       <div className="flex items-center gap-1.5 shrink-0">
@@ -244,33 +313,37 @@ export const TopBar: React.FC<TopBarProps> = ({
           <span className="hidden lg:inline">{isListening ? 'Mãos Livres' : 'Mic'}</span>
         </button>
 
-        <button
-          type="button"
-          onClick={onTogglePresentation}
-          className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white hover:border-cyan-400/50 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-          title="Modo Apresentação (Ctrl+P)"
-        >
-          <Presentation className="w-3.5 h-3.5 text-cyan-400" />
-        </button>
+        {!isJarvis && (
+          <>
+            <button
+              type="button"
+              onClick={onTogglePresentation}
+              className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white hover:border-cyan-400/50 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              title="Modo Apresentação (Ctrl+P)"
+            >
+              <Presentation className="w-3.5 h-3.5 text-cyan-400" />
+            </button>
 
-        <button
-          type="button"
-          onClick={onSaveProject}
-          className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white hover:border-[#3B82F6]/40 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-          title="Guardar projeto (Ctrl+S)"
-        >
-          <Save className="w-3.5 h-3.5" />
-        </button>
+            <button
+              type="button"
+              onClick={onSaveProject}
+              className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white hover:border-[#3B82F6]/40 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              title="Guardar projeto (Ctrl+S)"
+            >
+              <Save className="w-3.5 h-3.5" />
+            </button>
 
-        <button
-          type="button"
-          onClick={onOpenProjects}
-          className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#3B82F6]/50 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
-          title="Projetos"
-        >
-          <FolderKanban className="w-3.5 h-3.5 text-[#3B82F6]" />
-          <span className="hidden sm:inline">Projetos</span>
-        </button>
+            <button
+              type="button"
+              onClick={onOpenProjects}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#3B82F6]/50 transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer"
+              title="Projetos"
+            >
+              <FolderKanban className="w-3.5 h-3.5 text-[#3B82F6]" />
+              <span className="hidden sm:inline">Projetos</span>
+            </button>
+          </>
+        )}
 
         <button
           type="button"
@@ -281,14 +354,16 @@ export const TopBar: React.FC<TopBarProps> = ({
           <Settings className="w-3.5 h-3.5 text-[#8B5CF6]" />
         </button>
 
-        <button
-          type="button"
-          onClick={onOpenDeploy}
-          className="px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] hover:opacity-95 text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-[0_0_14px_rgba(59,130,246,0.3)]"
-        >
-          <Rocket className="w-3.5 h-3.5" />
-          <span>Deploy</span>
-        </button>
+        {!isJarvis && (
+          <button
+            type="button"
+            onClick={onOpenDeploy}
+            className="px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] hover:opacity-95 text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-[0_0_14px_rgba(59,130,246,0.3)]"
+          >
+            <Rocket className="w-3.5 h-3.5" />
+            <span>Deploy</span>
+          </button>
+        )}
       </div>
     </header>
   );

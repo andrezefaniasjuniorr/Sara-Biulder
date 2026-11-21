@@ -47,9 +47,14 @@ export type VoiceCommandAction =
   | { type: 'stop_listening' }
   | { type: 'undo_version' }
   | { type: 'refresh_preview' }
+  | { type: 'open_builder_mode'; raw: string }
+  | { type: 'open_jarvis_mode'; raw: string }
+  | { type: 'focus_mode_on'; raw: string }
+  | { type: 'focus_mode_off'; raw: string }
   | { type: 'prompt'; text: string };
 
 export interface VoiceParseContext {
+  workspaceMode?: 'jarvis' | 'builder';
   activeTab?: 'files' | 'editor' | 'console';
   previewDevice?: 'desktop' | 'tablet' | 'mobile';
   isEditorFullscreen?: boolean;
@@ -465,6 +470,46 @@ export function parseVoiceCommand(
     /\bativar (o )?microfone\b/.test(lower)
   ) {
     return { type: 'start_listening' };
+  }
+
+  // Troca de Modo Principal: Assistente JARVIS <-> Builder
+  if (
+    /\b(abre|abrir|vai\s+para|muda\s+para|passa\s+para|entra\s+no|ativa|ativar|quero)\s+(o\s+)?(modo\s+)?(builder|construtor)\b/.test(
+      lower
+    ) ||
+    /^(sara[,\s]+)?(modo\s+)?builder$/.test(lower)
+  ) {
+    return { type: 'open_builder_mode', raw: clean };
+  }
+
+  if (
+    /\b(volta\s+para|abre|abrir|vai\s+para|muda\s+para|passa\s+para|ativa|ativar|quero)\s+(o\s+)?(modo\s+)?(assistente|jarvis|modo\s+normal)\b/.test(
+      lower
+    ) ||
+    /\b(sai\s+do|sair\s+do|fecha\s+o)\s+builder\b/.test(lower) ||
+    /^(sara[,\s]+)?(modo\s+)?(assistente|jarvis)$/.test(lower)
+  ) {
+    return { type: 'open_jarvis_mode', raw: clean };
+  }
+
+  if (
+    /\b(desativa|desativar|sai\s+do|sair\s+do|fecha\s+o|desliga)\s+(o\s+)?(modo\s+)?foco\b/.test(
+      lower
+    )
+  ) {
+    return { type: 'focus_mode_off', raw: clean };
+  }
+
+  if (/\b(ativa|ativar|liga|ligar|entra\s+no|quero\s+o)\s+(o\s+)?(modo\s+)?foco\b|^modo\s+foco$/.test(lower)) {
+    return { type: 'focus_mode_on', raw: clean };
+  }
+
+  // No Modo Assistente JARVIS, pedidos gerais passam diretamente para o cérebro JARVIS (não aciona comandos IDE do Builder por engano)
+  if (context?.workspaceMode === 'jarvis') {
+    if (lower.includes('configuracoes') || lower.includes('definicoes')) {
+      return { type: 'open_settings' };
+    }
+    return { type: 'prompt', text: clean };
   }
 
   // Pausar / retomar missão automática e relatório

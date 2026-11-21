@@ -367,3 +367,145 @@ export async function callGeminiRestWithFailover(
 
   throw lastError || new Error('Nenhum modelo Gemini respondeu no momento.');
 }
+
+export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a **SARA JARVIS**, a Inteligência Artificial Ampla e assistente pessoal completa de **Eletro-Jr**.
+Responde sempre em JSON válido com: {"reply":"...","voiceSummary":"...","mood":"idle|speaking|happy|thinking|focus","actions":[...]}.
+Suporta ações: add_agenda, add_alarm, add_task, complete_task, play_music, show_svg, show_math, show_chart, show_document, show_html, show_ideation, remember_fact, toggle_focus, switch_mode.
+Nunca mistures o código do Builder neste modo; aqui crias arte SVG, gráficos Chart.js, resoluções passo a passo de matemática, análises de documentos, sites/planilhas/apresentações visuais no palco e gere agenda, alarmes, tarefas e música.`;
+
+export async function searchYouTubeTrackEdge(query) {
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4500);
+  try {
+    const resp = await fetch(
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanQuery + ' official audio')}`,
+      {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36',
+        },
+      }
+    );
+    if (!resp.ok) return null;
+    const html = await resp.text();
+    const match = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
+    if (match?.[1]) {
+      return {
+        id: `yt_${match[1]}`,
+        title: cleanQuery,
+        artist: 'YouTube Music',
+        videoId: match[1],
+        thumbnailUrl: `https://i.ytimg.com/vi/${match[1]}/hqdefault.jpg`,
+        source: 'youtube',
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function runJarvisAssistantEdge(apiKey, body) {
+  const {
+    prompt = '',
+    history = [],
+    memory = {},
+    agenda = [],
+    tasks = [],
+    alarms = [],
+    documentAttachment = null,
+    activeDocument = null,
+    nowIso = new Date().toISOString(),
+  } = body || {};
+
+  const contents = [];
+  if (Array.isArray(history)) {
+    for (const h of history.slice(-10)) {
+      if (h?.text) {
+        contents.push({
+          role: h.sender === 'user' ? 'user' : 'model',
+          parts: [{ text: String(h.text) }],
+        });
+      }
+    }
+  }
+
+  const parts = [];
+  if (documentAttachment?.base64Data && documentAttachment?.mimeType) {
+    const base64Clean = documentAttachment.base64Data.includes(',')
+      ? documentAttachment.base64Data.split(',')[1]
+      : documentAttachment.base64Data;
+    parts.push({
+      inlineData: {
+        data: base64Clean,
+        mimeType: documentAttachment.mimeType,
+      },
+    });
+  }
+
+  const docText = documentAttachment?.textContent
+    ? `\nDOCUMENTO (${documentAttachment.name}):\n${String(documentAttachment.textContent).slice(0, 16000)}`
+    : activeDocument?.summary
+    ? `\nDOCUMENTO ATUAL (${activeDocument.name}):\n${activeDocument.summary}`
+    : '';
+
+  parts.push({
+    text: `DATA/HORA: ${nowIso}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
+  });
+  contents.push({ role: 'user', parts });
+
+  const { text, modelUsed } = await callGeminiRestWithFailover(
+    apiKey,
+    (model) => ({
+      contents,
+      systemInstruction: { parts: [{ text: SARA_JARVIS_SYSTEM_PROMPT }] },
+      generationConfig: {
+        responseMimeType: 'application/json',
+        ...(model.startsWith('gemini-4')
+          ? { thinkingConfig: { thinkingLevel: 'LOW' } }
+          : model.startsWith('gemini-3.1')
+          ? { thinkingConfig: { thinkingLevel: 'MINIMAL' } }
+          : { temperature: 0.9 }),
+      },
+    }),
+    14000,
+    MODEL_PRIORITY_CHAIN
+  );
+
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
+  let parsed;
+  try {
+    parsed = JSON.parse(cleaned);
+  } catch {
+    parsed = {
+      reply: cleaned || 'Estou aqui contigo, Eletro-Jr.',
+      voiceSummary: cleaned.slice(0, 180) || 'Pronto, Eletro-Júnior.',
+      mood: 'speaking',
+      actions: [],
+    };
+  }
+
+  const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
+  for (const act of actions) {
+    if (act?.type === 'play_music' && (act.query || act.title) && !act.videoId) {
+      const yt = await searchYouTubeTrackEdge(act.query || act.title);
+      if (yt) {
+        act.videoId = yt.videoId;
+        act.thumbnailUrl = yt.thumbnailUrl;
+      }
+    }
+  }
+
+  return {
+    reply: parsed.reply || 'Estou pronta, Eletro-Jr.',
+    voiceSummary: parsed.voiceSummary || parsed.reply || 'Feito, Eletro-Júnior.',
+    mood: parsed.mood || 'speaking',
+    actions,
+    modelUsed,
+  };
+}
+
