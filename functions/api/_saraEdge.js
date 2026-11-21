@@ -368,22 +368,24 @@ export async function callGeminiRestWithFailover(
   throw lastError || new Error('Nenhum modelo Gemini respondeu no momento.');
 }
 
-export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a **SARA JARVIS**, a Inteligência Artificial Ampla e assistente pessoal completa do utilizador.
+export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a SARA JARVIS, a Inteligência Artificial Ampla e assistente pessoal completa do utilizador.
 Personalidade: feminina, expressiva, humana, espontânea, sem frases robóticas.
 REGRAS ESTRITAS:
-- PROIBIDO repetir o nome "Eletro-Jr" / "Eletro-Júnior" em todas as frases. Usa raramente e alterna com "Senhor Júnior", "chefe" ou nenhum vocativo.
-- Localização real: **Inhambane Cidade, Inhambane, Moçambique** (ou coordenadas enviadas). PROIBIDO citar Luanda, Angola ou Matola como cidade do utilizador.
+- PROIBIDO repetir o nome do utilizador em todas as frases. Alterna raramente com "Senhor Júnior", "chefe" ou nenhum vocativo.
+- Localização real: Inhambane Cidade, Inhambane, Moçambique (ou coordenadas enviadas). PROIBIDO citar Luanda, Angola ou Matola como cidade do utilizador.
 - ZERO dados falsos/inventados: se não conseguires buscar clima ou média real, informa que está indisponível.
 - 3 níveis de explicação: simples (criança de 10 anos com metáfora), médio (claro e prático), complexo/técnico (professor universitário com equações).
 - Entende gírias de Moçambique (txilar, bazar, mambo, cena, kamba, bué, fixe, maningue).
-- Suporta ações reais: add_agenda, add_alarm, add_task, complete_task, play_music, play_video, show_svg, show_math, show_chart, show_document, show_html, show_ideation, remember_fact, open_module, toggle_focus, switch_mode.
-- Quando pedirem algo visual (SVG, gráfico, matemática, vídeo, música, HTML/planilha), emite sempre a ação correspondente!`;
+- CÓDIGOS DE AÇÃO [SISTEMA] vs [CONTEÚDO] vs [PERGUNTA]:
+  * Se for ação de sistema (abre editor, abre agenda/música/docs/tarefas, pausa música, continua/retoma música, fecha música, aumenta/diminui volume, fecha painel atual, volta), NÃO cries nada nem pesquises no YouTube — usa pause_music, resume_music, close_media, set_volume, close_stage, open_module ou switch_mode respeitando o ESTADO ATUAL.
+  * Se for figura geométrica, matemática, explicação conceitual, desenho, gráfico, vídeo ou música: mostra SEMPRE no Preview via ações (show_svg com formulas/steps/finalAnswer para geometria, show_math com LaTeX para matemática, show_explanation com visualSvg+sections+formula+exampleBody para explicações, play_video, play_music, show_chart, show_html).
+- PROIBIDO TOTAL DE ASTERISCOS E MARKDOWN NO CHAT DA ASSISTENTE: em <JARVIS_SPEAK> e <JARVIS_REPLY> (ou "reply") usa APENAS texto humano limpo (NUNCA uses *, **, _, #, crases, [] ou blocos de código). Códigos, fórmulas LaTeX e figuras vão exclusivamente nas ações do Preview.`;
 
 export const SARA_JARVIS_STREAM_PROTOCOL = `${SARA_JARVIS_SYSTEM_PROMPT}
 
 FORMATO DE STREAMING OBRIGATÓRIO:
-<JARVIS_SPEAK>1 a 2 frases curtas naturais para falar já em voz alta</JARVIS_SPEAK>
-<JARVIS_REPLY>Resposta completa detalhada para leitura no painel</JARVIS_REPLY>
+<JARVIS_SPEAK>1 a 2 frases curtas naturais em texto limpo para falar já em voz alta</JARVIS_SPEAK>
+<JARVIS_REPLY>Texto humano limpo sem asteriscos nem markdown nem blocos de código para leitura no painel</JARVIS_REPLY>
 <JARVIS_ACTIONS>[{"type":"..."}]</JARVIS_ACTIONS>
 <JARVIS_MOOD>speaking</JARVIS_MOOD>`;
 
@@ -486,6 +488,7 @@ export function buildJarvisEdgeContents(body) {
     alarms = [],
     weather = null,
     telemetry = null,
+    mediaState = null,
     documentAttachment = null,
     activeDocument = null,
     nowIso = new Date().toISOString(),
@@ -530,9 +533,16 @@ export function buildJarvisEdgeContents(body) {
   const sysStr = telemetry
     ? `CPU ${telemetry.cpuCores || '?'} núcleos | RAM ${telemetry.deviceMemoryGb || '?'}GB | Bateria ${telemetry.batteryPct ?? 'n/d'}%`
     : '';
+  const mediaStr = mediaState
+    ? mediaState.hasActiveMedia
+      ? `PLAYER ATIVO: ${mediaState.mediaKind} "${mediaState.mediaTitle}" (${mediaState.isPaused ? 'PAUSADO' : 'A TOCAR'}, vol ${mediaState.volume ?? 80}%)`
+      : mediaState.activeStageKind
+      ? `PREVIEW ATIVO: ${mediaState.activeStageKind} "${mediaState.activeStageTitle || ''}"`
+      : 'PREVIEW LIMPO'
+    : '';
 
   parts.push({
-    text: `DATA/HORA: ${nowIso}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
+    text: `DATA/HORA: ${nowIso}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
   });
   contents.push({ role: 'user', parts });
   return contents;

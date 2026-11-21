@@ -54,6 +54,12 @@ export type VoiceCommandAction =
       moduleTab: 'voz' | 'sistema' | 'agenda' | 'musica' | 'documentos' | 'tarefas';
       raw: string;
     }
+  | { type: 'pause_music'; raw: string }
+  | { type: 'resume_music'; raw: string }
+  | { type: 'close_music'; raw: string }
+  | { type: 'volume_up'; raw: string }
+  | { type: 'volume_down'; raw: string }
+  | { type: 'close_stage'; raw: string }
   | { type: 'repeat_sara'; raw: string }
   | { type: 'continue_sara'; raw: string }
   | { type: 'focus_mode_on'; raw: string }
@@ -68,6 +74,9 @@ export interface VoiceParseContext {
   isPreviewFullscreen?: boolean;
   hasOpenOverlay?: boolean;
   hasPendingConfirm?: boolean;
+  hasActiveMedia?: boolean;
+  isMediaPaused?: boolean;
+  hasActiveStage?: boolean;
   projectFiles?: string[];
   availableProjects?: string[];
   isMissionActive?: boolean;
@@ -511,14 +520,85 @@ export function parseVoiceCommand(
     return { type: 'focus_mode_on', raw: clean };
   }
 
-  // Repetir última resposta ou continuar conversa no JARVIS
+  // Repetir última resposta
   if (/^(sara[,\s]+)?(repete|repete isso|podes repetir|diz outra vez|o que disseste)$/i.test(lower)) {
     return { type: 'repeat_sara', raw: clean };
   }
 
-  // No Modo Assistente JARVIS: abre módulos específicos por voz e controla continuação
+  // [SISTEMA] Controlo de mídia YouTube & Palco (MEMÓRIA DE ESTADO: nunca pesquisa "pausa" nem troca de música!)
+  if (
+    /^(sara[,\s]+)?(pausa|pausar|pause|para)(\s+(a|o)\s+(musica|som|audio|video|player))?$/i.test(lower) ||
+    /\b(pausa|pausar|para)\s+(a\s+musica|o\s+video|o\s+som|o\s+player|esta\s+musica)\b/.test(lower)
+  ) {
+    if (context?.hasActiveMedia || /\b(musica|video|som|player)\b/.test(lower)) {
+      return { type: 'pause_music', raw: clean };
+    }
+  }
+
+  if (
+    /\b(fecha|fechar|para\s+e\s+fecha|tira|remove|encerra)\s+(a\s+musica|o\s+video|o\s+player|o\s+som)\b/.test(lower)
+  ) {
+    return { type: 'close_music', raw: clean };
+  }
+
+  if (
+    /\b(aumenta|aumentar|sobe|subir|mais\s+alto|ergue)\s+(o\s+)?volume\b|^volume\s*(\+|mais|alto)$/.test(lower) ||
+    /^(sara[,\s]+)?(aumenta|sobe)\s+o\s+som$/i.test(lower)
+  ) {
+    return { type: 'volume_up', raw: clean };
+  }
+
+  if (
+    /\b(diminui|diminuir|baixa|baixar|reduz|reduzir|mais\s+baixo)\s+(o\s+)?volume\b|^volume\s*(-|menos|baixo)$/.test(lower) ||
+    /^(sara[,\s]+)?(diminui|baixa)\s+o\s+som$/i.test(lower)
+  ) {
+    return { type: 'volume_down', raw: clean };
+  }
+
+  if (
+    context?.hasActiveMedia &&
+    (/^(sara[,\s]+)?(continua|retoma|retomar|toca|play|despausa)(\s+(a\s+musica|o\s+video|o\s+som))?$/i.test(lower) ||
+      /\b(continua|retoma)\s+(a\s+musica|o\s+video|essa\s+musica)\b/.test(lower))
+  ) {
+    return { type: 'resume_music', raw: clean };
+  }
+
+  // [SISTEMA:ABRIR_EDITOR / SISTEMA] Comandos universais da plataforma (mesmo estando no Modo Assistente!)
+  if (
+    !hasExplicitAppFeatureEdit(lower) &&
+    !/\b(no\s+site|na\s+pagina|no\s+app|no\s+projeto)\b/.test(lower)
+  ) {
+    if (
+      /\b(abre|abrir|vai\s+para|entra\s+no|mostra)\s+(o\s+)?(editor|codigo)\s+(em\s+)?(tela\s+cheia|ecra\s+inteiro|grande)\b/.test(lower)
+    ) {
+      return { type: 'open_editor_fullscreen' };
+    }
+    if (
+      /^(sara[,\s]+)?(abre|abrir|abres|vai\s+para|entra\s+no|muda\s+para|passa\s+para|mostra|quero\s+abrir)\s+(o\s+)?(editor|codigo)(\s+do\s+sistema)?$/i.test(
+        lower
+      )
+    ) {
+      return { type: 'open_editor' };
+    }
+    if (/^(sara[,\s]+)?(abre|abrir|mostra|ver)\s+(os\s+)?projetos$/i.test(lower)) {
+      return { type: 'open_projects' };
+    }
+    if (/^(sara[,\s]+)?(salva|salvar|guarda|guardar)\s+(o\s+)?projeto$/i.test(lower)) {
+      return { type: 'save_project' };
+    }
+  }
+
+  // No Modo Assistente JARVIS: fechar conteúdo no Preview, abrir módulos ou continuar explicação
   if (context?.workspaceMode === 'jarvis') {
-    if (/^(sara[,\s]+)?(continua|continua a falar|prosegue|prossegue|segue)$/i.test(lower)) {
+    if (
+      context?.hasActiveStage &&
+      /^(sara[,\s]+)?(fecha|fechar|fecha\s+isso|fecha\s+isto|fecha\s+o\s+painel|esconde|esconde\s+isso|tira\s+isso|volta|voltar|volta\s+para\s+o\s+centro|sair)$/i.test(
+        lower
+      )
+    ) {
+      return { type: 'close_stage', raw: clean };
+    }
+    if (/^(sara[,\s]+)?(continua|continua\s+a\s+falar|prossegue|segue)$/i.test(lower)) {
       return { type: 'continue_sara', raw: clean };
     }
     if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|entra\s+em|ver)\s+(a\s+|o\s+|os\s+)?musica(s)?\b|^musica$/.test(lower)) {
@@ -1414,8 +1494,11 @@ export function setSpeakingStateListener(cb: ((speaking: boolean) => void) | nul
   speakingStateListener = cb;
 }
 
+const queuedSpeeches: Array<{ text: string; enabled: boolean; options?: SpeakOptions }> = [];
+
 export function stopSaraSpeech(): void {
   currentSpeechSeq += 1;
+  queuedSpeeches.length = 0;
   saraEstaAFalar = false;
   speakingStateListener?.(false);
   if (restartAfterSpeechTimer) {
@@ -1445,6 +1528,7 @@ export function stopSaraSpeech(): void {
  */
 export function interruptSaraAndListen(): void {
   currentSpeechSeq += 1;
+  queuedSpeeches.length = 0;
   saraEstaAFalar = false;
   speakingStateListener?.(false);
   if (restartAfterSpeechTimer) {
@@ -1473,6 +1557,7 @@ export interface SpeakOptions {
   forceSpeak?: boolean;
   isQuestionReply?: boolean;
   allowInfraMention?: boolean;
+  queueIfSpeaking?: boolean;
   onFinished?: () => void;
 }
 
@@ -1514,8 +1599,8 @@ export function adjustVoiceSpeed(direction: 'faster' | 'slower' | 'normal'): num
 }
 
 /**
- * Fala apenas o resumo essencial (ou detalhe se forceSpeak / level='full').
- * Pausa o microfone durante toda a fala e só religa 400ms depois de terminar.
+ * Fala com sincronização exata de lábios via speechSynthesis.onstart / onend.
+ * A boca NUNCA mexe antes do áudio realmente começar a tocar.
  */
 export function speakAsSara(
   text: string,
@@ -1534,6 +1619,12 @@ export function speakAsSara(
 
   if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
     opts.onFinished?.();
+    return;
+  }
+
+  // Se pedido queueIfSpeaking e já há fala ativa no momento, coloca em fila sem cortar o início ("Já vou...")
+  if (opts.queueIfSpeaking && saraEstaAFalar) {
+    queuedSpeeches.push({ text, enabled, options: { ...opts, queueIfSpeaking: false } });
     return;
   }
 
@@ -1565,10 +1656,16 @@ export function speakAsSara(
       restartAfterSpeechTimer = null;
     }
 
-    // 1. Ativa trava ANTES de falar, incrementa sequência e pausa o microfone imediatamente
+    // Cancela qualquer fila pendente se esta chamada é interruptiva (não-queued)
+    if (!opts.queueIfSpeaking) {
+      queuedSpeeches.length = 0;
+    }
+
+    // Trava o microfone ANTES de falar (mas NÃO anima a boca ainda — espera utterance.onstart!)
     const mySpeechSeq = ++currentSpeechSeq;
     saraEstaAFalar = true;
-    speakingStateListener?.(true);
+    speakingStateListener?.(false);
+
     if (activeRecognition) {
       const prevRec = activeRecognition;
       activeRecognition = null;
@@ -1586,7 +1683,6 @@ export function speakAsSara(
     const hasQuestion = spoken.includes('?');
     const utterance = new SpeechSynthesisUtterance(spoken);
     utterance.lang = 'pt-PT';
-    // Voz feminina natural com entoação emocional viva conforme o contexto da frase e período
     utterance.rate =
       period === 'night'
         ? Math.max(0.85, customBaseRate - 0.03)
@@ -1606,6 +1702,21 @@ export function speakAsSara(
 
     let finished = false;
     let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+
+    // Boca SÓ começa a mexer quando o áudio REALMENTE começa a tocar
+    utterance.onstart = () => {
+      if (mySpeechSeq !== currentSpeechSeq || finished) return;
+      speakingStateListener?.(true);
+    };
+    utterance.onpause = () => {
+      if (mySpeechSeq !== currentSpeechSeq) return;
+      speakingStateListener?.(false);
+    };
+    utterance.onresume = () => {
+      if (mySpeechSeq !== currentSpeechSeq || finished) return;
+      speakingStateListener?.(true);
+    };
+
     const finishSpeech = () => {
       if (finished) return;
       finished = true;
@@ -1613,13 +1724,20 @@ export function speakAsSara(
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       opts.onFinished?.();
 
-      // Ignora reset se uma fala mais recente já assumiu o controlo
       if (mySpeechSeq !== currentSpeechSeq) return;
 
-      saraEstaAFalar = false;
       speakingStateListener?.(false);
 
-      // Espera 400ms após terminar de falar e volta a ligar o microfone se estiver ativo
+      // Se há fala em fila (ex: resposta completa logo após "Já vou..."), dispara já
+      const nextQueued = queuedSpeeches.shift();
+      if (nextQueued) {
+        saraEstaAFalar = false;
+        speakAsSara(nextQueued.text, nextQueued.enabled, nextQueued.options);
+        return;
+      }
+
+      saraEstaAFalar = false;
+
       if (micShouldBeActive && resumeMicFn) {
         if (restartAfterSpeechTimer) clearTimeout(restartAfterSpeechTimer);
         restartAfterSpeechTimer = setTimeout(() => {
@@ -1631,7 +1749,6 @@ export function speakAsSara(
       }
     };
 
-    // Contorna bug do Chromium onde speechSynthesis pausa silenciosamente
     keepAliveTimer = setInterval(() => {
       if (mySpeechSeq !== currentSpeechSeq || finished) {
         if (keepAliveTimer) clearInterval(keepAliveTimer);
@@ -1646,8 +1763,7 @@ export function speakAsSara(
       }
     }, 2200);
 
-    // Garantia de segurança caso o navegador bloqueie eventos onend de TTS
-    const safetyMs = Math.min(16000, Math.max(2200, spoken.length * 80));
+    const safetyMs = Math.min(16000, Math.max(2400, spoken.length * 85));
     const safetyTimer = setTimeout(finishSpeech, safetyMs);
 
     utterance.onend = finishSpeech;

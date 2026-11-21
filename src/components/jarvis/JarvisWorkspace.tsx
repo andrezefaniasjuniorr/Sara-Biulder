@@ -41,6 +41,7 @@ import type {
   JarvisConversationEntry,
   JarvisDocumentItem,
   JarvisHeadMood,
+  JarvisMediaStateContext,
   JarvisMemoryState,
   JarvisModuleTab,
   JarvisStageContent,
@@ -58,6 +59,7 @@ import {
   playJarvisAlarmSound,
   readDocumentFile,
   readSyncSystemTelemetry,
+  sanitizeAssistantPlainText,
   saveJarvisAgenda,
   saveJarvisAlarms,
   saveJarvisConversation,
@@ -71,7 +73,12 @@ import {
   buscarJarvisStateFirebase,
   salvarJarvisStateFirebase,
 } from '../../services/firebaseService';
-import { interruptSaraAndListen, speakAsSara } from '../../utils/voiceService';
+import {
+  interruptSaraAndListen,
+  parseVoiceCommand,
+  speakAsSara,
+  type VoiceCommandAction,
+} from '../../utils/voiceService';
 import { SaraJarvisHead } from './SaraJarvisHead';
 import { JarvisStageRenderer } from './JarvisStageRenderer';
 
@@ -85,6 +92,15 @@ interface JarvisWorkspaceProps {
   onSilenceSara: () => void;
   onSwitchMode: (mode: WorkspaceMode) => void;
   onNotify: (msg: string) => void;
+  onExecuteSystemCommand?: (cmd: VoiceCommandAction, rawText: string) => Promise<boolean>;
+  onStageStateChange?: (state: JarvisMediaStateContext) => void;
+  externalMediaControlRef?: React.MutableRefObject<{
+    pause: () => void;
+    resume: () => void;
+    close: () => void;
+    adjustVolume: (delta: number) => number;
+    closeStage: () => void;
+  } | null>;
   externalCommandRef: React.MutableRefObject<
     ((promptText: string, source?: 'voice' | 'text') => Promise<void>) | null
   >;
@@ -103,6 +119,13 @@ const IRON_MAN_PROCESS_LINES = [
   '>> RENDERING HOLOGRAPHIC RESPONSE PAYLOAD',
 ];
 
+const BRIDGE_SPEECH_PHRASES = [
+  'Já vou.',
+  'Só um segundo.',
+  'A ver isso.',
+  'Deixa-me preparar isso.',
+];
+
 export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   voiceEnabled,
   isListening,
@@ -113,6 +136,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   onSilenceSara,
   onSwitchMode,
   onNotify,
+  onExecuteSystemCommand,
+  onStageStateChange,
+  externalMediaControlRef,
   externalCommandRef,
   externalFocusCommandRef,
   externalModuleRef,
@@ -136,6 +162,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
   const [stageContent, setStageContent] = useState<JarvisStageContent | null>(null);
   const [stageLayout, setStageLayout] = useState<'split' | 'focus'>('split');
+  const [mediaPaused, setMediaPaused] = useState(false);
+  const [mediaVolume, setMediaVolume] = useState(80);
+  const mediaVolumeRef = useRef(80);
   const [mood, setMood] = useState<JarvisHeadMood>('idle');
   const [isThinking, setIsThinking] = useState(false);
   const [streamingReply, setStreamingReply] = useState<string | null>(null);
@@ -192,6 +221,54 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   useEffect(() => saveJarvisDocuments(documents), [documents]);
   useEffect(() => saveJarvisConversation(conversation), [conversation]);
   useEffect(() => saveJarvisPlaylist(playlist), [playlist]);
+
+  useEffect(() => {
+    mediaVolumeRef.current = mediaVolume;
+  }, [mediaVolume]);
+
+  const currentMediaState = useMemo<JarvisMediaStateContext>(() => {
+    const isMedia = stageContent?.kind === 'music' || stageContent?.kind === 'video';
+    return {
+      hasActiveMedia: isMedia,
+      mediaKind: isMedia ? stageContent.kind : undefined,
+      mediaTitle: isMedia ? stageContent.title : undefined,
+      isPaused: isMedia ? mediaPaused : false,
+      volume: mediaVolume,
+      activeStageKind: stageContent?.kind,
+      activeStageTitle: stageContent?.title,
+    };
+  }, [stageContent, mediaPaused, mediaVolume]);
+
+  useEffect(() => {
+    onStageStateChange?.(currentMediaState);
+  }, [currentMediaState, onStageStateChange]);
+
+  useEffect(() => {
+    if (!externalMediaControlRef) return;
+    externalMediaControlRef.current = {
+      pause: () => setMediaPaused(true),
+      resume: () => setMediaPaused(false),
+      close: () => {
+        setStageContent((prev) =>
+          prev && (prev.kind === 'music' || prev.kind === 'video') ? null : prev
+        );
+        setMediaPaused(false);
+      },
+      adjustVolume: (delta: number) => {
+        const next = Math.max(0, Math.min(100, mediaVolumeRef.current + delta));
+        mediaVolumeRef.current = next;
+        setMediaVolume(next);
+        return next;
+      },
+      closeStage: () => {
+        setStageContent(null);
+        setMediaPaused(false);
+      },
+    };
+    return () => {
+      if (externalMediaControlRef) externalMediaControlRef.current = null;
+    };
+  }, [externalMediaControlRef]);
 
   // Hidratação + sync opcional Firebase (sara_jarvis_memory)
   useEffect(() => {
@@ -499,6 +576,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             setPlaylist((prev) => [finalTrack, ...prev.filter((p) => p.id !== finalTrack.id)]);
             setCurrentTrackIndex(0);
             setActiveModule('musica');
+            setMediaPaused(false);
             setStageContent({
               id: `stg_music_${Date.now()}`,
               kind: 'music',
@@ -529,12 +607,47 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               onNotify('Não consegui encontrar esse vídeo no YouTube agora.');
               break;
             }
+            setMediaPaused(false);
             setStageContent({
               id: `stg_video_${Date.now()}`,
               kind: 'video',
               title: videoTrack.title,
               track: videoTrack,
             });
+            break;
+          }
+          case 'pause_music': {
+            setMediaPaused(true);
+            onNotify('Reprodução pausada');
+            break;
+          }
+          case 'resume_music': {
+            setMediaPaused(false);
+            onNotify('Reprodução retomada');
+            break;
+          }
+          case 'close_media': {
+            setStageContent((prev) =>
+              prev && (prev.kind === 'music' || prev.kind === 'video') ? null : prev
+            );
+            setMediaPaused(false);
+            onNotify('Player fechado');
+            break;
+          }
+          case 'set_volume': {
+            const nextVol =
+              typeof act.volume === 'number'
+                ? Math.max(0, Math.min(100, act.volume))
+                : Math.max(0, Math.min(100, mediaVolumeRef.current + (act.delta || 0)));
+            mediaVolumeRef.current = nextVol;
+            setMediaVolume(nextVol);
+            onNotify(`Volume: ${nextVol}%`);
+            break;
+          }
+          case 'close_stage': {
+            setStageContent(null);
+            setMediaPaused(false);
+            onNotify('Palco fechado');
             break;
           }
           case 'open_module': {
@@ -553,6 +666,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 subtitle: act.notes,
                 svgCode: act.svgCode,
                 description: act.description,
+                formulas: Array.isArray(act.formulas) ? act.formulas : undefined,
+                steps: Array.isArray(act.steps) ? act.steps : undefined,
+                finalAnswer: act.finalAnswer,
               });
             }
             break;
@@ -563,9 +679,25 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               kind: 'math',
               title: act.title || 'Resolução Passo a Passo',
               problem: act.problem,
+              svgCode: act.svgCode,
+              formulas: Array.isArray(act.formulas) ? act.formulas : undefined,
               steps: Array.isArray(act.steps) ? act.steps : [],
               finalAnswer: act.finalAnswer || '',
               notes: act.notes,
+            });
+            break;
+          }
+          case 'show_explanation': {
+            setStageContent({
+              id: `stg_exp_${Date.now()}`,
+              kind: 'explanation',
+              title: act.title || 'Explicação Visual',
+              summary: act.summary || act.description || '',
+              visualSvg: act.visualSvg,
+              formula: act.formula,
+              sections: Array.isArray(act.sections) ? act.sections : [],
+              exampleTitle: act.exampleTitle,
+              exampleBody: act.exampleBody,
             });
             break;
           }
@@ -671,6 +803,23 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       const docToSend = pendingDoc;
       if (!clean && !docToSend) return;
 
+      // TIPO A - [SISTEMA]: Antes de chamar a IA, verifica comandos determinísticos mesmo quando escritos em texto
+      if (clean && !docToSend && onExecuteSystemCommand) {
+        const localCmd = parseVoiceCommand(clean, {
+          workspaceMode: 'jarvis',
+          hasActiveMedia: stageContent?.kind === 'music' || stageContent?.kind === 'video',
+          isMediaPaused: mediaPaused,
+          hasActiveStage: Boolean(stageContent),
+        });
+        if (localCmd.type !== 'prompt') {
+          const handled = await onExecuteSystemCommand(localCmd, clean);
+          if (handled) {
+            if (source === 'text') setInputText('');
+            return;
+          }
+        }
+      }
+
       const userLabel = clean || `Analisar documento: ${docToSend?.name}`;
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
 
@@ -695,7 +844,24 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       setStreamingReply(null);
       setMood('thinking');
 
+      const shouldSpeakNow = voiceEnabled && (source === 'voice' || !isSaraSilenced);
       let spokenDuringStream = false;
+      let bridgeSpoken = false;
+      const bridgeTimer = shouldSpeakNow
+        ? setTimeout(() => {
+            if (spokenDuringStream) return;
+            bridgeSpoken = true;
+            const ack =
+              BRIDGE_SPEECH_PHRASES[
+                Math.floor(Math.random() * BRIDGE_SPEECH_PHRASES.length)
+              ];
+            speakAsSara(ack, voiceEnabled, {
+              level: 'short',
+              forceSpeak: true,
+            });
+          }, 420)
+        : null;
+
       const res = await askJarvisAssistantStream(
         {
           prompt: userLabel,
@@ -706,35 +872,39 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           alarms,
           weather,
           telemetry,
+          mediaState: currentMediaState,
           documentAttachment: docToSend,
           activeDocument: docToSend || activeDoc,
         },
         {
           onSpeakReady: (speakText) => {
+            if (bridgeTimer) clearTimeout(bridgeTimer);
             if (!speakText || spokenDuringStream) return;
             spokenDuringStream = true;
-            setMood('speaking');
             speakAsSara(speakText, voiceEnabled, {
               level: 'medium',
+              queueIfSpeaking: bridgeSpoken,
               forceSpeak: source === 'voice' || !isSaraSilenced,
             });
           },
           onReplyPartial: (partialReply) => {
-            setStreamingReply(partialReply);
+            setStreamingReply(sanitizeAssistantPlainText(partialReply));
           },
         }
       );
 
+      if (bridgeTimer) clearTimeout(bridgeTimer);
       setIsThinking(false);
       setStreamingReply(null);
-      setMood(res.mood || 'speaking');
+      setMood(res.mood && res.mood !== 'speaking' ? res.mood : 'idle');
 
+      const cleanFinalReply = sanitizeAssistantPlainText(res.reply) || 'Feito.';
       setConversation((prev) => [
         ...prev,
         {
           id: `sara_j_${Date.now()}`,
           sender: 'sara',
-          text: res.reply,
+          text: cleanFinalReply,
           timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
         },
       ]);
@@ -742,14 +912,19 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       await applyJarvisActions(res.actions, docToSend);
 
       if (!spokenDuringStream) {
-        speakAsSara(res.voiceSummary || res.reply, voiceEnabled, {
+        const speakText = sanitizeAssistantPlainText(res.voiceSummary || cleanFinalReply);
+        speakAsSara(speakText, voiceEnabled, {
           level: 'medium',
+          queueIfSpeaking: bridgeSpoken,
           forceSpeak: source === 'voice' || !isSaraSilenced,
         });
       }
     },
     [
       pendingDoc,
+      onExecuteSystemCommand,
+      stageContent,
+      mediaPaused,
       conversation,
       memory,
       agenda,
@@ -757,6 +932,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       alarms,
       weather,
       telemetry,
+      currentMediaState,
       activeDoc,
       applyJarvisActions,
       voiceEnabled,
@@ -865,33 +1041,33 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             onSpeakReady: (speakText) => {
               if (!speakText || spokenDocStream) return;
               spokenDocStream = true;
-              setMood('speaking');
               speakAsSara(speakText, voiceEnabled, {
                 level: 'medium',
                 forceSpeak: !isSaraSilenced,
               });
             },
             onReplyPartial: (partialReply) => {
-              setStreamingReply(partialReply);
+              setStreamingReply(sanitizeAssistantPlainText(partialReply));
             },
           }
         );
 
         setIsThinking(false);
         setStreamingReply(null);
-        setMood(res.mood || 'speaking');
+        setMood(res.mood && res.mood !== 'speaking' ? res.mood : 'idle');
+        const cleanDocReply = sanitizeAssistantPlainText(res.reply) || 'Documento analisado.';
         setConversation((prev) => [
           ...prev,
           {
             id: `sara_doc_${Date.now()}`,
             sender: 'sara',
-            text: res.reply,
+            text: cleanDocReply,
             timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
         await applyJarvisActions(res.actions, doc);
         if (!spokenDocStream) {
-          speakAsSara(res.voiceSummary || res.reply, voiceEnabled, {
+          speakAsSara(sanitizeAssistantPlainText(res.voiceSummary || cleanDocReply), voiceEnabled, {
             level: 'medium',
             forceSpeak: !isSaraSilenced,
           });
@@ -904,6 +1080,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
   const handlePlayTrack = (track: JarvisTrack, idx: number) => {
     setCurrentTrackIndex(idx);
+    setMediaPaused(false);
     setStageContent({
       id: `stg_music_${track.id}_${Date.now()}`,
       kind: 'music',
@@ -1814,10 +1991,17 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   content={stageContent}
                   layoutMode={stageLayout}
                   onChangeLayoutMode={setStageLayout}
-                  onClose={() => setStageContent(null)}
+                  onClose={() => {
+                    setStageContent(null);
+                    setMediaPaused(false);
+                  }}
                   onNextTrack={handleNextTrack}
                   onAskAboutDocument={(title) => setInputText(`Sobre "${title}", `)}
                   playlist={playlist}
+                  mediaPaused={mediaPaused}
+                  mediaVolume={mediaVolume}
+                  onToggleMediaPause={() => setMediaPaused((p) => !p)}
+                  onChangeMediaVolume={(v) => setMediaVolume(Math.max(0, Math.min(100, v)))}
                 />
               </div>
             ) : (
@@ -1826,10 +2010,17 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   content={stageContent}
                   layoutMode={stageLayout}
                   onChangeLayoutMode={setStageLayout}
-                  onClose={() => setStageContent(null)}
+                  onClose={() => {
+                    setStageContent(null);
+                    setMediaPaused(false);
+                  }}
                   onNextTrack={handleNextTrack}
                   onAskAboutDocument={(title) => setInputText(`Sobre "${title}", `)}
                   playlist={playlist}
+                  mediaPaused={mediaPaused}
+                  mediaVolume={mediaVolume}
+                  onToggleMediaPause={() => setMediaPaused((p) => !p)}
+                  onChangeMediaVolume={(v) => setMediaVolume(Math.max(0, Math.min(100, v)))}
                 />
                 {/* Cabeça encolhida no canto inferior esquerdo */}
                 <div
@@ -2013,7 +2204,11 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           )}
                         </div>
                       </div>
-                      <div className="whitespace-pre-wrap">{entry.text}</div>
+                      <div className="whitespace-pre-wrap">
+                        {entry.sender === 'sara'
+                          ? sanitizeAssistantPlainText(entry.text)
+                          : entry.text}
+                      </div>
                     </div>
                   ))}
 
@@ -2022,7 +2217,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       <div className="flex items-center justify-between mb-1 text-[10px] font-mono">
                         <span className="text-cyan-300 font-bold">SARA (a escrever...)</span>
                       </div>
-                      <div className="whitespace-pre-wrap">{streamingReply}</div>
+                      <div className="whitespace-pre-wrap">
+                        {sanitizeAssistantPlainText(streamingReply)}
+                      </div>
                     </div>
                   )}
                 </>

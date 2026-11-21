@@ -6,6 +6,7 @@ import type {
   JarvisConversationEntry,
   JarvisDocumentItem,
   JarvisHeadMood,
+  JarvisMediaStateContext,
   JarvisMemoryState,
   JarvisModuleTab,
   JarvisSystemTelemetry,
@@ -164,10 +165,39 @@ function documentAttachmentMime(doc: JarvisDocumentItem): string {
   return 'text/plain';
 }
 
+export function sanitizeAssistantPlainText(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/```[\s\S]*$/g, ' ')
+    .replace(/<svg\b[\s\S]*?<\/svg>/gi, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+    .replace(/\$\$([\s\S]*?)\$\$/g, '$1')
+    .replace(/\$([^$\n]+)\$/g, '$1')
+    .replace(/\*\*([\s\S]*?)\*\*/g, '$1')
+    .replace(/__([\s\S]*?)__/g, '$1')
+    .replace(/(^|\s)\*([^*\n]+)\*(?=\s|$|[.,!?;:])/g, '$1$2')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s*[*•]\s+/gm, '- ')
+    .replace(/\*/g, '')
+    .replace(/\|/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function normalizeJarvisAction(act: any): JarvisActionPayload {
   const normalized: JarvisActionPayload = { ...act };
   if (normalized.type === 'open_module' && !normalized.moduleTab && act?.module) {
     normalized.moduleTab = act.module as JarvisModuleTab;
+  }
+  if (normalized.type === 'show_explanation') {
+    normalized.sections = Array.isArray(act?.sections) ? act.sections : [];
+  }
+  if (normalized.type === 'set_volume') {
+    if (typeof act?.volume === 'number') normalized.volume = act.volume;
+    if (typeof act?.delta === 'number') normalized.delta = act.delta;
   }
   return normalized;
 }
@@ -259,6 +289,7 @@ export async function askJarvisAssistantStream(
     alarms: JarvisAlarmItem[];
     weather?: JarvisWeatherInfo | null;
     telemetry?: JarvisSystemTelemetry | null;
+    mediaState?: JarvisMediaStateContext | null;
     documentAttachment?: JarvisDocumentItem | null;
     activeDocument?: JarvisDocumentItem | null;
   },
@@ -277,6 +308,7 @@ export async function askJarvisAssistantStream(
     alarms: params.alarms,
     weather: params.weather || null,
     telemetry: params.telemetry || null,
+    mediaState: params.mediaState || null,
     documentAttachment: params.documentAttachment
       ? {
           name: params.documentAttachment.name,
@@ -333,12 +365,18 @@ export async function askJarvisAssistantStream(
               rawAccum += evt.text;
               const parsed = parseStreamingJarvisTags(rawAccum);
               if (!speakEmitted && parsed.speakComplete && parsed.speak) {
-                speakEmitted = true;
-                callbacks?.onSpeakReady?.(parsed.speak);
+                const cleanSpeak = sanitizeAssistantPlainText(parsed.speak);
+                if (cleanSpeak) {
+                  speakEmitted = true;
+                  callbacks?.onSpeakReady?.(cleanSpeak);
+                }
               }
-              if (parsed.reply && parsed.reply !== lastPartialReply) {
-                lastPartialReply = parsed.reply;
-                callbacks?.onReplyPartial?.(parsed.reply);
+              if (parsed.reply) {
+                const cleanPartial = sanitizeAssistantPlainText(parsed.reply);
+                if (cleanPartial && cleanPartial !== lastPartialReply) {
+                  lastPartialReply = cleanPartial;
+                  callbacks?.onReplyPartial?.(cleanPartial);
+                }
               }
             } else if (evt.type === 'enriched_actions' && Array.isArray(evt.actions)) {
               enrichedActionsFromServer = evt.actions.map(normalizeJarvisAction);
@@ -360,17 +398,25 @@ export async function askJarvisAssistantStream(
           .replace(/<\/?JARVIS_REPLY>/gi, '')
           .trim();
 
-        const finalReply = finalParsed.reply || strippedFallback || finalParsed.speak || 'Feito.';
-        const finalSpeak = finalParsed.speak || finalReply;
-        if (!speakEmitted && finalSpeak) {
-          callbacks?.onSpeakReady?.(finalSpeak);
-        }
         const rawActions = enrichedActionsFromServer || finalParsed.actions;
-        const finalActions = maybeExtractSvgAction(params.prompt, finalReply, rawActions);
+        const finalActions = maybeExtractSvgAction(
+          params.prompt,
+          finalParsed.reply || strippedFallback,
+          rawActions
+        );
+        const cleanReply =
+          sanitizeAssistantPlainText(
+            finalParsed.reply || strippedFallback || finalParsed.speak
+          ) || 'Mostrei tudo no palco.';
+        const cleanSpeak = sanitizeAssistantPlainText(finalParsed.speak || cleanReply) || cleanReply;
+
+        if (!speakEmitted && cleanSpeak) {
+          callbacks?.onSpeakReady?.(cleanSpeak);
+        }
 
         return {
-          reply: finalReply,
-          voiceSummary: finalSpeak,
+          reply: cleanReply,
+          voiceSummary: cleanSpeak,
           mood: finalParsed.mood || 'speaking',
           actions: finalActions,
           modelUsed,
@@ -403,15 +449,20 @@ async function askJarvisAssistantFallbackJson(
     if (resp.ok) {
       const data = (await resp.json()) as JarvisAssistantResponse;
       if (data && typeof data.reply === 'string') {
-        const spoken = data.voiceSummary || data.reply;
+        const extractedActions = maybeExtractSvgAction(
+          prompt,
+          data.reply,
+          (data.actions || []).map(normalizeJarvisAction)
+        );
+        const cleanReply = sanitizeAssistantPlainText(data.reply) || 'Feito.';
+        const spoken =
+          sanitizeAssistantPlainText(data.voiceSummary || cleanReply) || cleanReply;
         callbacks?.onSpeakReady?.(spoken);
         return {
           ...data,
-          actions: maybeExtractSvgAction(
-            prompt,
-            data.reply,
-            (data.actions || []).map(normalizeJarvisAction)
-          ),
+          reply: cleanReply,
+          voiceSummary: spoken,
+          actions: extractedActions,
         };
       }
     }
@@ -439,6 +490,7 @@ export async function askJarvisAssistant(params: {
   alarms: JarvisAlarmItem[];
   weather?: JarvisWeatherInfo | null;
   telemetry?: JarvisSystemTelemetry | null;
+  mediaState?: JarvisMediaStateContext | null;
   documentAttachment?: JarvisDocumentItem | null;
   activeDocument?: JarvisDocumentItem | null;
 }): Promise<JarvisAssistantResponse> {

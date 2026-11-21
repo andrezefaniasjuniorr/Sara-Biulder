@@ -25,7 +25,11 @@ import type {
   VersionSnapshot,
   VoiceLevel,
 } from './types/builder';
-import type { JarvisModuleTab, WorkspaceMode } from './types/jarvis';
+import type {
+  JarvisMediaStateContext,
+  JarvisModuleTab,
+  WorkspaceMode,
+} from './types/jarvis';
 import { createStarterProject } from './utils/starterProject';
 import {
   askSaraBuilderStep,
@@ -335,6 +339,23 @@ export default function App() {
   const jarvisModuleRef = useRef<((tab: JarvisModuleTab) => void) | null>(null);
   const jarvisRepeatRef = useRef<(() => void) | null>(null);
   const jarvisContinueRef = useRef<(() => Promise<void>) | null>(null);
+  const jarvisMediaControlRef = useRef<{
+    pause: () => void;
+    resume: () => void;
+    close: () => void;
+    adjustVolume: (delta: number) => number;
+    closeStage: () => void;
+  } | null>(null);
+  const [jarvisMediaState, setJarvisMediaState] = useState<JarvisMediaStateContext>({
+    hasActiveMedia: false,
+    mediaKind: undefined,
+    isPaused: false,
+    volume: 80,
+    activeStageKind: undefined,
+  });
+  const handleJarvisStageStateChange = useCallback((state: JarvisMediaStateContext) => {
+    setJarvisMediaState(state);
+  }, []);
   const isSaraSpeakingRef = useRef(false);
   const startupGreetedRef = useRef(false);
 
@@ -390,6 +411,9 @@ export default function App() {
       availableProjects: projects.map((p) => p.name),
       isMissionActive: mission.active,
       isMissionPaused: mission.paused,
+      hasActiveMedia: jarvisMediaState.hasActiveMedia,
+      isMediaPaused: jarvisMediaState.isPaused,
+      hasActiveStage: Boolean(jarvisMediaState.activeStageKind),
     };
   }, [
     workspaceMode,
@@ -406,6 +430,7 @@ export default function App() {
     projects,
     mission.active,
     mission.paused,
+    jarvisMediaState,
   ]);
 
   // Saudação falada inicial da SARA ao ativar o sistema
@@ -2060,6 +2085,58 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      if (cmd.type === 'pause_music') {
+        jarvisMediaControlRef.current?.pause();
+        showToast('Reprodução pausada');
+        speakAsSara('Pausei a reprodução.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'resume_music') {
+        jarvisMediaControlRef.current?.resume();
+        showToast('Reprodução retomada');
+        speakAsSara('A continuar.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'close_music') {
+        jarvisMediaControlRef.current?.close();
+        showToast('Player fechado');
+        speakAsSara('Fechei o player.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'volume_up' || cmd.type === 'volume_down') {
+        const delta = cmd.type === 'volume_up' ? 20 : -20;
+        const nextVol = jarvisMediaControlRef.current?.adjustVolume(delta);
+        showToast(typeof nextVol === 'number' ? `Volume: ${nextVol}%` : 'Volume ajustado');
+        speakAsSara(
+          cmd.type === 'volume_up' ? 'Aumentei o volume.' : 'Baixei o volume.',
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+        return true;
+      }
+
+      if (cmd.type === 'close_stage') {
+        jarvisMediaControlRef.current?.closeStage();
+        showToast('Voltei ao centro');
+        speakAsSara('Voltei ao centro.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
       // 4. Conversa rápida em 2.º plano (apenas voz, ZERO balão de texto no chat)
       if (cmd.type === 'background_smalltalk') {
         setSaraSilenced(false);
@@ -2200,9 +2277,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
-      // 7. Controlo completo de ecrãs, editor, ficheiros, console, preview e ações (fala primeiro com naturalidade)
+      // 7. Controlo completo de ecrãs, editor, ficheiros, console, preview e ações (também acessível a partir do Modo 1)
       if (cmd.type === 'focus_file') {
-        speakAsSara(`A abrir o ficheiro ${cmd.filePath} no editor, Eletro-Júnior.`, voiceEnabledRef.current, {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
+        speakAsSara(`A abrir o ficheiro ${cmd.filePath} no editor.`, voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
         });
@@ -2220,6 +2301,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_editor') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('open_editor'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -2237,6 +2322,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_editor_fullscreen') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('open_editor_fullscreen'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -2254,6 +2343,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_files') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('open_files'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -2287,6 +2380,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_console') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('open_console'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -2304,6 +2401,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'show_preview') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('show_preview'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -2321,6 +2422,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_preview_fullscreen') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('open_preview_fullscreen'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -2338,6 +2443,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'preview_mobile') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('preview_mobile'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -2355,6 +2464,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'preview_tablet') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('preview_tablet'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -2372,6 +2485,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'preview_desktop') {
+        if (workspaceModeRef.current !== 'builder') {
+          setWorkspaceMode('builder');
+          workspaceModeRef.current = 'builder';
+        }
         speakAsSara(getPlatformCommandSpeech('preview_desktop'), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -3901,6 +4018,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           onSilenceSara={handleSilenceSara}
           onSwitchMode={handleChangeWorkspaceMode}
           onNotify={showToast}
+          onExecuteSystemCommand={executePlatformCommand}
+          onStageStateChange={handleJarvisStageStateChange}
+          externalMediaControlRef={jarvisMediaControlRef}
           externalCommandRef={jarvisPromptRef}
           externalFocusCommandRef={jarvisFocusRef}
           externalModuleRef={jarvisModuleRef}

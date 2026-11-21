@@ -61,6 +61,11 @@ export interface JarvisMathStep {
   explanation: string;
 }
 
+export interface JarvisExplanationSection {
+  heading: string;
+  body: string;
+}
+
 export type JarvisStageContent =
   | {
       id: string;
@@ -69,15 +74,32 @@ export type JarvisStageContent =
       subtitle?: string;
       svgCode: string;
       description?: string;
+      formulas?: string[];
+      steps?: JarvisMathStep[];
+      finalAnswer?: string;
     }
   | {
       id: string;
       kind: 'math';
       title: string;
       problem?: string;
+      svgCode?: string;
+      formulas?: string[];
       steps: JarvisMathStep[];
       finalAnswer: string;
       notes?: string;
+    }
+  | {
+      id: string;
+      kind: 'explanation';
+      title: string;
+      subtitle?: string;
+      summary: string;
+      visualSvg?: string;
+      formula?: string;
+      sections: JarvisExplanationSection[];
+      exampleTitle?: string;
+      exampleBody?: string;
     }
   | {
       id: string;
@@ -149,9 +171,15 @@ export interface JarvisActionPayload {
     | 'complete_task'
     | 'play_music'
     | 'play_video'
+    | 'pause_music'
+    | 'resume_music'
+    | 'close_media'
+    | 'set_volume'
+    | 'close_stage'
     | 'open_module'
     | 'show_svg'
     | 'show_math'
+    | 'show_explanation'
     | 'show_chart'
     | 'show_document'
     | 'show_html'
@@ -160,6 +188,7 @@ export interface JarvisActionPayload {
     | 'toggle_focus'
     | 'switch_mode';
   title?: string;
+  subtitle?: string;
   date?: string;
   time?: string;
   notes?: string;
@@ -171,12 +200,20 @@ export interface JarvisActionPayload {
   thumbnailUrl?: string;
   watchUrl?: string;
   durationText?: string;
+  delta?: number;
+  volume?: number;
   moduleTab?: JarvisModuleTab;
   svgCode?: string;
+  visualSvg?: string;
   description?: string;
   problem?: string;
+  formula?: string;
+  formulas?: string[];
   steps?: JarvisMathStep[];
   finalAnswer?: string;
+  sections?: JarvisExplanationSection[];
+  exampleTitle?: string;
+  exampleBody?: string;
   chartType?: 'bar' | 'line' | 'doughnut' | 'radar';
   labels?: string[];
   datasets?: Array<{ label: string; data: number[]; color?: string }>;
@@ -224,4 +261,14 @@ export interface JarvisSystemTelemetry {
   downlinkMbps: number | null;
   rttMs: number | null;
   timezone: string;
+}
+
+export interface JarvisMediaStateContext {
+  hasActiveMedia: boolean;
+  mediaKind?: 'music' | 'video';
+  mediaTitle?: string;
+  isPaused: boolean;
+  volume: number;
+  activeStageKind?: JarvisStageContent['kind'];
+  activeStageTitle?: string;
 }
