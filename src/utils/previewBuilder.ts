@@ -164,12 +164,26 @@ function processScriptsForPreview(files: ProjectFiles, scriptPaths: string[]): {
   };
 }
 
+export interface PreviewBuildOptions {
+  forDeploy?: boolean;
+  title?: string;
+}
+
+function escapeHtmlAttr(value: string): string {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 /**
- * Gera o documento HTML isolado (srcdoc) para o iframe de Preview ao Vivo,
+ * Gera o documento HTML isolado (srcdoc) para o iframe de Preview ao Vivo ou Deploy estático,
  * suportando estrutura dinâmica com múltiplas pastas e linguagens
  * (.html, .css, .js, .jsx, .ts, .tsx, .py, .json, .svg) + bibliotecas profissionais de gráficos & 3D.
  */
-export function buildPreviewSrcDoc(files: ProjectFiles): string {
+export function buildPreviewSrcDoc(files: ProjectFiles, options: PreviewBuildOptions = {}): string {
+  const { forDeploy = false, title = 'Projeto SARA BIULDER' } = options;
   const entries = Object.entries(files || {});
   const htmlEntry =
     files['index.html'] !== undefined
@@ -469,9 +483,9 @@ export function buildPreviewSrcDoc(files: ProjectFiles): string {
 </script>`
     : '';
 
-  const bridgeScript = `
-    (function() {
-      window.__SARA_PROJECT_FILES__ = ${JSON.stringify(projectDataMap).replace(/<\/script>/gi, '<\\/script>')};
+  const consoleForwarding = forDeploy
+    ? ''
+    : `
       const send = (level, args) => {
         try {
           const message = args.map((arg) => {
@@ -517,7 +531,29 @@ export function buildPreviewSrcDoc(files: ProjectFiles): string {
         } catch (err) {
           send('error', [err && err.message ? err.message : String(err)]);
         }
-      });
+      });`;
+
+  const bridgeScript = `
+    (function() {
+      window.__SARA_PROJECT_FILES__ = ${JSON.stringify(projectDataMap).replace(/<\/script>/gi, '<\\/script>')};
+      ${consoleForwarding}
+
+      // Fallback automático para qualquer <img> externa que falhe ao carregar
+      window.addEventListener('error', function(e) {
+        var target = e && e.target;
+        if (!target || target.tagName !== 'IMG') return;
+        if (target.dataset.saraImgFallback === 'done') return;
+        if (!target.dataset.saraImgFallback) {
+          target.dataset.saraImgFallback = 'picsum';
+          var seed = encodeURIComponent((target.alt || 'design').slice(0, 24) || 'modern');
+          target.src = 'https://picsum.photos/seed/' + seed + '/800/600';
+        } else {
+          target.dataset.saraImgFallback = 'done';
+          target.src = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs><rect width="800" height="600" fill="url(#g)"/></svg>'
+          );
+        }
+      }, true);
 
       function renderIcons() {
         if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -547,6 +583,7 @@ export function buildPreviewSrcDoc(files: ProjectFiles): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>${escapeHtmlAttr(title)}</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -576,4 +613,119 @@ export function buildPreviewSrcDoc(files: ProjectFiles): string {
   ${pythonRuntimeBlock}
 </body>
 </html>`;
+}
+
+/**
+ * Garante que o index.html exportado no Deploy (ZIP / GitHub / Cloudflare Pages)
+ * tenha EXATAMENTE o mesmo motor visual e dependências do Preview ao Vivo:
+ * - Se usar .jsx/.tsx/.ts/.py ou não tiver <!doctype>, gera o documento compilado completo.
+ * - Se for HTML/CSS/JS com <!doctype>, preserva a estrutura multi-ficheiro e injeta CDNs em falta + Lucide auto-init.
+ */
+export function ensureDeployableIndexHtml(files: ProjectFiles, projectTitle = 'Projeto SARA BIULDER'): string {
+  const entries = Object.entries(files || {});
+  const rawIndex = files['index.html'] || '';
+  const hasBabelFiles = entries.some(
+    ([p, c]) => /\.(jsx|tsx|ts)$/i.test(p) && !isBundlerConfigFile(p) && Boolean(c?.trim())
+  );
+  const hasPythonOnly =
+    entries.some(([p, c]) => p.toLowerCase().endsWith('.py') && Boolean(c?.trim())) && !rawIndex.trim();
+
+  if (hasBabelFiles || hasPythonOnly || !/<!doctype/i.test(rawIndex)) {
+    return buildPreviewSrcDoc(files, { forDeploy: true, title: projectTitle });
+  }
+
+  let html = rawIndex;
+  const headInjections: string[] = [];
+
+  if (!/charset=/i.test(html)) {
+    headInjections.unshift('<meta charset="UTF-8" />');
+  }
+  if (!/name=["']viewport["']/i.test(html)) {
+    headInjections.push('<meta name="viewport" content="width=device-width, initial-scale=1.0" />');
+  }
+  if (!/cdn\.tailwindcss\.com/i.test(html)) {
+    headInjections.push('<script src="https://cdn.tailwindcss.com"></script>');
+  }
+  if (!/fonts\.googleapis\.com/i.test(html)) {
+    headInjections.push(
+      '<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />'
+    );
+  }
+  if (!/unpkg\.com\/lucide/i.test(html)) {
+    headInjections.push('<script src="https://unpkg.com/lucide@latest"></script>');
+  }
+  if (!/chart\.js/i.test(html)) {
+    headInjections.push('<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>');
+  }
+
+  // Garante que todos os CSS do projeto estejam ligados
+  for (const [p, c] of entries) {
+    if (p.toLowerCase().endsWith('.css') && c?.trim()) {
+      const clean = p.replace(/^\/+/, '');
+      if (!html.includes(clean)) {
+        headInjections.push(`<link rel="stylesheet" href="./${clean}" />`);
+      }
+    }
+  }
+
+  if (headInjections.length > 0 && /<\/head>/i.test(html)) {
+    html = html.replace(/<\/head>/i, `  ${headInjections.join('\n  ')}\n</head>`);
+  }
+
+  // Garante inicialização automática do Lucide + fallback de imagens mesmo em HTML estático
+  const deployInitScript = `<script>
+(function() {
+  window.addEventListener('error', function(e) {
+    var t = e && e.target;
+    if (!t || t.tagName !== 'IMG' || t.dataset.saraImgFallback === 'done') return;
+    if (!t.dataset.saraImgFallback) {
+      t.dataset.saraImgFallback = 'picsum';
+      t.src = 'https://picsum.photos/seed/' + encodeURIComponent((t.alt || 'design').slice(0, 24) || 'modern') + '/800/600';
+    } else {
+      t.dataset.saraImgFallback = 'done';
+      t.src = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="600" viewBox="0 0 800 600"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#2563eb"/><stop offset="100%" stop-color="#7c3aed"/></linearGradient></defs><rect width="800" height="600" fill="url(#g)"/></svg>');
+    }
+  }, true);
+  function initIcons() {
+    if (window.lucide && typeof window.lucide.createIcons === 'function') {
+      try { window.lucide.createIcons(); } catch (e) {}
+    }
+  }
+  window.addEventListener('DOMContentLoaded', function() {
+    initIcons();
+    if (typeof MutationObserver !== 'undefined' && document.body) {
+      var timer = null;
+      new MutationObserver(function() {
+        clearTimeout(timer);
+        timer = setTimeout(initIcons, 60);
+      }).observe(document.body, { childList: true, subtree: true });
+    }
+  });
+})();
+</script>`;
+
+  const missingScripts: string[] = [];
+  const jsEntries = sortScriptFilesForExecution(
+    entries
+      .filter(([p, c]) => /\.(js|mjs)$/i.test(p) && !isBundlerConfigFile(p) && Boolean(c?.trim()))
+      .map(([p]) => p)
+  );
+  for (const jsPath of jsEntries) {
+    const clean = jsPath.replace(/^\/+/, '');
+    if (!html.includes(clean)) {
+      const usesEsm = /^\s*(import|export)\b/m.test(files[jsPath] || '');
+      missingScripts.push(
+        usesEsm
+          ? `<script type="module" src="./${clean}"></script>`
+          : `<script src="./${clean}"></script>`
+      );
+    }
+  }
+
+  const bodyAppend = [...missingScripts, ...(html.includes('lucide.createIcons') ? [] : [deployInitScript])].join('\n  ');
+  if (bodyAppend && /<\/body>/i.test(html)) {
+    html = html.replace(/<\/body>/i, `  ${bodyAppend}\n</body>`);
+  }
+
+  return html;
 }

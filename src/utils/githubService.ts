@@ -1,4 +1,5 @@
 import type { ProjectFiles } from '../types/builder';
+import { ensureDeployableIndexHtml } from './previewBuilder';
 import { buildStandaloneHtml } from './zipService';
 
 export function getSavedGitHubToken(): string {
@@ -61,13 +62,18 @@ export async function pushProjectToGitHub(params: {
   }
 
   const uploadMap: Record<string, string> = {};
+  let hasIndexHtml = false;
   for (const [key, content] of Object.entries(params.files || {})) {
     const cleanKey = key.replace(/^\/+/, '');
-    if (cleanKey === 'index.html' && !/<!doctype/i.test(content || '')) {
-      uploadMap[cleanKey] = buildStandaloneHtml(params.files, params.projectName);
+    if (cleanKey === 'index.html') {
+      hasIndexHtml = true;
+      uploadMap[cleanKey] = ensureDeployableIndexHtml(params.files, params.projectName);
     } else {
       uploadMap[cleanKey] = content || '';
     }
+  }
+  if (!hasIndexHtml) {
+    uploadMap['index.html'] = buildStandaloneHtml(params.files, params.projectName);
   }
   if (!uploadMap['README.md']) {
     uploadMap['README.md'] = `# ${params.projectName}\nCriado na SARA BIULDER por Eletro-Jr.`;

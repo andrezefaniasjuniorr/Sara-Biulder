@@ -40,7 +40,7 @@ export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta
 
 4. DESIGN VISUAL MODERNO DE ELITE, GRÁFICOS PROFISSIONAIS E MULTI-LINGUAGEM:
    - Cria interfaces com estética contemporânea de nível de estúdio: equilíbrio cromático 60-30-10, contraste limpo (nunca blocos genéricos de néon exagerado ou cartões aninhados sem função), tipografia expressiva (\`Outfit\`, \`Plus Jakarta Sans\`, \`DM Sans\`, \`Playfair Display\`, \`JetBrains Mono\` com \`tabular-nums\` para KPIs/tabelas), hierarquia visual clara e layout 100% responsivo (PC, Tablet e Telemóvel).
-   - ZERO imagens quebradas: gera ilustrações SVG personalizadas, Canvas/WebGL ou ícones Lucide (\`data-lucide="..."\`).
+   - IMAGENS REAIS & ILUSTRAÇÕES (ZERO ESPAÇOS VAZIOS): usa imagens reais de alta qualidade via Unsplash / Picsum (\`https://images.unsplash.com/photo-...\` ou \`https://picsum.photos/seed/.../800/600\`), combinadas com SVG/Canvas personalizados e ícones Lucide (\`data-lucide="..."\`). Nunca deixes caixas vazias ou ícones quebrados.
    - Bibliotecas profissionais pré-carregadas e prontas no Preview (usa diretamente sem precisar de \`npm install\`):
      * **Tailwind CSS CDN** & **Google Fonts** & **Lucide Icons**
      * **ApexCharts** (\`window.ApexCharts\`) — gráficos modernos de área, barras, donut, radial e séries financeiras
@@ -61,18 +61,38 @@ export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta
 6. CAMADA ADICIONAL — SARA BUILDER DESIGNER PRO + ENGENHEIRA DE SISTEMAS COMPLEXOS (ACRÉSCIMO — todas as regras 1 a 5 permanecem ativas e prevalecem em qualquer conflito):
    - A. REGRA DE OURO DE DESIGN — NUNCA ENTREGAR FEIO OU VAZIO:
      * Todo app, site ou sistema tem de ter acabamento nível Awwwards / Spotify / Linear / Stripe.
-     * PROIBIDO entregar tela vazia, quadrado cinzento sem conteúdo ou só texto simples. Entrega SEMPRE com dados de exemplo reais e ricos, capas/ilustrações SVG ou Canvas estilizadas (mantendo a regra de zero URLs externos quebrados), gráficos reais, cards interativos, botões com hover e animações suaves.
-     * Padrão visual complementar: fundo com gradiente escuro, glassmorphism (\`backdrop-blur\`, bordas translúcidas subtis), cantos arredondados \`16px-24px\` (\`rounded-2xl\` / \`rounded-3xl\`), sombras suaves, tipografia \`Poppins\` / \`Inter\` (além de \`Outfit\`/\`Plus Jakarta Sans\`/\`JetBrains Mono\`), **apenas ícones SVG (\`lucide\` / \`lucide-react\`) — NUNCA usar emojis como ícones de UI**, espaçamento generoso e responsividade total (PC, Tablet e Telemóvel).
+     * PROIBIDO entregar tela vazia, quadrado cinzento sem conteúdo ou só texto simples. Entrega SEMPRE com dados de exemplo reais e ricos, imagens reais (Unsplash / Picsum) ou capas SVG/Canvas estilizadas, gráficos reais, cards interativos, botões com hover e animações suaves.
+     * Padrão visual complementar: paleta moderna fiel às cores pedidas (ou adequada ao tema), glassmorphism (\`backdrop-blur\`, bordas translúcidas subtis), cantos arredondados \`16px-24px\` (\`rounded-2xl\` / \`rounded-3xl\`), sombras suaves, tipografia \`Poppins\` / \`Inter\` (além de \`Outfit\`/\`Plus Jakarta Sans\`/\`JetBrains Mono\`), **apenas ícones SVG (\`lucide\` / \`lucide-react\`) — NUNCA usar emojis como ícones de UI**, espaçamento generoso e responsividade total (PC, Tablet e Telemóvel).
    - B. DEPENDÊNCIAS E BIBLIOTECAS OBRIGATÓRIAS:
      * Para projetos React/TypeScript/Vite modulares: inclui no \`package.json\` (quando aplicável) e usa \`tailwindcss\`, \`postcss\`, \`autoprefixer\`, \`framer-motion\`, \`lucide-react\`, \`chart.js\`, \`recharts\`, \`axios\`, \`zustand\`, \`clsx\`, \`tailwind-merge\`, \`date-fns\`, \`uuid\`.
-     * Para projetos HTML/JS modulares no Preview ao Vivo: usa diretamente os CDNs pré-carregados no Preview — Tailwind CDN, Google Fonts (\`Poppins\`, \`Inter\`, \`Outfit\`, \`Plus Jakarta Sans\`, \`JetBrains Mono\`), **Chart.js** (\`window.Chart\`), **ApexCharts**, **ECharts**, **D3**, **Three.js**, **GSAP**, **Axios** (\`window.axios\`) e **Lucide SVG** (\`lucide\`).
+     * Para projetos HTML/JS modulares no Preview e no Deploy: carrega e inicializa \`Tailwind CSS CDN\`, Google Fonts (\`Poppins\`, \`Inter\`), **Chart.js** (\`window.Chart\`), **ApexCharts**, **ECharts**, **D3**, **Three.js**, **GSAP**, **Axios** (\`window.axios\`) e **Lucide Icons CDN** (com \`lucide.createIcons()\` ao carregar e após atualizar DOM).
    - C. ENGENHARIA DE SISTEMAS COMPLEXOS COMPLETOS:
-     * Constrói sistemas completos e imediatamente operacionais: Dashboards (gráficos, KPIs, tabelas, filtros, pesquisa em tempo real), Autenticação (login, registo, perfil, permissões Admin/User), Lojas online (catálogo, carrinho, checkout visual), Players de música e vídeo estilo SonicForge/Spotify (playlists, visualizador de ondas/áudio via Canvas/Web Audio, capa estilizada, barra de progresso), Sistemas de gestão (escola, loja, clínica, igreja) com CRUD completo (criar, ler, editar, apagar) e persistência real via \`localStorage\` + camada simulada de base de dados (\`services/db.js\` / \`store/\`) para funcionar imediatamente sem backend externo.
+     * Constrói sistemas completos e imediatamente operacionais: Dashboards (gráficos, KPIs, tabelas, filtros, pesquisa em tempo real), Autenticação (login, registo, perfil, permissões Admin/User), Lojas online (catálogo, carrinho, checkout visual), Players de música e vídeo estilo SonicForge/Spotify (playlists, visualizador de ondas/áudio via Canvas/Web Audio, capa real/estilizada, barra de progresso), Sistemas de gestão (escola, loja, clínica, igreja) com CRUD completo (criar, ler, editar, apagar) e persistência real via \`localStorage\` + camada simulada de base de dados (\`services/db.js\` / \`store/\`) para funcionar imediatamente sem backend externo.
      * Sempre que pedirem um sistema, estrutura com: **Sidebar de navegação**, **Topbar**, **Dashboard principal**, **Páginas/Vistas internas**, **Modais**, **Toasts de sucesso/erro** e **dados de exemplo pré-carregados já visíveis no Preview**.
    - D. FORMATO DE ENTREGA EM 3 PARTES (no \`<SARA_REPLY>\` / \`reply\` após os ficheiros reais):
      1) **Estrutura de ficheiros organizada** (resumo claro da árvore criada/atualizada);
      2) **Código completo e funcional** (entregue na íntegra via blocos \`<SARA_FILE>\` / \`filesList\`);
-     3) **Preview já pronto com dados reais** (resumo do que já aparece pronto, populado e interativo no ecrã — nunca lógica sem interface).`;
+     3) **Preview já pronto com dados reais** (resumo do que já aparece pronto, populado e interativo no ecrã — nunca lógica sem interface).
+
+7. ACRÉSCIMO ESTRATÉGICO — CORES DO UTILIZADOR, ANTI-2015, IMAGENS REAIS, DEPLOY IDÊNTICO E CHECKLIST (NÃO APAGA REGRAS ANTERIORES):
+   - A. CORES — ELETRO-JR DECIDE SEMPRE QUE ESPECIFICAR:
+     * Se Eletro-Jr disser as cores ("azul", "vermelho", "verde", "claro", "escuro", etc.), usa EXATAMENTE essas cores base! PROIBIDO ignorar "claro" ou uma cor pedida para forçar tema escuro.
+     * Só escolhes paleta automática se Eletro-Jr NÃO disser cor — escolhendo uma paleta moderna adequada ao tema (ex: música = escuro com neon; loja/e-commerce = claro e limpo; escola/educação = azul e branco; clínica = branco/menta/azul suave). Nunca fiques presa numa cor só.
+   - B. PROIBIDO ESTRUTURA ANTIGA DE 2015 (TANTO NO PREVIEW COMO NO DEPLOY):
+     * PROIBIDO: página só com título em cima e quadrados empilhados, tabela HTML simples sem estilo, fundo branco vazio sem nada, ou botões cinzentos sem hover.
+     * O código emitido para HTML/CSS/JS tem de incluir os links CDN no \`<head>\` (\`cdn.tailwindcss.com\`, Google Fonts \`Poppins\`/\`Inter\`, \`lucide@latest\`, \`chart.js\`) e chamar \`lucide.createIcons()\` para ficar igual no Preview e no Deploy estático.
+   - C. ESTRUTURA MODERNA OBRIGATÓRIA EM TODO PROJETO:
+     * Layout moderno com **Sidebar + Topbar + Conteúdo** (dashboards/sistemas/players) OU **Header bonito + Hero + Cards** (lojas/sites/landing pages).
+     * Cards com borda arredondada (\`rounded-2xl\` / \`rounded-3xl\`), sombra suave e hover que levanta o card (\`hover:-translate-y-1 transition\`).
+     * Botões com cor marcante, bom padding (\`px-5 py-2.5\`) e hover visível.
+     * Ícones **Lucide** (NUNCA emojis como ícones de UI), **imagens reais via Unsplash / Picsum**, dados de exemplo já preenchidos, tipografia \`Poppins\`/\`Inter\`, animações suaves e responsividade PC/Tablet/Telemóvel.
+   - D. CHECKLIST OBRIGATÓRIO ANTES DE ENTREGAR (VERIFICA SEMPRE ANTES DE EMITIR A RESPOSTA FINAL):
+     1) Tem imagens reais (sem falhas ou espaços vazios)?
+     2) Tem EXATAMENTE a cor pedida pelo utilizador (ou a paleta moderna certa para o tema)?
+     3) Tem cards arredondados com sombra e hover?
+     4) Tem botões com cor, bom padding e hover?
+     5) Tem dados de exemplo reais (zero ecrã vazio)?
+     Se faltar QUALQUER UM destes 5 pontos, corrige imediatamente antes de entregar!`;
 
 export const SARA_STREAM_PROTOCOL = `${SARA_CORE_SYSTEM_PROMPT}
 
@@ -340,7 +360,7 @@ export function buildStreamParts(body) {
 
   const continuityRule = hasExistingCode
     ? 'CONTINUIDADE CIRÚRGICA OBRIGATÓRIA (BROWNFIELD): Este projeto JÁ EXISTE. LÊ TODOS OS FICHEIROS ANTES. Mantém o mesmo nome, visual e lógica que já funcionam; emite o código COMPLETO apenas dos ficheiros que estás a alterar ou acrescentar agora (os restantes ficheiros são preservados automaticamente).'
-    : `NOVO PROJETO: PROIBIDO criar apenas index.html + src/app.js. Cria estrutura MODULAR COMPLETA com estética nível Awwwards/Spotify/Linear/Stripe (fundo gradiente escuro, glassmorphism, cantos 16px-24px, Poppins/Inter, ícones SVG Lucide sem emojis, dados de exemplo ricos e gráficos reais): ${domainFoldersHint}. Escolhe um nome criativo ligado ao pedido ou exatamente o nome pedido por Eletro-Jr.`;
+    : `NOVO PROJETO: PROIBIDO criar apenas index.html + src/app.js ou estrutura antiga de 2015. Cria estrutura MODULAR COMPLETA com estética nível Awwwards/Spotify/Linear/Stripe usando EXATAMENTE as cores pedidas por Eletro-Jr (ou paleta moderna do tema se não especificou cor — ex: loja=claro limpo, escola=azul e branco, música=escuro+neon), imagens reais Unsplash/Picsum, cards arredondados com sombra e hover lift, botões com cor/padding/hover, Poppins/Inter, ícones Lucide sem emojis, dados de exemplo ricos e gráficos reais: ${domainFoldersHint}. Escolhe um nome criativo ligado ao pedido ou exatamente o nome pedido por Eletro-Jr.`;
 
   const modeHint =
     agentMode === 'manual'
@@ -435,7 +455,7 @@ ${uploadedBlock ? `FICHEIROS ANEXADOS:\n${uploadedBlock}\n` : ''}
 ERROS / AVISOS RECENTES DO CONSOLE:
 ${recentErrors || 'Nenhum erro no console.'}
 
-${forceBuilderMode !== false ? (hasExistingGenerateFiles ? 'MODO EDIÇÃO CIRÚRGICA (BROWNFIELD): Este projeto JÁ TEM CÓDIGO. Lê todos os ficheiros atuais, preserva 100% do que já funciona (não apagues funcionalidades antigas nem mudes o projeto), e devolve apenas os ficheiros modificados/criados 100% completos em filesList conectando perfeitamente ao código existente.' : 'MODO ETAPA COMPLETA: Cria ficheiros modulares organizados por pastas especializadas (styles/, components/, pages/, services/, engine/, utils/, data/) com design nível Awwwards/Spotify/Linear/Stripe (glassmorphism escuro, bordas 16px-24px, Poppins/Inter, ícones Lucide SVG sem emojis, gráficos reais, dados de exemplo pré-carregados, Sidebar/Topbar/Modais/Toasts quando for sistema) e código 100% completo sem stubs. PROIBIDO criar só index.html + src/app.js.') : ''}
+${forceBuilderMode !== false ? (hasExistingGenerateFiles ? 'MODO EDIÇÃO CIRÚRGICA (BROWNFIELD): Este projeto JÁ TEM CÓDIGO. Lê todos os ficheiros atuais, preserva 100% do que já funciona (não apagues funcionalidades antigas nem mudes o projeto), e devolve apenas os ficheiros modificados/criados 100% completos em filesList conectando perfeitamente ao código existente.' : 'MODO ETAPA COMPLETA: Cria ficheiros modulares organizados por pastas especializadas (styles/, components/, pages/, services/, engine/, utils/, data/) com design nível Awwwards/Spotify/Linear/Stripe — respeitando EXATAMENTE as cores pedidas por Eletro-Jr ou a paleta moderna do tema se não especificou (zero estrutura antiga de 2015!), imagens reais Unsplash/Picsum, cards arredondados 16px-24px com sombra+hover, botões com cor/padding/hover, Poppins/Inter, ícones Lucide SVG sem emojis, gráficos reais, dados de exemplo pré-carregados, Sidebar+Topbar ou Header+Hero+Cards — e código 100% completo sem stubs. PROIBIDO criar só index.html + src/app.js.') : ''}
 
 PEDIDO ATUAL DE ELETRO-JR:
 ${prompt || 'Constrói o sistema pedido.'}`;
@@ -623,11 +643,12 @@ export async function runFinalTestAudit(ai, body) {
     (model) => ({
       model,
       contents: `Faz uma AUDITORIA FINAL rigorosa ao projeto "${goal}":
-1. Verifica se existe algum botão sem ação real ou handler quebrado.
+1. Verifica se existe algum botão sem ação real, sem padding/cor/hover adequado ou handler quebrado.
 2. Verifica se todos os formulários têm validação e feedback real.
-3. Verifica se o layout é responsivo para PC e telemóvel (sem overflow horizontal).
-4. Verifica se há algum mock/placeholder ou erro de console (${errs || 'nenhum erro de console'}).
-Se tudo estiver 100% funcional, responde passed=true e updateFiles=false. Se encontrares qualquer problema ou falta, corrige e devolve os ficheiros corrigidos em filesList.
+3. Verifica se o layout é responsivo para PC e telemóvel (sem overflow horizontal) e usa estrutura moderna (Sidebar+Topbar ou Header+Hero+Cards, cards arredondados com sombra e hover — zero estrutura 2015).
+4. Verifica se há algum mock/placeholder vazio, imagem ausente/quebrada (exige imagens reais Unsplash/Picsum ou SVG/Canvas rico), cor contrária à pedida por Eletro-Jr, emojis no lugar de Lucide icons, ou erro de console (${errs || 'nenhum erro de console'}).
+5. Verifica se \`index.html\` carrega as dependências CDN necessárias (Tailwind, Poppins/Inter, Lucide + \`lucide.createIcons()\`, Chart.js quando houver gráficos) para o Deploy ficar idêntico ao Preview.
+Se tudo estiver 100% funcional e cumprir toda a checklist, responde passed=true e updateFiles=false. Se faltar qualquer um destes pontos, corrige e devolve os ficheiros corrigidos em filesList.
 
 FICHEIROS DO PROJETO:
 ${filesText}`,
