@@ -28,6 +28,89 @@ function sortScriptFilesForExecution(paths: string[]): string[] {
   return [...paths].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
 }
 
+function isBundlerConfigFile(path: string): boolean {
+  return /(^|\/)(tailwind|postcss|vite|eslint|vitest|jest|prettier)\.config\.(js|ts|mjs|cjs)$/i.test(path);
+}
+
+function parsePackageImportsAndStrip(
+  code: string,
+  declaredBindings: Set<string>
+): { transformed: string; detectedPkgImport: boolean } {
+  const pkgMap: Record<string, string> = {
+    react: '__saraMods.react',
+    'react-dom': '__saraMods.reactDom',
+    'react-dom/client': '__saraMods.reactDom',
+    'lucide-react': '__saraMods.lucideReact',
+    'framer-motion': '__saraMods.framerMotion',
+    recharts: '__saraMods.recharts',
+    zustand: '__saraMods.zustand',
+    'zustand/middleware': '__saraMods.zustandMiddleware',
+    axios: '__saraMods.axios',
+    clsx: '__saraMods.clsx',
+    'tailwind-merge': '__saraMods.tailwindMerge',
+    'date-fns': '__saraMods.dateFns',
+    uuid: '__saraMods.uuid',
+    'chart.js': '__saraMods.chartJs',
+    'chart.js/auto': '__saraMods.chartJs',
+  };
+
+  let detectedPkgImport = false;
+  const knownPkgsPattern = Object.keys(pkgMap)
+    .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('|');
+
+  const pkgImportRegex = new RegExp(
+    `(?:^|(?<=[;\\n]))[ \\t]*import[ \\t]+(?:type[ \\t]+)?(\\*\\s+as\\s+\\w+|\\w+\\s*,\\s*\\{[^}]+\\}|\\{[^}]+\\}|\\w+)[ \\t]+from[ \\t]+['"](${knownPkgsPattern})['"]`,
+    'gm'
+  );
+
+  let transformed = code.replace(pkgImportRegex, (_full, specRaw, pkgName) => {
+    detectedPkgImport = true;
+    const modExpr = pkgMap[pkgName];
+    const spec = String(specRaw || '').trim();
+    if (!modExpr || !spec) return '';
+
+    const decls: string[] = [];
+    const safeBind = (localName: string, accessor: string) => {
+      const cleanLocal = localName.trim();
+      if (!cleanLocal || declaredBindings.has(cleanLocal)) return;
+      declaredBindings.add(cleanLocal);
+      decls.push(`var ${cleanLocal} = ${accessor};`);
+    };
+
+    const braceStart = spec.indexOf('{');
+    const braceEnd = spec.lastIndexOf('}');
+    if (braceStart !== -1 && braceEnd > braceStart) {
+      const beforeBrace = spec.slice(0, braceStart).replace(/,\s*$/, '').trim();
+      if (beforeBrace && !beforeBrace.startsWith('*')) {
+        safeBind(beforeBrace, `(${modExpr}.default || ${modExpr})`);
+      }
+      const inner = spec.slice(braceStart + 1, braceEnd);
+      for (const part of inner.split(',')) {
+        const cleanPart = part.replace(/^type\s+/, '').trim();
+        if (!cleanPart) continue;
+        const asMatch = cleanPart.match(/^(\w+)\s+as\s+(\w+)$/);
+        if (asMatch) {
+          safeBind(asMatch[2], `${modExpr}.${asMatch[1]}`);
+        } else {
+          safeBind(cleanPart, `${modExpr}.${cleanPart}`);
+        }
+      }
+    } else if (spec.startsWith('* as ')) {
+      const alias = spec.replace(/^\*\s+as\s+/, '').trim();
+      safeBind(alias, modExpr);
+    } else {
+      safeBind(spec, `(${modExpr}.default || ${modExpr})`);
+    }
+
+    return decls.join(' ');
+  });
+
+  transformed = transformed.replace(/^\s*import\s+['"][^'"]+\.(?:css|scss|less)['"];?\s*$/gm, '');
+
+  return { transformed, detectedPkgImport };
+}
+
 function processScriptsForPreview(files: ProjectFiles, scriptPaths: string[]): {
   externalImports: string[];
   bodyJs: string;
@@ -35,8 +118,9 @@ function processScriptsForPreview(files: ProjectFiles, scriptPaths: string[]): {
 } {
   const externalImports: string[] = [];
   const seenImports = new Set<string>();
+  const declaredBindings = new Set<string>();
   const chunks: string[] = [];
-  const usesBabel = scriptPaths.some((p) => /\.(jsx|tsx|ts)$/i.test(p));
+  let usesBabel = scriptPaths.some((p) => /\.(jsx|tsx|ts)$/i.test(p));
 
   for (const filePath of scriptPaths) {
     let code = files[filePath] || '';
@@ -53,10 +137,16 @@ function processScriptsForPreview(files: ProjectFiles, scriptPaths: string[]): {
       }
     );
 
+    const pkgResult = parsePackageImportsAndStrip(code, declaredBindings);
+    code = pkgResult.transformed;
+    if (pkgResult.detectedPkgImport) {
+      usesBabel = true;
+    }
+
     // Remove importações locais relativas ou absolutas entre pastas e declarações export
     code = code
-      .replace(/^\s*import\s+(?:type\s+)?[\s\S]*?\sfrom\s+['"](?:\.\.?\/|\/|@\/)[^'"]+['"];?[ \t]*/gm, '')
-      .replace(/^\s*import\s+['"](?:\.\.?\/|\/|@\/)[^'"]+['"];?[ \t]*/gm, '')
+      .replace(/^\s*import\s+(?:type\s+)?[\s\S]*?\sfrom\s+['"](?:\.\.?\/|\/|@\/|src\/)[^'"]+['"];?[ \t]*/gm, '')
+      .replace(/^\s*import\s+['"](?:\.\.?\/|\/|@\/|src\/)[^'"]+['"];?[ \t]*/gm, '')
       .replace(/^\s*export\s+\{[^}]*\};?[ \t]*/gm, '')
       .replace(/^\s*export\s+default\s+/gm, '')
       .replace(/^\s*export\s+(?=(async\s+)?function|const|let|var|class|interface|type|enum)/gm, '');
@@ -95,7 +185,9 @@ export function buildPreviewSrcDoc(files: ProjectFiles): string {
     entries
       .filter(
         ([p, content]) =>
-          /\.(js|jsx|ts|tsx|mjs)$/i.test(p) && Boolean(content?.trim())
+          /\.(js|jsx|ts|tsx|mjs)$/i.test(p) &&
+          !isBundlerConfigFile(p) &&
+          Boolean(content?.trim())
       )
       .map(([p]) => p)
   );
@@ -148,7 +240,7 @@ export function buildPreviewSrcDoc(files: ProjectFiles): string {
     if (headMatch) {
       const headInner = headMatch[1];
       const isAlreadyIncluded = (tag: string) =>
-        /cdn\.tailwindcss\.com|unpkg\.com\/lucide|chart\.js|apexcharts|echarts|d3js\.org|d3@|three(?:\.min)?\.js|gsap|fonts\.googleapis\.com/i.test(
+        /cdn\.tailwindcss\.com|unpkg\.com\/lucide|chart\.js|apexcharts|echarts|d3js\.org|d3@|three(?:\.min)?\.js|gsap|axios|fonts\.googleapis\.com/i.test(
           tag
         );
       const externalLinks = (
@@ -201,11 +293,142 @@ export function buildPreviewSrcDoc(files: ProjectFiles): string {
       : `<script>\ntry {\n${bodyJs}\n} catch (err) {\n  console.error('Erro de execução:', err && err.message ? err.message : err);\n}\n</script>`
     : '';
 
+  const reactRuntimeShims = usesBabel
+    ? `<script>
+  (function() {
+    var R = window.React || {};
+    var RD = window.ReactDOM || {};
+    function clsxFn() {
+      var out = [];
+      for (var i = 0; i < arguments.length; i++) {
+        var arg = arguments[i];
+        if (!arg) continue;
+        if (typeof arg === 'string' || typeof arg === 'number') out.push(String(arg));
+        else if (Array.isArray(arg)) { var sub = clsxFn.apply(null, arg); if (sub) out.push(sub); }
+        else if (typeof arg === 'object') {
+          for (var k in arg) { if (Object.prototype.hasOwnProperty.call(arg, k) && arg[k]) out.push(k); }
+        }
+      }
+      return out.join(' ');
+    }
+    var motionStrip = { initial: 1, animate: 1, exit: 1, transition: 1, whileHover: 1, whileTap: 1, whileInView: 1, viewport: 1, variants: 1, layout: 1, layoutId: 1 };
+    var motionProxy = new Proxy({}, {
+      get: function(_t, tag) {
+        return function MotionEl(props) {
+          var clean = {};
+          for (var k in (props || {})) { if (!motionStrip[k]) clean[k] = props[k]; }
+          return R.createElement(String(tag), clean, props && props.children);
+        };
+      }
+    });
+    var lucideProxy = new Proxy({}, {
+      get: function(_t, name) {
+        var iconKey = String(name);
+        return function LucideIcon(props) {
+          var p = props || {};
+          var size = p.size || 18;
+          var strokeWidth = p.strokeWidth || 2;
+          var cls = ('lucide inline-block shrink-0 ' + (p.className || '')).trim();
+          var iconsMap = (window.lucide && window.lucide.icons) || {};
+          var def = iconsMap[iconKey] || iconsMap.Sparkles || iconsMap.Circle;
+          var children = Array.isArray(def)
+            ? def.map(function(node, idx) {
+                var tag = Array.isArray(node) ? node[0] : 'path';
+                var attrs = Array.isArray(node) && node[1] ? Object.assign({ key: idx }, node[1]) : { key: idx };
+                return R.createElement(tag, attrs);
+              })
+            : [R.createElement('circle', { key: 0, cx: 12, cy: 12, r: 9 })];
+          return R.createElement('svg', {
+            xmlns: 'http://www.w3.org/2000/svg',
+            width: size,
+            height: size,
+            viewBox: '0 0 24 24',
+            fill: 'none',
+            stroke: p.color || 'currentColor',
+            strokeWidth: strokeWidth,
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+            className: cls,
+            style: p.style
+          }, children);
+        };
+      }
+    });
+    var createZustand = function(initializer) {
+      var state = {};
+      var listeners = new Set();
+      var setState = function(partial, replace) {
+        var next = typeof partial === 'function' ? partial(state) : partial;
+        if (next !== state) {
+          state = replace ? next : Object.assign({}, state, next);
+          listeners.forEach(function(fn) { fn(state); });
+        }
+      };
+      var getState = function() { return state; };
+      state = initializer(setState, getState, { setState: setState, getState: getState });
+      return function useStore(selector) {
+        var tick = R.useState(0)[1];
+        R.useEffect(function() {
+          var fn = function() { tick(function(n) { return n + 1; }); };
+          listeners.add(fn);
+          return function() { listeners.delete(fn); };
+        }, []);
+        return typeof selector === 'function' ? selector(state) : state;
+      };
+    };
+    var pad2 = function(n) { return String(n).padStart(2, '0'); };
+    var formatDateFns = function(d, fmt) {
+      var dt = d instanceof Date ? d : new Date(d);
+      if (isNaN(dt.getTime())) return '';
+      var out = String(fmt || 'yyyy-MM-dd');
+      return out
+        .replace(/yyyy/g, String(dt.getFullYear()))
+        .replace(/MM/g, pad2(dt.getMonth() + 1))
+        .replace(/dd/g, pad2(dt.getDate()))
+        .replace(/HH/g, pad2(dt.getHours()))
+        .replace(/mm/g, pad2(dt.getMinutes()))
+        .replace(/ss/g, pad2(dt.getSeconds()));
+    };
+    var uuidV4 = function() {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = (Math.random() * 16) | 0;
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+      });
+    };
+    var rechartsStub = new Proxy({}, {
+      get: function(_t, comp) {
+        if (comp === 'ResponsiveContainer') {
+          return function RC(p) { return R.createElement('div', { className: p && p.className, style: { width: (p && p.width) || '100%', height: (p && p.height) || 260 } }, p && p.children); };
+        }
+        return function ChartBox(p) { return R.createElement('div', { className: 'sara-rechart-slot ' + ((p && p.className) || '') }, p && p.children); };
+      }
+    });
+    window.__saraMods = {
+      react: Object.assign({ default: R }, R),
+      reactDom: Object.assign({ default: RD }, RD),
+      lucideReact: lucideProxy,
+      framerMotion: { motion: motionProxy, AnimatePresence: function AP(p) { return p && p.children ? p.children : null; } },
+      recharts: rechartsStub,
+      zustand: { default: createZustand, create: createZustand },
+      zustandMiddleware: { persist: function(fn) { return fn; } },
+      axios: window.axios || {},
+      clsx: Object.assign(clsxFn, { default: clsxFn, clsx: clsxFn }),
+      tailwindMerge: { twMerge: clsxFn },
+      dateFns: { format: formatDateFns, formatDistanceToNow: function() { return 'agora mesmo'; }, addDays: function(d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; }, subDays: function(d, n) { var x = new Date(d); x.setDate(x.getDate() - n); return x; } },
+      uuid: { v4: uuidV4 },
+      chartJs: window.Chart || {}
+    };
+  })();
+</script>`
+    : '';
+
   const optionalBabelScripts = usesBabel
     ? `
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>`
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  ${reactRuntimeShims}`
     : '';
 
   const optionalMermaidScript = usesMermaid
@@ -327,20 +550,21 @@ export function buildPreviewSrcDoc(files: ProjectFiles): string {
   <script src="https://cdn.tailwindcss.com"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@500;600;700;800&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   ${optionalMermaidScript}
   ${optionalBabelScripts}
   ${extraHeadTags}
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+    body { margin: 0; font-family: 'Poppins', 'Inter', 'Plus Jakarta Sans', system-ui, sans-serif; }
     .tabular-nums { font-variant-numeric: tabular-nums; }
     ${combinedCss}
   </style>

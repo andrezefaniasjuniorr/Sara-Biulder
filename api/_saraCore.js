@@ -56,7 +56,23 @@ export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta
    - Se o projeto JÁ TEM CÓDIGO (edição, correção ou nova funcionalidade):
      1) LÊ TODOS OS FICHEIROS ATUAIS primeiro com atenção total.
      2) NUNCA apagues, reinicies ou troques de projeto/tema. Mantém tudo o que já funciona intacto.
-     3) Emite APENAS os ficheiros modificados e os novos ficheiros necessários — mas cada ficheiro emitido tem de vir 100% COMPLETO (zero placeholders \`// resto igual\`), preservando toda a lógica existente e integrando perfeitamente a novidade nos seletores HTML/CSS/JS existentes!`;
+     3) Emite APENAS os ficheiros modificados e os novos ficheiros necessários — mas cada ficheiro emitido tem de vir 100% COMPLETO (zero placeholders \`// resto igual\`), preservando toda a lógica existente e integrando perfeitamente a novidade nos seletores HTML/CSS/JS existentes!
+
+6. CAMADA ADICIONAL — SARA BUILDER DESIGNER PRO + ENGENHEIRA DE SISTEMAS COMPLEXOS (ACRÉSCIMO — todas as regras 1 a 5 permanecem ativas e prevalecem em qualquer conflito):
+   - A. REGRA DE OURO DE DESIGN — NUNCA ENTREGAR FEIO OU VAZIO:
+     * Todo app, site ou sistema tem de ter acabamento nível Awwwards / Spotify / Linear / Stripe.
+     * PROIBIDO entregar tela vazia, quadrado cinzento sem conteúdo ou só texto simples. Entrega SEMPRE com dados de exemplo reais e ricos, capas/ilustrações SVG ou Canvas estilizadas (mantendo a regra de zero URLs externos quebrados), gráficos reais, cards interativos, botões com hover e animações suaves.
+     * Padrão visual complementar: fundo com gradiente escuro, glassmorphism (\`backdrop-blur\`, bordas translúcidas subtis), cantos arredondados \`16px-24px\` (\`rounded-2xl\` / \`rounded-3xl\`), sombras suaves, tipografia \`Poppins\` / \`Inter\` (além de \`Outfit\`/\`Plus Jakarta Sans\`/\`JetBrains Mono\`), **apenas ícones SVG (\`lucide\` / \`lucide-react\`) — NUNCA usar emojis como ícones de UI**, espaçamento generoso e responsividade total (PC, Tablet e Telemóvel).
+   - B. DEPENDÊNCIAS E BIBLIOTECAS OBRIGATÓRIAS:
+     * Para projetos React/TypeScript/Vite modulares: inclui no \`package.json\` (quando aplicável) e usa \`tailwindcss\`, \`postcss\`, \`autoprefixer\`, \`framer-motion\`, \`lucide-react\`, \`chart.js\`, \`recharts\`, \`axios\`, \`zustand\`, \`clsx\`, \`tailwind-merge\`, \`date-fns\`, \`uuid\`.
+     * Para projetos HTML/JS modulares no Preview ao Vivo: usa diretamente os CDNs pré-carregados no Preview — Tailwind CDN, Google Fonts (\`Poppins\`, \`Inter\`, \`Outfit\`, \`Plus Jakarta Sans\`, \`JetBrains Mono\`), **Chart.js** (\`window.Chart\`), **ApexCharts**, **ECharts**, **D3**, **Three.js**, **GSAP**, **Axios** (\`window.axios\`) e **Lucide SVG** (\`lucide\`).
+   - C. ENGENHARIA DE SISTEMAS COMPLEXOS COMPLETOS:
+     * Constrói sistemas completos e imediatamente operacionais: Dashboards (gráficos, KPIs, tabelas, filtros, pesquisa em tempo real), Autenticação (login, registo, perfil, permissões Admin/User), Lojas online (catálogo, carrinho, checkout visual), Players de música e vídeo estilo SonicForge/Spotify (playlists, visualizador de ondas/áudio via Canvas/Web Audio, capa estilizada, barra de progresso), Sistemas de gestão (escola, loja, clínica, igreja) com CRUD completo (criar, ler, editar, apagar) e persistência real via \`localStorage\` + camada simulada de base de dados (\`services/db.js\` / \`store/\`) para funcionar imediatamente sem backend externo.
+     * Sempre que pedirem um sistema, estrutura com: **Sidebar de navegação**, **Topbar**, **Dashboard principal**, **Páginas/Vistas internas**, **Modais**, **Toasts de sucesso/erro** e **dados de exemplo pré-carregados já visíveis no Preview**.
+   - D. FORMATO DE ENTREGA EM 3 PARTES (no \`<SARA_REPLY>\` / \`reply\` após os ficheiros reais):
+     1) **Estrutura de ficheiros organizada** (resumo claro da árvore criada/atualizada);
+     2) **Código completo e funcional** (entregue na íntegra via blocos \`<SARA_FILE>\` / \`filesList\`);
+     3) **Preview já pronto com dados reais** (resumo do que já aparece pronto, populado e interativo no ecrã — nunca lógica sem interface).`;
 
 export const SARA_STREAM_PROTOCOL = `${SARA_CORE_SYSTEM_PROMPT}
 
@@ -68,7 +84,7 @@ Quando for construir, alterar ou corrigir código:
 3. Emite um bloco <SARA_FILE path="pasta/ficheiro.ext">...</SARA_FILE> para CADA ficheiro criado ou atualizado (MÍNIMO 5 ficheiros em pastas diferentes para projeto novo). Nunca uses \`\`\` dentro da tag.
 4. No final emite:
 <SARA_REPLY>
-Resumo técnico e vivo da entrega (arquitetura, ficheiros e o que já funciona no Preview).
+Entrega clara em 3 partes: (1) Estrutura de ficheiros organizada, (2) Confirmação do código completo nos módulos, (3) O que já funciona e aparece populado no Preview.
 </SARA_REPLY>
 
 Se for conversa, ideia ou comando da plataforma sem alteração de código:
@@ -314,11 +330,17 @@ export function buildStreamParts(body) {
   } else if (/(chat|mensag|conversa|whatsapp)/i.test(pLower)) {
     domainFoldersHint =
       'OBRIGATÓRIO incluir pastas especializadas: index.html, styles/style.css, components/chat-bolha.js, components/lista-contatos.js, services/mensagens.js, services/voz.js, engine/realtime.js, utils/tempo.js.';
+  } else if (/(m[uú]sica|music|audio|[aá]udio|player|spotify|sonicforge|v[ií]deo|video|playlist)/i.test(pLower)) {
+    domainFoldersHint =
+      'OBRIGATÓRIO incluir pastas especializadas com UI nível Spotify/SonicForge + visualizador real: index.html, styles/style.css, data/faixas.js, components/sidebar.js, components/topbar.js, components/player-bar.js, components/visualizador.js, pages/explorar.js, pages/playlists.js, services/audio-engine.js, services/storage.js, utils/toast.js.';
+  } else if (/(dashboard|gest[aã]o|escola|cl[ií]nica|igreja|erp|crm|admin|sistema|painel|auth|login)/i.test(pLower)) {
+    domainFoldersHint =
+      'OBRIGATÓRIO incluir arquitetura de sistema complexo completo (Sidebar + Topbar + Dashboard + Páginas internas + Modais + Toasts + Persistência localStorage com dados de exemplo reais): index.html, styles/style.css, data/seed.js, services/db.js, services/auth.js, components/sidebar.js, components/topbar.js, components/modal.js, components/toast.js, pages/dashboard.js, pages/registos.js, utils/charts.js.';
   }
 
   const continuityRule = hasExistingCode
     ? 'CONTINUIDADE CIRÚRGICA OBRIGATÓRIA (BROWNFIELD): Este projeto JÁ EXISTE. LÊ TODOS OS FICHEIROS ANTES. Mantém o mesmo nome, visual e lógica que já funcionam; emite o código COMPLETO apenas dos ficheiros que estás a alterar ou acrescentar agora (os restantes ficheiros são preservados automaticamente).'
-    : `NOVO PROJETO: PROIBIDO criar apenas index.html + src/app.js. Cria estrutura MODULAR COMPLETA com estética de nível estúdio e gráficos reais (ApexCharts/ECharts/Three.js/D3/Chart.js quando relevante): ${domainFoldersHint}. Escolhe um nome criativo ligado ao pedido ou exatamente o nome pedido por Eletro-Jr.`;
+    : `NOVO PROJETO: PROIBIDO criar apenas index.html + src/app.js. Cria estrutura MODULAR COMPLETA com estética nível Awwwards/Spotify/Linear/Stripe (fundo gradiente escuro, glassmorphism, cantos 16px-24px, Poppins/Inter, ícones SVG Lucide sem emojis, dados de exemplo ricos e gráficos reais): ${domainFoldersHint}. Escolhe um nome criativo ligado ao pedido ou exatamente o nome pedido por Eletro-Jr.`;
 
   const modeHint =
     agentMode === 'manual'
@@ -413,7 +435,7 @@ ${uploadedBlock ? `FICHEIROS ANEXADOS:\n${uploadedBlock}\n` : ''}
 ERROS / AVISOS RECENTES DO CONSOLE:
 ${recentErrors || 'Nenhum erro no console.'}
 
-${forceBuilderMode !== false ? (hasExistingGenerateFiles ? 'MODO EDIÇÃO CIRÚRGICA (BROWNFIELD): Este projeto JÁ TEM CÓDIGO. Lê todos os ficheiros atuais, preserva 100% do que já funciona (não apagues funcionalidades antigas nem mudes o projeto), e devolve apenas os ficheiros modificados/criados 100% completos em filesList conectando perfeitamente ao código existente.' : 'MODO ETAPA COMPLETA: Cria ficheiros modulares organizados por pastas especializadas (styles/, components/, pages/, services/, engine/, utils/, data/) com estética moderna, gráficos profissionais (ApexCharts/ECharts/D3/Three.js/Chart.js quando aplicável) e código 100% completo sem stubs. PROIBIDO criar só index.html + src/app.js.') : ''}
+${forceBuilderMode !== false ? (hasExistingGenerateFiles ? 'MODO EDIÇÃO CIRÚRGICA (BROWNFIELD): Este projeto JÁ TEM CÓDIGO. Lê todos os ficheiros atuais, preserva 100% do que já funciona (não apagues funcionalidades antigas nem mudes o projeto), e devolve apenas os ficheiros modificados/criados 100% completos em filesList conectando perfeitamente ao código existente.' : 'MODO ETAPA COMPLETA: Cria ficheiros modulares organizados por pastas especializadas (styles/, components/, pages/, services/, engine/, utils/, data/) com design nível Awwwards/Spotify/Linear/Stripe (glassmorphism escuro, bordas 16px-24px, Poppins/Inter, ícones Lucide SVG sem emojis, gráficos reais, dados de exemplo pré-carregados, Sidebar/Topbar/Modais/Toasts quando for sistema) e código 100% completo sem stubs. PROIBIDO criar só index.html + src/app.js.') : ''}
 
 PEDIDO ATUAL DE ELETRO-JR:
 ${prompt || 'Constrói o sistema pedido.'}`;

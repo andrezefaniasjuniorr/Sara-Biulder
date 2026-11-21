@@ -43,14 +43,17 @@ export function buildStandaloneHtml(files: ProjectFiles, projectTitle = 'Projeto
     return 7;
   };
 
+  const isConfigJs = (p: string) =>
+    /(^|\/)(tailwind|postcss|vite|eslint|vitest|jest|prettier)\.config\.(js|ts|mjs|cjs)$/i.test(p);
+
   const allJs = entries
-    .filter(([p]) => p.toLowerCase().endsWith('.js'))
+    .filter(([p]) => p.toLowerCase().endsWith('.js') && !isConfigJs(p))
     .sort(([a], [b]) => rankJs(a) - rankJs(b) || a.localeCompare(b))
     .map(
       ([p, c]) =>
         `// ${p}\n${c
-          .replace(/^\s*import\s+(?:type\s+)?[\s\S]*?\sfrom\s+['"](?:\.\.?\/|\/|@\/)[^'"]+['"];?[ \t]*/gm, '')
-          .replace(/^\s*import\s+['"](?:\.\.?\/|\/|@\/)[^'"]+['"];?[ \t]*/gm, '')
+          .replace(/^\s*import\s+(?:type\s+)?[\s\S]*?\sfrom\s+['"](?:\.\.?\/|\/|@\/|src\/)[^'"]+['"];?[ \t]*/gm, '')
+          .replace(/^\s*import\s+['"](?:\.\.?\/|\/|@\/|src\/)[^'"]+['"];?[ \t]*/gm, '')
           .replace(/^\s*export\s+\{[^}]*\};?[ \t]*/gm, '')
           .replace(/^\s*export\s+(default\s+)?/gm, '')}`
     )
@@ -63,13 +66,14 @@ export function buildStandaloneHtml(files: ProjectFiles, projectTitle = 'Projeto
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${projectTitle}</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700;800&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700;800&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
   <style>
 ${allCss}
@@ -93,12 +97,15 @@ export async function downloadProjectZip(files: ProjectFiles, projectName: strin
       .replace(/^-|-$/g, '') || 'sara-projeto';
 
   const entries = Object.entries(files || {});
+  const isConfigJs = (p: string) =>
+    /(^|\/)(tailwind|postcss|vite|eslint|vitest|jest|prettier)\.config\.(js|ts|mjs|cjs)$/i.test(p);
+
   const cssLinks = entries
     .filter(([p]) => p.toLowerCase().endsWith('.css'))
     .map(([p]) => `  <link rel="stylesheet" href="./${p.replace(/^\/+/, '')}" />`)
     .join('\n');
   const jsScripts = entries
-    .filter(([p]) => p.toLowerCase().endsWith('.js'))
+    .filter(([p]) => p.toLowerCase().endsWith('.js') && !isConfigJs(p))
     .map(([p]) => `  <script type="module" src="./${p.replace(/^\/+/, '')}"></script>`)
     .join('\n');
 
@@ -116,13 +123,14 @@ export async function downloadProjectZip(files: ProjectFiles, projectName: strin
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${projectName}</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700;800&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@500;600;700;800&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/gsap@3.12.5/dist/gsap.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
   <script src="https://unpkg.com/lucide@latest"></script>
 ${cssLinks}
 </head>
