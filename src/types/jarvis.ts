@@ -36,9 +36,9 @@ export interface JarvisTrack {
   artist: string;
   videoId?: string;
   thumbnailUrl?: string;
-  source: 'youtube' | 'synth' | 'url';
-  durationSec?: number;
-  url?: string;
+  watchUrl?: string;
+  durationText?: string;
+  source: 'youtube';
 }
 
 export interface JarvisDocumentItem {
@@ -114,7 +114,7 @@ export type JarvisStageContent =
     }
   | {
       id: string;
-      kind: 'music';
+      kind: 'music' | 'video';
       title: string;
       track: JarvisTrack;
     }
@@ -148,6 +148,8 @@ export interface JarvisActionPayload {
     | 'add_task'
     | 'complete_task'
     | 'play_music'
+    | 'play_video'
+    | 'open_module'
     | 'show_svg'
     | 'show_math'
     | 'show_chart'
@@ -165,6 +167,11 @@ export interface JarvisActionPayload {
   priority?: 'alta' | 'media' | 'baixa';
   query?: string;
   artist?: string;
+  videoId?: string;
+  thumbnailUrl?: string;
+  watchUrl?: string;
+  durationText?: string;
+  moduleTab?: JarvisModuleTab;
   svgCode?: string;
   description?: string;
   problem?: string;
@@ -193,8 +200,28 @@ export interface JarvisAssistantResponse {
 }
 
 export interface JarvisWeatherInfo {
-  tempC: number;
+  tempC: number | null;
+  feelsLikeC: number | null;
+  humidityPct: number | null;
+  windKmh: number | null;
   condition: string;
   city: string;
-  windKmh: number;
+  isDay?: boolean;
+  loadedFromApi: boolean;
+  updatedAt?: string;
+  errorMsg?: string;
+}
+
+export interface JarvisSystemTelemetry {
+  cpuCores: number | null;
+  deviceMemoryGb: number | null;
+  jsHeapUsedMb: number | null;
+  jsHeapLimitMb: number | null;
+  batteryPct: number | null;
+  batteryCharging: boolean | null;
+  online: boolean;
+  networkType: string | null;
+  downlinkMbps: number | null;
+  rttMs: number | null;
+  timezone: string;
 }

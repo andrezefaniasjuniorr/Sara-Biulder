@@ -49,6 +49,13 @@ export type VoiceCommandAction =
   | { type: 'refresh_preview' }
   | { type: 'open_builder_mode'; raw: string }
   | { type: 'open_jarvis_mode'; raw: string }
+  | {
+      type: 'open_jarvis_module';
+      moduleTab: 'voz' | 'sistema' | 'agenda' | 'musica' | 'documentos' | 'tarefas';
+      raw: string;
+    }
+  | { type: 'repeat_sara'; raw: string }
+  | { type: 'continue_sara'; raw: string }
   | { type: 'focus_mode_on'; raw: string }
   | { type: 'focus_mode_off'; raw: string }
   | { type: 'prompt'; text: string };
@@ -97,29 +104,29 @@ export function getInstantSmallTalkReply(normalizedLower: string): string | null
   ) {
     if (period === 'night') {
       return pickNonRepeating([
-        'Estou acordada e ligada, Eletro-Jr! O que vamos construir antes de dormir?',
-        'Cá estou eu, Eletro-Jr. Tens alguma ideia forte na cabeça hoje?',
-        'Fala comigo, Eletro-Jr! Vamos montar um projeto pesado ou afinar código?',
-        'Chegaste na hora certa, Eletro-Jr. Qual é a missão de hoje à noite?',
-        'Olá, Eletro-Jr! Manda o desafio que eu já abri as ferramentas.',
+        'Estou acordada e ligada. O que vamos criar hoje à noite?',
+        'Cá estou eu, chefe. Tens alguma ideia forte em mente?',
+        'Fala comigo! Vamos resolver algum problema ou programar algo novo?',
+        'Chegaste na hora certa, Senhor Júnior. Qual é a missão agora?',
+        'Olá! Manda o desafio que os sistemas já estão quentes.',
       ]);
     }
     if (period === 'morning') {
       return pickNonRepeating([
-        'Acordei pronta para codar, Eletro-Jr! O que inventamos hoje?',
-        'Fala, Eletro-Jr! Qual sistema ou jogo vai sair do papel agora?',
-        'Oi, Eletro-Jr! Já estou com os motores quentes — manda a tua ideia.',
-        'Estou por aqui, Eletro-Jr! Hoje vamos construir algo fora da caixa?',
-        'Diga lá, chefe! O que vamos arquitetar nesta manhã?',
+        'Bom dia! Acordei pronta — o que inventamos hoje?',
+        'Fala, chefe! Qual sistema ou ideia vai sair do papel agora?',
+        'Oi! Já estou com os motores prontos — diz-me o plano.',
+        'Estou por aqui. Hoje vamos construir algo fora da caixa?',
+        'Bom dia, Senhor Júnior! Por onde queres arrancar nesta manhã?',
       ]);
     }
     return pickNonRepeating([
-      'Oi, Eletro-Jr! Já estava à tua espera — o que vamos construir agora?',
-      'Fala, Eletro-Jr! Manda o próximo projeto que eu separo logo as pastas todas.',
-      'Estou ligada, Eletro-Jr! Queres criar um site, um app ou partimos para um jogo?',
-      'E aí, Eletro-Jr! Alguma ideia nova a ferver ou continuamos a programar?',
-      'Pronta para a ação, Eletro-Jr! Diz-me o que tens em mente.',
-      'Sempre a postos, Eletro-Jr! Vamos surpreender hoje com quê?',
+      'Oi! Já estava à tua espera — o que vamos fazer agora?',
+      'Fala comigo! Manda o próximo desafio que eu entro logo em ação.',
+      'Estou ligada! Queres conversar, pesquisar ou construir algum projeto?',
+      'E aí, chefe! Alguma ideia nova a ferver?',
+      'Pronta para a ação. Diz-me o que tens em mente.',
+      'Sempre a postos, Senhor Júnior! Vamos surpreender hoje com quê?',
     ]);
   }
 
@@ -128,31 +135,31 @@ export function getInstantSmallTalkReply(normalizedLower: string): string | null
     /^(sara\s+)?(como estas|tudo bem|como vai|esta tudo bem)(\s+sara)?$/i.test(clean)
   ) {
     return pickNonRepeating([
-      'Por aqui está tudo a mil, Eletro-Jr! E desse lado, pronto para criar?',
-      'Estou impecável e cheia de ideias, Eletro-Jr. O que vamos montar?',
-      'A funcionar sem nenhum erro no console! E tu, Eletro-Jr, o que trazes hoje?',
-      'Tudo ótimo, Eletro-Jr! Manda código ou manda voz que eu respondo.',
+      'Por aqui está tudo a mil! E desse lado, tudo fixe?',
+      'Estou impecável e cheia de ideias. O que trazes hoje?',
+      'A funcionar sem nenhum erro! Conta-me lá o que precisas.',
+      'Tudo ótimo, chefe! Manda voz ou texto que eu respondo já.',
     ]);
   }
 
   if (/^(obrigado|obrigada|valeu|muito obrigado)(\s+sara)?$/i.test(clean)) {
     return pickNonRepeating([
-      'Sempre às ordens, Eletro-Jr!',
-      'Tamo junto, Eletro-Jr! Precisando de mais alguma coisa, chama.',
-      'Não tens de quê, Eletro-Jr. Bora para a próxima!',
-      'É para isso que estou cá, Eletro-Jr!',
+      'Sempre às ordens!',
+      'Tamo junto! Precisando de mais alguma coisa, chama.',
+      'Não tens de quê. Bora para a próxima!',
+      'É para isso que estou cá!',
     ]);
   }
 
   if (/^(tchau|ate logo|ate ja|ate amanha|adeus)(\s+sara)?$/i.test(clean)) {
     return period === 'night'
       ? pickNonRepeating([
-          'Vai descansar tranquilo, Eletro-Jr! Amanhã continuamos.',
-          'Até amanhã, Eletro-Jr! Fica tudo guardado por aqui.',
+          'Vai descansar tranquilo! Amanhã continuamos.',
+          'Até amanhã, Senhor Júnior! Fica tudo guardado por aqui.',
         ])
       : pickNonRepeating([
-          'Até já, Eletro-Jr! Quando voltares, é só chamar.',
-          'Fica bem, Eletro-Jr! Estou por aqui sempre que precisares.',
+          'Até já! Quando voltares, é só chamar.',
+          'Fica bem! Estou por aqui sempre que precisares.',
         ]);
   }
 
@@ -193,16 +200,16 @@ export function getBuildAcceptanceSpeech(prompt: string, agentMode: 'manual' | '
 
   if (agentMode === 'automatic') {
     return pickNonRepeating([
-      `Aceitei o desafio, Eletro-Jr! Vou montar ${coreIdea}, e ${suggestion}. Assumo tudo sozinha agora e testo no preview.`,
-      `Excelente ideia, Eletro-Jr! Estou a estruturar ${coreIdea}, onde ${suggestion}. Fica tranquilo que construo e valido tudo etapa por etapa.`,
-      `Com certeza, Eletro-Jr! Para esse projeto vamos usar ${coreIdea}, e ${suggestion}. Já entro em ação no modo automático.`,
+      `Aceitei o desafio! Vou montar ${coreIdea}, e ${suggestion}. Assumo tudo sozinha agora e testo no preview.`,
+      `Boa ideia, chefe! Estou a estruturar ${coreIdea}, onde ${suggestion}. Fica tranquilo que construo e valido etapa por etapa.`,
+      `Bora lá! Para esse projeto vamos usar ${coreIdea}, e ${suggestion}. Já entro em ação no modo automático.`,
     ]);
   }
 
   return pickNonRepeating([
-    `Curti muito essa proposta, Eletro-Jr! Pensei em ${coreIdea}, e ${suggestion}. Concordas em avançarmos com a primeira etapa ou queres ajustar algo antes?`,
-    `Excelente pedido, Eletro-Jr! A minha sugestão é estruturar ${coreIdea}, além disso ${suggestion}. Posso começar pela Etapa 1 ou preferes mudar algum detalhe?`,
-    `Vamos construir isto juntos, Eletro-Jr! Proponho ${coreIdea}, e ${suggestion}. Aprovas o plano para eu codar a primeira parte?`,
+    `Curti muito essa proposta! Pensei em ${coreIdea}, e ${suggestion}. Concordas em avançarmos com a primeira etapa ou queres ajustar algo antes?`,
+    `Excelente pedido, Senhor Júnior! A minha sugestão é estruturar ${coreIdea}, além disso ${suggestion}. Posso começar pela Etapa 1 ou preferes mudar algum detalhe?`,
+    `Vamos construir isto juntos! Proponho ${coreIdea}, e ${suggestion}. Aprovas o plano para eu codar a primeira parte?`,
   ]);
 }
 
@@ -212,74 +219,74 @@ export function getContinuationSpeech(
 ): string {
   if (agentMode === 'manual') {
     return pickNonRepeating([
-      `Já analisei os ficheiros atuais de ${projectName}, Eletro-Jr, mantendo tudo o que já funciona. Posso aplicar esta evolução por etapas contigo agora ou queres ajustar algum ponto primeiro?`,
-      `Estou por dentro da estrutura de ${projectName}, Eletro-Jr! Vou integrar esta melhoria sem estragar o código existente. Aprovas avançar já com a alteração?`,
+      `Já analisei os ficheiros atuais de ${projectName}, mantendo tudo o que já funciona. Posso aplicar esta evolução por etapas contigo agora ou queres ajustar algum ponto primeiro?`,
+      `Estou por dentro da estrutura de ${projectName}! Vou integrar esta melhoria sem estragar o código existente. Aprovas avançar já?`,
     ]);
   }
   return pickNonRepeating([
-    `Já li os ficheiros atuais de ${projectName}, Eletro-Jr, e vou integrar isto mantendo toda a base intacta e responsiva. Começo já a atualizar e testar no preview!`,
-    `Entendido, Eletro-Jr! Analisei a estrutura de ${projectName} para encaixar esta novidade de forma limpa. Vou aplicar as mudanças e validar tudo agora.`,
-    `Mãos à obra em ${projectName}, Eletro-Jr! Vou preservar o que já está bom, reforçar a experiência visual e testar o resultado no console.`,
+    `Já li os ficheiros atuais de ${projectName} e vou integrar isto mantendo toda a base intacta e responsiva. Começo já a atualizar e testar no preview!`,
+    `Entendido, chefe! Analisei a estrutura de ${projectName} para encaixar esta novidade de forma limpa. Vou aplicar as mudanças e validar tudo agora.`,
+    `Mãos à obra em ${projectName}! Vou preservar o que já está bom, reforçar o visual e testar no console.`,
   ]);
 }
 
 export function getManualStepApprovalSpeech(stepTitle: string): string {
   return pickNonRepeating([
-    `Combinado, Eletro-Jr! A construir agora a etapa ${stepTitle} no editor e preview.`,
-    `Excelente, vamos a isso! Estou a implementar ${stepTitle} passo a passo.`,
-    `Aprovado, Eletro-Jr! Já estou a gerar o código completo de ${stepTitle}.`,
+    `Combinado! A construir agora a etapa ${stepTitle} no editor e preview.`,
+    `Vamos a isso! Estou a implementar ${stepTitle} passo a passo.`,
+    `Aprovado, chefe! Já estou a gerar o código completo de ${stepTitle}.`,
   ]);
 }
 
 export function getPlatformCommandSpeech(action: string, detail?: string): string {
   switch (action) {
     case 'open_editor':
-      return pickNonRepeating(['A abrir o editor de código, Eletro-Jr.', 'Editor aberto para ti, Eletro-Jr.']);
+      return pickNonRepeating(['A abrir o editor de código.', 'Editor aberto para ti.']);
     case 'open_editor_fullscreen':
-      return pickNonRepeating(['A expandir o editor em tela cheia, Eletro-Jr.', 'Editor em ecrã inteiro ativo.']);
+      return pickNonRepeating(['A expandir o editor em tela cheia.', 'Editor em ecrã inteiro ativo.']);
     case 'open_files':
-      return pickNonRepeating(['A mostrar a árvore de ficheiros do projeto.', 'Pasta de ficheiros aberta, Eletro-Jr.']);
+      return pickNonRepeating(['A mostrar a árvore de ficheiros do projeto.', 'Pasta de ficheiros aberta.']);
     case 'open_console':
-      return pickNonRepeating(['A abrir o console de execução agora.', 'Console aberto, Eletro-Jr.']);
+      return pickNonRepeating(['A abrir o console de execução agora.', 'Console aberto.']);
     case 'show_preview':
-      return pickNonRepeating(['A focar o preview ao vivo, Eletro-Jr.', 'Aqui está o preview atualizado.']);
+      return pickNonRepeating(['A focar o preview ao vivo.', 'Aqui está o preview atualizado.']);
     case 'open_preview_fullscreen':
-      return pickNonRepeating(['Preview em tela cheia ativo, Eletro-Jr.', 'A expandir o preview para ecrã inteiro.']);
+      return pickNonRepeating(['Preview em tela cheia ativo.', 'A expandir o preview para ecrã inteiro.']);
     case 'close_editor_or_back':
-      return pickNonRepeating(['De volta ao painel principal, Eletro-Jr.', 'Fechei e voltei para a vista principal.']);
+      return pickNonRepeating(['De volta ao painel principal.', 'Fechei e voltei para a vista principal.']);
     case 'preview_mobile':
-      return pickNonRepeating(['A mudar o preview para telemóvel, Eletro-Jr.', 'Modo telemóvel ativo no preview.']);
+      return pickNonRepeating(['A mudar o preview para telemóvel.', 'Modo telemóvel ativo no preview.']);
     case 'preview_tablet':
-      return pickNonRepeating(['A alternar para a vista de tablet.', 'Preview em tablet ativo, Eletro-Jr.']);
+      return pickNonRepeating(['A alternar para a vista de tablet.', 'Preview em tablet ativo.']);
     case 'preview_desktop':
-      return pickNonRepeating(['A voltar para a vista de computador.', 'Preview em computador ativo, Eletro-Jr.']);
+      return pickNonRepeating(['A voltar para a vista de computador.', 'Preview em computador ativo.']);
     case 'save_project':
-      return pickNonRepeating(['A guardar o projeto no Firebase, Eletro-Jr.', 'Projeto guardado com segurança.']);
+      return pickNonRepeating(['A guardar o projeto no Firebase.', 'Projeto guardado com segurança.']);
     case 'open_projects':
-      return pickNonRepeating(['A abrir a tua lista de projetos, Eletro-Jr.', 'Aqui estão os teus projetos.']);
+      return pickNonRepeating(['A abrir a tua lista de projetos.', 'Aqui estão os teus projetos.']);
     case 'open_settings':
-      return pickNonRepeating(['A abrir as definições da plataforma.', 'Configurações abertas, Eletro-Jr.']);
+      return pickNonRepeating(['A abrir as definições da plataforma.', 'Configurações abertas.']);
     case 'open_deploy':
-      return pickNonRepeating(['A abrir o painel de publicação e deploy.', 'Painel de deploy pronto, Eletro-Jr.']);
+      return pickNonRepeating(['A abrir o painel de publicação e deploy.', 'Painel de deploy pronto.']);
     case 'refresh_preview':
-      return pickNonRepeating(['A recarregar o preview agora, Eletro-Jr.', 'Preview atualizado.']);
+      return pickNonRepeating(['A recarregar o preview agora.', 'Preview atualizado.']);
     default:
-      return detail || 'Feito, Eletro-Jr.';
+      return detail || 'Feito.';
   }
 }
 
 export function getModeSwitchSpeech(mode: 'manual' | 'automatic'): string {
   if (mode === 'manual') {
     return pickNonRepeating([
-      'Modo manual ligado, Eletro-Jr! Vamos decidir juntos e aprovo contigo antes de construir cada etapa.',
+      'Modo manual ligado! Vamos decidir juntos e aprovo contigo antes de construir cada etapa.',
       'Combinado, passei para o modo manual. Eu sugiro a arquitetura, pergunto-te primeiro e avançamos passo a passo.',
-      'Modo colaborativo ativo, Eletro-Jr! Diz-me o que queres construir que eu planeio e confirmo contigo.',
+      'Modo colaborativo ativo, chefe! Diz-me o que queres construir que eu planeio e confirmo contigo.',
     ]);
   }
   return pickNonRepeating([
-    'Modo automático ligado, Eletro-Jr! Falo contigo logo no início com sugestões, depois construo, testo e corrijo tudo sozinha.',
-    'Ativei o modo automático! Podes mandar o objetivo que eu alinho as ideias contigo e executo tudo de ponta a ponta.',
-    'Modo autónomo pronto, Eletro-Jr. Manda a missão que eu assumo daqui até ao teste final.',
+    'Modo automático ligado! Falo contigo logo no início com sugestões, depois construo, testo e corrijo tudo sozinha.',
+    'Ativei o modo automático! Podes mandar o objetivo que eu alinho as ideias contigo e executo de ponta a ponta.',
+    'Modo autónomo pronto, Senhor Júnior. Manda a missão que eu assumo daqui até ao teste final.',
   ]);
 }
 
@@ -504,8 +511,34 @@ export function parseVoiceCommand(
     return { type: 'focus_mode_on', raw: clean };
   }
 
-  // No Modo Assistente JARVIS, pedidos gerais passam diretamente para o cérebro JARVIS (não aciona comandos IDE do Builder por engano)
+  // Repetir última resposta ou continuar conversa no JARVIS
+  if (/^(sara[,\s]+)?(repete|repete isso|podes repetir|diz outra vez|o que disseste)$/i.test(lower)) {
+    return { type: 'repeat_sara', raw: clean };
+  }
+
+  // No Modo Assistente JARVIS: abre módulos específicos por voz e controla continuação
   if (context?.workspaceMode === 'jarvis') {
+    if (/^(sara[,\s]+)?(continua|continua a falar|prosegue|prossegue|segue)$/i.test(lower)) {
+      return { type: 'continue_sara', raw: clean };
+    }
+    if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|entra\s+em|ver)\s+(a\s+|o\s+|os\s+)?musica(s)?\b|^musica$/.test(lower)) {
+      return { type: 'open_jarvis_module', moduleTab: 'musica', raw: clean };
+    }
+    if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(a\s+|o\s+)?(agenda|alarmes?)\b|^agenda$/.test(lower)) {
+      return { type: 'open_jarvis_module', moduleTab: 'agenda', raw: clean };
+    }
+    if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(os\s+|o\s+)?(documentos?|docs?|ficheiros?)\b|^documentos$/.test(lower)) {
+      return { type: 'open_jarvis_module', moduleTab: 'documentos', raw: clean };
+    }
+    if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(as\s+|a\s+)?tarefas?\b|^tarefas$/.test(lower)) {
+      return { type: 'open_jarvis_module', moduleTab: 'tarefas', raw: clean };
+    }
+    if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(o\s+)?sistema\b|^sistema$/.test(lower)) {
+      return { type: 'open_jarvis_module', moduleTab: 'sistema', raw: clean };
+    }
+    if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(a\s+|o\s+)?voz\b/.test(lower)) {
+      return { type: 'open_jarvis_module', moduleTab: 'voz', raw: clean };
+    }
     if (lower.includes('configuracoes') || lower.includes('definicoes')) {
       return { type: 'open_settings' };
     }
@@ -1061,8 +1094,8 @@ export function resumirParaVoz(
 
     const summary =
       introClean && introClean.length < 70 && !/[{};=]/.test(introClean)
-        ? `${introClean}${/[.!?]$/.test(introClean) ? '' : '.'} Criei ${listLines.length} itens, estão todos no chat para veres, Eletro-Júnior.`
-        : `Criei ${listLines.length} itens, estão todos no chat para veres, Eletro-Júnior.`;
+        ? `${introClean}${/[.!?]$/.test(introClean) ? '' : '.'} Criei ${listLines.length} itens e deixei tudo no painel.`
+        : `Criei ${listLines.length} itens e deixei tudo detalhado no painel.`;
 
     return summary
       .replace(/Eletro-Jr\b/gi, 'Eletro-Júnior')
@@ -1088,9 +1121,9 @@ export function resumirParaVoz(
     .filter((s) => s.length > 2);
 
   if (level === 'medium') {
-    const med = sentences.slice(0, 3).join(' ').slice(0, 360);
+    const med = sentences.slice(0, 3).join(' ').slice(0, 380);
     return sentences.length > 3
-      ? `${med} Deixei o detalhe completo no chat, Eletro-Júnior.`
+      ? `${med} Deixei o detalhe completo aqui no painel.`
       : med;
   }
 
@@ -1402,7 +1435,36 @@ export function stopSaraSpeech(): void {
       if (!saraEstaAFalar && micShouldBeActive) {
         resumeMicFn?.();
       }
-    }, 350);
+    }, 320);
+  }
+}
+
+/**
+ * Interrupção imediata (Barge-In): cala a Sara no instante em que o utilizador quer falar
+ * e religa o microfone em ~60ms sem precisar reiniciar toda a sessão.
+ */
+export function interruptSaraAndListen(): void {
+  currentSpeechSeq += 1;
+  saraEstaAFalar = false;
+  speakingStateListener?.(false);
+  if (restartAfterSpeechTimer) {
+    clearTimeout(restartAfterSpeechTimer);
+    restartAfterSpeechTimer = null;
+  }
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+  if (micShouldBeActive && resumeMicFn) {
+    restartAfterSpeechTimer = setTimeout(() => {
+      restartAfterSpeechTimer = null;
+      if (!saraEstaAFalar && micShouldBeActive) {
+        resumeMicFn?.();
+      }
+    }, 60);
   }
 }
 
@@ -1488,7 +1550,7 @@ export function speakAsSara(
     const normKey = normalizeForRepeatCheck(spoken);
     if (!opts.forceSpeak && normKey && recentSpokenNormalized.includes(normKey)) {
       if (opts.isQuestionReply) {
-        spoken = 'Já te disse, Eletro-Júnior, está no chat.';
+        spoken = 'Já te disse há pouco, está tudo aqui no painel.';
       } else {
         opts.onFinished?.();
         return;
@@ -1627,8 +1689,8 @@ export function getSpokenBuildRecap(
     return voiceSummary.trim();
   }
   const base = projectName
-    ? `Construí ${filesCount} ficheiros modulares no ${projectName}, Eletro-Júnior.`
-    : `Atualizei ${filesCount} módulos do sistema no preview, Eletro-Júnior.`;
+    ? `Construí ${filesCount} ficheiros modulares no ${projectName}.`
+    : `Atualizei ${filesCount} módulos do sistema no preview.`;
   if (strategicImprovements && strategicImprovements.length >= 2) {
     return `${base} Como próximos passos sugiro ${strategicImprovements[0]} ou ${strategicImprovements[1]}.`;
   }

@@ -23,7 +23,7 @@ export default async function handler(req, res) {
 
   try {
     if (req.body?.action === 'youtube_search') {
-      const track = await searchYouTubeTrackNode(req.body?.query || '');
+      const track = await searchYouTubeTrackNode(req.body?.query || '', req.body?.kind || 'music');
       return res.status(200).json({ track });
     }
 

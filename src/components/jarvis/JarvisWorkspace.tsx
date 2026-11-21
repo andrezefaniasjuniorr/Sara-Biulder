@@ -2,9 +2,13 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   AlarmClock,
+  BatteryCharging,
+  BatteryMedium,
   BellRing,
+  Brain,
   Calendar,
   CheckCircle2,
+  CheckSquare,
   Circle,
   CloudSun,
   Cpu,
@@ -12,20 +16,23 @@ import {
   FileText,
   Focus,
   Hammer,
+  HardDrive,
   Mic,
   MicOff,
   Music2,
   Paperclip,
   Plus,
+  RefreshCw,
   Send,
   Sparkles,
+  Square,
+  Sun,
   Trash2,
   Upload,
   Volume2,
   VolumeX,
-  Brain,
-  CheckSquare,
-  Sun,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import type {
   JarvisActionPayload,
@@ -37,18 +44,20 @@ import type {
   JarvisMemoryState,
   JarvisModuleTab,
   JarvisStageContent,
+  JarvisSystemTelemetry,
   JarvisTaskItem,
   JarvisTrack,
   JarvisWeatherInfo,
   WorkspaceMode,
 } from '../../types/jarvis';
 import {
-  askJarvisAssistant,
+  askJarvisAssistantStream,
   DEFAULT_JARVIS_MEMORY,
   fetchLiveWeather,
   loadJarvisLocalBundle,
   playJarvisAlarmSound,
   readDocumentFile,
+  readSyncSystemTelemetry,
   saveJarvisAgenda,
   saveJarvisAlarms,
   saveJarvisConversation,
@@ -62,7 +71,7 @@ import {
   buscarJarvisStateFirebase,
   salvarJarvisStateFirebase,
 } from '../../services/firebaseService';
-import { speakAsSara } from '../../utils/voiceService';
+import { interruptSaraAndListen, speakAsSara } from '../../utils/voiceService';
 import { SaraJarvisHead } from './SaraJarvisHead';
 import { JarvisStageRenderer } from './JarvisStageRenderer';
 
@@ -80,15 +89,17 @@ interface JarvisWorkspaceProps {
     ((promptText: string, source?: 'voice' | 'text') => Promise<void>) | null
   >;
   externalFocusCommandRef: React.MutableRefObject<((enabled: boolean) => void) | null>;
+  externalModuleRef: React.MutableRefObject<((tab: JarvisModuleTab) => void) | null>;
+  externalRepeatRef: React.MutableRefObject<(() => void) | null>;
+  externalContinueRef: React.MutableRefObject<(() => Promise<void>) | null>;
 }
 
 const IRON_MAN_PROCESS_LINES = [
-  '>> MOUNTING NEURAL KERNEL v4.8 [STARK-CORE]',
+  '>> MOUNTING NEURAL KERNEL [STARK-CORE]',
+  '>> STREAMING VOCAL SUMMARY BUS (<JARVIS_SPEAK>)',
   '>> CALIBRATING OPTICAL HUD VECTORS: CYAN/#00E5FF',
-  '>> INDEXING CONTEXTUAL MEMORY: ELETRO-JR PROFILE',
-  '>> SYNCHRONIZING AUDIO-VOCAL RESONANCE BUS',
+  '>> SYNCING REAL-TIME TELEMETRY & GEOLOCATION',
   '>> COMPILING VISUAL MATRIX / SVG / CHART PIPELINE',
-  '>> VERIFYING TELEMETRY INTEGRITY [CRC32 OK]',
   '>> RENDERING HOLOGRAPHIC RESPONSE PAYLOAD',
 ];
 
@@ -104,6 +115,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   onNotify,
   externalCommandRef,
   externalFocusCommandRef,
+  externalModuleRef,
+  externalRepeatRef,
+  externalContinueRef,
 }) => {
   const initialBundle = useMemo(() => loadJarvisLocalBundle(), []);
   const [activeModule, setActiveModule] = useState<JarvisModuleTab>('voz');
@@ -124,6 +138,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const [stageLayout, setStageLayout] = useState<'split' | 'focus'>('split');
   const [mood, setMood] = useState<JarvisHeadMood>('idle');
   const [isThinking, setIsThinking] = useState(false);
+  const [streamingReply, setStreamingReply] = useState<string | null>(null);
   const [thinkingPercent, setThinkingPercent] = useState(0);
   const [thinkingLogs, setThinkingLogs] = useState<string[]>([]);
   const [focusMode, setFocusMode] = useState(false);
@@ -134,13 +149,23 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
   const [now, setNow] = useState<Date>(() => new Date());
   const [weather, setWeather] = useState<JarvisWeatherInfo>({
-    tempC: 26,
-    condition: 'Céu limpo',
-    city: 'Luanda',
-    windKmh: 12,
+    tempC: null,
+    feelsLikeC: null,
+    humidityPct: null,
+    windKmh: null,
+    condition: 'A obter clima real...',
+    city: 'Inhambane Cidade, Inhambane, Moçambique',
+    loadedFromApi: false,
   });
-  const [cpuLoad, setCpuLoad] = useState(28);
-  const [memLoad, setMemLoad] = useState(41);
+  const [isRefreshingWeather, setIsRefreshingWeather] = useState(false);
+
+  const batteryInfoRef = useRef<{ pct: number | null; charging: boolean | null }>({
+    pct: null,
+    charging: null,
+  });
+  const [telemetry, setTelemetry] = useState<JarvisSystemTelemetry>(() =>
+    readSyncSystemTelemetry()
+  );
   const [activeRingingAlarm, setActiveRingingAlarm] = useState<JarvisAlarmItem | null>(null);
 
   // Inputs dos módulos
@@ -152,6 +177,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskPriority, setNewTaskPriority] = useState<'alta' | 'media' | 'baixa'>('media');
   const [musicSearch, setMusicSearch] = useState('');
+  const [isSearchingMusic, setIsSearchingMusic] = useState(false);
   const [newMemoryFact, setNewMemoryFact] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -172,23 +198,24 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     let active = true;
     buscarJarvisStateFirebase(firebaseUserUid).then((cloud) => {
       if (!active || !cloud) return;
-      if (Array.isArray(cloud.agenda) && cloud.agenda.length > 0 && agenda.length <= 1) {
+      if (Array.isArray(cloud.agenda) && cloud.agenda.length > 0 && agenda.length === 0) {
         setAgenda(cloud.agenda as JarvisAgendaItem[]);
       }
       if (Array.isArray(cloud.alarms) && cloud.alarms.length > 0 && alarms.length === 0) {
         setAlarms(cloud.alarms as JarvisAlarmItem[]);
       }
-      if (Array.isArray(cloud.tasks) && cloud.tasks.length > 0 && tasks.length <= 1) {
+      if (Array.isArray(cloud.tasks) && cloud.tasks.length > 0 && tasks.length === 0) {
         setTasks(cloud.tasks as JarvisTaskItem[]);
       }
       if (cloud.memory && Array.isArray((cloud.memory as any).facts)) {
+        const cleanCloudFacts = ((cloud.memory as any).facts as string[]).filter(
+          (f) => typeof f === 'string' && !/\b(luanda|angola|matola)\b/i.test(f)
+        );
         setMemory((prev) => ({
           ...DEFAULT_JARVIS_MEMORY,
           ...prev,
           ...(cloud.memory as Partial<JarvisMemoryState>),
-          facts: Array.from(
-            new Set([...(prev.facts || []), ...((cloud.memory as any).facts || [])])
-          ).slice(-25),
+          facts: Array.from(new Set([...(prev.facts || []), ...cleanCloudFacts])).slice(-25),
         }));
       }
     });
@@ -204,20 +231,60 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     return () => clearTimeout(t);
   }, [agenda, alarms, tasks, memory, firebaseUserUid]);
 
-  // Relógio ao vivo + verificador real de alarmes (every 2s) + telemetria CPU/RAM
+  // Listener real de Bateria + Rede do dispositivo
+  useEffect(() => {
+    let mounted = true;
+    let batteryObj: any = null;
+
+    const refreshTelemetry = () => {
+      if (!mounted) return;
+      setTelemetry(readSyncSystemTelemetry(batteryInfoRef.current));
+    };
+
+    const navAny = typeof navigator !== 'undefined' ? (navigator as any) : null;
+    if (navAny?.getBattery) {
+      navAny
+        .getBattery()
+        .then((bat: any) => {
+          if (!mounted || !bat) return;
+          batteryObj = bat;
+          const syncBat = () => {
+            batteryInfoRef.current = {
+              pct: typeof bat.level === 'number' ? Math.round(bat.level * 100) : null,
+              charging: typeof bat.charging === 'boolean' ? bat.charging : null,
+            };
+            refreshTelemetry();
+          };
+          syncBat();
+          bat.addEventListener?.('levelchange', syncBat);
+          bat.addEventListener?.('chargingchange', syncBat);
+        })
+        .catch(() => {});
+    }
+
+    const conn = navAny?.connection || navAny?.mozConnection || navAny?.webkitConnection;
+    window.addEventListener('online', refreshTelemetry);
+    window.addEventListener('offline', refreshTelemetry);
+    conn?.addEventListener?.('change', refreshTelemetry);
+
+    return () => {
+      mounted = false;
+      window.removeEventListener('online', refreshTelemetry);
+      window.removeEventListener('offline', refreshTelemetry);
+      conn?.removeEventListener?.('change', refreshTelemetry);
+      if (batteryObj) {
+        batteryObj.onlevelchange = null;
+        batteryObj.onchargingchange = null;
+      }
+    };
+  }, []);
+
+  // Relógio ao vivo + telemetria real + verificador real de alarmes (every 2s)
   useEffect(() => {
     const interval = setInterval(() => {
       const current = new Date();
       setNow(current);
-      setCpuLoad((prev) =>
-        Math.max(14, Math.min(86, Math.round(prev + (Math.random() - 0.5) * 8 + (isThinking ? 12 : 0))))
-      );
-      const perfMem = (performance as any)?.memory;
-      if (perfMem && perfMem.jsHeapSizeLimit) {
-        setMemLoad(Math.round((perfMem.usedJSHeapSize / perfMem.jsHeapSizeLimit) * 100));
-      } else {
-        setMemLoad((prev) => Math.max(24, Math.min(78, Math.round(prev + (Math.random() - 0.5) * 4))));
-      }
+      setTelemetry(readSyncSystemTelemetry(batteryInfoRef.current));
 
       const hhmm = current.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
       const todayKey = current.toISOString().slice(0, 10);
@@ -229,11 +296,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             changed = true;
             setActiveRingingAlarm(al);
             playJarvisAlarmSound();
-            speakAsSara(
-              `Atenção Eletro-Júnior! Alarme das ${al.time}: ${al.label}.`,
-              voiceEnabled,
-              { level: 'short', forceSpeak: true }
-            );
+            speakAsSara(`Atenção! Alarme das ${al.time}: ${al.label}.`, voiceEnabled, {
+              level: 'short',
+              forceSpeak: true,
+            });
             return { ...al, triggeredTodayDate: todayKey };
           }
           return al;
@@ -242,30 +308,44 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       });
     }, 2000);
     return () => clearInterval(interval);
-  }, [isThinking, voiceEnabled]);
+  }, [voiceEnabled]);
 
-  // Clima real via Open-Meteo
-  useEffect(() => {
-    fetchLiveWeather().then(setWeather).catch(() => {});
+  // Clima real via Open-Meteo + Geolocalização (Inhambane Cidade fallback fixo) a cada 10 minutos
+  const refreshWeatherNow = useCallback(async (force = false) => {
+    setIsRefreshingWeather(true);
+    try {
+      const w = await fetchLiveWeather(force);
+      setWeather(w);
+    } finally {
+      setIsRefreshingWeather(false);
+    }
   }, []);
 
-  // Animação estilo Homem de Ferro ao pensar (percentagem + linhas a correr)
+  useEffect(() => {
+    void refreshWeatherNow(false);
+    const t = setInterval(() => {
+      void refreshWeatherNow(true);
+    }, 10 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [refreshWeatherNow]);
+
+  // Animação estilo Homem de Ferro ao pensar
   useEffect(() => {
     if (!isThinking) {
       setThinkingPercent(0);
       return;
     }
-    setThinkingPercent(12);
+    setThinkingPercent(14);
     setThinkingLogs([IRON_MAN_PROCESS_LINES[0]]);
     let idx = 1;
     const t = setInterval(() => {
-      setThinkingPercent((p) => (p >= 97 ? 97 : p + Math.floor(6 + Math.random() * 11)));
+      setThinkingPercent((p) => (p >= 96 ? 96 : Math.min(96, p + 9)));
       setThinkingLogs((prev) => [
-        ...prev.slice(-6),
+        ...prev.slice(-5),
         IRON_MAN_PROCESS_LINES[idx % IRON_MAN_PROCESS_LINES.length],
       ]);
       idx++;
-    }, 320);
+    }, 340);
     return () => clearInterval(t);
   }, [isThinking]);
 
@@ -302,13 +382,25 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [conversation, isThinking]);
+  }, [conversation, streamingReply, isThinking]);
+
+  const handleBargeIn = useCallback(() => {
+    interruptSaraAndListen();
+    if (!isListening) {
+      onToggleMic();
+    }
+    onNotify('Podes falar agora.');
+  }, [isListening, onToggleMic, onNotify]);
 
   const handleTriggerDailyRoutine = useCallback(() => {
     const pendingTasks = tasks.filter((t) => !t.done).length;
     const todayStr = new Date().toISOString().slice(0, 10);
     const todayEvents = agenda.filter((a) => a.date === todayStr).length;
-    const greeting = `Bom dia, Eletro-Jr! Em ${weather.city} estão ${weather.tempC} graus com ${weather.condition.toLowerCase()}. Hoje tens ${pendingTasks} tarefa(s) por concluir e ${todayEvents} compromisso(s) na agenda. Por onde queres começar?`;
+    const weatherPart =
+      weather.loadedFromApi && weather.tempC !== null
+        ? `Em ${weather.city} estão ${weather.tempC} graus com ${weather.condition.toLowerCase()}.`
+        : `Não consegui obter o clima de ${weather.city} neste momento.`;
+    const greeting = `Olá! ${weatherPart} Hoje tens ${pendingTasks} tarefa(s) pendente(s) e ${todayEvents} compromisso(s) na agenda. Por onde começamos?`;
     setMood('happy');
     setConversation((prev) => [
       ...prev.slice(-30),
@@ -378,22 +470,78 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'play_music': {
-            const query = act.query || act.title || 'Lo-fi chill beats';
-            const found = await searchYouTubeTrack(query);
-            const track: JarvisTrack = {
-              ...found,
-              title: act.title || found.title,
-              artist: act.artist || found.artist,
+            const query = act.query || act.title || '';
+            let track: JarvisTrack | null = act.videoId
+              ? {
+                  id: `yt_${act.videoId}`,
+                  title: act.title || query || 'Música YouTube',
+                  artist: act.artist || 'YouTube',
+                  videoId: act.videoId,
+                  thumbnailUrl: act.thumbnailUrl,
+                  watchUrl: act.watchUrl || `https://www.youtube.com/watch?v=${act.videoId}`,
+                  durationText: act.durationText,
+                  source: 'youtube',
+                }
+              : null;
+
+            if (!track && query) {
+              track = await searchYouTubeTrack(query, 'music');
+            }
+            if (!track || !track.videoId) {
+              onNotify('Não consegui encontrar essa música no YouTube agora.');
+              break;
+            }
+            const finalTrack: JarvisTrack = {
+              ...track,
+              title: act.title || track.title,
+              artist: act.artist || track.artist,
             };
-            setPlaylist((prev) => [track, ...prev.filter((p) => p.id !== track.id)]);
+            setPlaylist((prev) => [finalTrack, ...prev.filter((p) => p.id !== finalTrack.id)]);
             setCurrentTrackIndex(0);
             setActiveModule('musica');
             setStageContent({
               id: `stg_music_${Date.now()}`,
               kind: 'music',
-              title: track.title,
-              track,
+              title: finalTrack.title,
+              track: finalTrack,
             });
+            break;
+          }
+          case 'play_video': {
+            const query = act.query || act.title || '';
+            let videoTrack: JarvisTrack | null = act.videoId
+              ? {
+                  id: `yt_${act.videoId}`,
+                  title: act.title || query || 'Vídeo YouTube',
+                  artist: act.artist || 'YouTube',
+                  videoId: act.videoId,
+                  thumbnailUrl: act.thumbnailUrl,
+                  watchUrl: act.watchUrl || `https://www.youtube.com/watch?v=${act.videoId}`,
+                  durationText: act.durationText,
+                  source: 'youtube',
+                }
+              : null;
+
+            if (!videoTrack && query) {
+              videoTrack = await searchYouTubeTrack(query, 'video');
+            }
+            if (!videoTrack || !videoTrack.videoId) {
+              onNotify('Não consegui encontrar esse vídeo no YouTube agora.');
+              break;
+            }
+            setStageContent({
+              id: `stg_video_${Date.now()}`,
+              kind: 'video',
+              title: videoTrack.title,
+              track: videoTrack,
+            });
+            break;
+          }
+          case 'open_module': {
+            if (act.moduleTab) {
+              setActiveModule(act.moduleTab);
+              setMobileSection('modules');
+            }
             break;
           }
           case 'show_svg': {
@@ -489,7 +637,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           }
           case 'remember_fact': {
             const fact = (act.fact || '').trim();
-            if (fact) {
+            if (fact && !/\b(luanda|angola|matola)\b/i.test(fact)) {
               setMemory((prev) => ({
                 ...prev,
                 facts: prev.facts.includes(fact) ? prev.facts : [...prev.facts, fact].slice(-25),
@@ -526,17 +674,15 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       const userLabel = clean || `Analisar documento: ${docToSend?.name}`;
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
 
-      if (source === 'text' || docToSend) {
-        setConversation((prev) => [
-          ...prev,
-          {
-            id: `usr_j_${Date.now()}`,
-            sender: 'user',
-            text: userLabel,
-            timestamp: nowTime,
-          },
-        ]);
-      }
+      setConversation((prev) => [
+        ...prev,
+        {
+          id: `usr_j_${Date.now()}`,
+          sender: 'user',
+          text: userLabel,
+          timestamp: nowTime,
+        },
+      ]);
 
       if (source === 'text') setInputText('');
       if (docToSend) {
@@ -546,20 +692,41 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       }
 
       setIsThinking(true);
+      setStreamingReply(null);
       setMood('thinking');
 
-      const res = await askJarvisAssistant({
-        prompt: userLabel,
-        history: conversation.slice(-8),
-        memory,
-        agenda,
-        tasks,
-        alarms,
-        documentAttachment: docToSend,
-        activeDocument: docToSend || activeDoc,
-      });
+      let spokenDuringStream = false;
+      const res = await askJarvisAssistantStream(
+        {
+          prompt: userLabel,
+          history: conversation.slice(-8),
+          memory,
+          agenda,
+          tasks,
+          alarms,
+          weather,
+          telemetry,
+          documentAttachment: docToSend,
+          activeDocument: docToSend || activeDoc,
+        },
+        {
+          onSpeakReady: (speakText) => {
+            if (!speakText || spokenDuringStream) return;
+            spokenDuringStream = true;
+            setMood('speaking');
+            speakAsSara(speakText, voiceEnabled, {
+              level: 'medium',
+              forceSpeak: source === 'voice' || !isSaraSilenced,
+            });
+          },
+          onReplyPartial: (partialReply) => {
+            setStreamingReply(partialReply);
+          },
+        }
+      );
 
       setIsThinking(false);
+      setStreamingReply(null);
       setMood(res.mood || 'speaking');
 
       setConversation((prev) => [
@@ -574,10 +741,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
       await applyJarvisActions(res.actions, docToSend);
 
-      speakAsSara(res.voiceSummary || res.reply, voiceEnabled, {
-        level: 'medium',
-        forceSpeak: source === 'voice' || !isSaraSilenced,
-      });
+      if (!spokenDuringStream) {
+        speakAsSara(res.voiceSummary || res.reply, voiceEnabled, {
+          level: 'medium',
+          forceSpeak: source === 'voice' || !isSaraSilenced,
+        });
+      }
     },
     [
       pendingDoc,
@@ -586,6 +755,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       agenda,
       tasks,
       alarms,
+      weather,
+      telemetry,
       activeDoc,
       applyJarvisActions,
       voiceEnabled,
@@ -610,6 +781,45 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     };
   }, [externalFocusCommandRef]);
 
+  useEffect(() => {
+    externalModuleRef.current = (tab: JarvisModuleTab) => {
+      setActiveModule(tab);
+      setMobileSection('modules');
+    };
+    return () => {
+      externalModuleRef.current = null;
+    };
+  }, [externalModuleRef]);
+
+  useEffect(() => {
+    externalRepeatRef.current = () => {
+      const lastSara = [...conversation].reverse().find((c) => c.sender === 'sara');
+      if (lastSara) {
+        speakAsSara(lastSara.text, true, { level: 'full', forceSpeak: true });
+      } else {
+        speakAsSara('Ainda não falámos nesta sessão. O que queres fazer?', true, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+    };
+    return () => {
+      externalRepeatRef.current = null;
+    };
+  }, [conversation, externalRepeatRef]);
+
+  useEffect(() => {
+    externalContinueRef.current = async () => {
+      await sendJarvisPrompt(
+        'Continua e aprofunda o ponto anterior de forma clara e natural.',
+        'voice'
+      );
+    };
+    return () => {
+      externalContinueRef.current = null;
+    };
+  }, [sendJarvisPrompt, externalContinueRef]);
+
   const handleUploadDocument = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -619,24 +829,15 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       setPendingDoc(doc);
       setActiveModule('documentos');
       onNotify(`Documento carregado: ${doc.name}`);
-      // Analisa imediatamente se não houver texto digitado
+
       if (!inputText.trim()) {
         setDocuments((prev) => [doc, ...prev]);
         setActiveDoc(doc);
         setPendingDoc(null);
         setIsThinking(true);
+        setStreamingReply(null);
         setMood('thinking');
-        const res = await askJarvisAssistant({
-          prompt: `Analisa o documento "${doc.name}" em detalhe: faz um resumo executivo, lista 4-6 pontos principais e extrai os dados importantes em formato estruturado usando a ação show_document.`,
-          history: conversation.slice(-6),
-          memory,
-          agenda,
-          tasks,
-          alarms,
-          documentAttachment: doc,
-        });
-        setIsThinking(false);
-        setMood(res.mood || 'speaking');
+
         setConversation((prev) => [
           ...prev,
           {
@@ -645,6 +846,42 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             text: `Documento anexado: ${doc.name}`,
             timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
           },
+        ]);
+
+        let spokenDocStream = false;
+        const res = await askJarvisAssistantStream(
+          {
+            prompt: `Analisa o documento "${doc.name}" em detalhe: faz um resumo executivo, lista 4-6 pontos principais e extrai os dados importantes em formato estruturado usando a ação show_document.`,
+            history: conversation.slice(-6),
+            memory,
+            agenda,
+            tasks,
+            alarms,
+            weather,
+            telemetry,
+            documentAttachment: doc,
+          },
+          {
+            onSpeakReady: (speakText) => {
+              if (!speakText || spokenDocStream) return;
+              spokenDocStream = true;
+              setMood('speaking');
+              speakAsSara(speakText, voiceEnabled, {
+                level: 'medium',
+                forceSpeak: !isSaraSilenced,
+              });
+            },
+            onReplyPartial: (partialReply) => {
+              setStreamingReply(partialReply);
+            },
+          }
+        );
+
+        setIsThinking(false);
+        setStreamingReply(null);
+        setMood(res.mood || 'speaking');
+        setConversation((prev) => [
+          ...prev,
           {
             id: `sara_doc_${Date.now()}`,
             sender: 'sara',
@@ -653,10 +890,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           },
         ]);
         await applyJarvisActions(res.actions, doc);
-        speakAsSara(res.voiceSummary || res.reply, voiceEnabled, {
-          level: 'medium',
-          forceSpeak: !isSaraSilenced,
-        });
+        if (!spokenDocStream) {
+          speakAsSara(res.voiceSummary || res.reply, voiceEnabled, {
+            level: 'medium',
+            forceSpeak: !isSaraSilenced,
+          });
+        }
       }
     } catch {
       onNotify('Não foi possível ler este ficheiro.');
@@ -708,6 +947,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     minute: '2-digit',
     second: '2-digit',
   });
+
+  const shortCityName = weather.city.split(',')[0].trim() || 'Inhambane Cidade';
+  const jsHeapPct =
+    telemetry.jsHeapUsedMb !== null && telemetry.jsHeapLimitMb
+      ? Math.min(100, Math.round((telemetry.jsHeapUsedMb / telemetry.jsHeapLimitMb) * 100))
+      : null;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-[#030712] text-white overflow-hidden relative">
@@ -812,12 +1057,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       </span>
                       <span
                         className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          isListening
+                          isSaraSpeaking
+                            ? 'bg-rose-500/20 text-rose-300 border border-rose-400/40'
+                            : isListening
                             ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
                             : 'bg-slate-800 text-slate-400'
                         }`}
                       >
-                        {isListening ? 'ESCUITA ATIVA' : 'EM ESPERA'}
+                        {isSaraSpeaking ? 'A FALAR' : isListening ? 'ESCUTA ATIVA' : 'EM ESPERA'}
                       </span>
                     </div>
 
@@ -831,7 +1078,11 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                             : 'bg-cyan-500/20 border-cyan-400/60 text-cyan-200 hover:bg-cyan-500/30'
                         }`}
                       >
-                        {isListening ? <Mic className="w-4 h-4 animate-pulse" /> : <MicOff className="w-4 h-4" />}
+                        {isListening ? (
+                          <Mic className="w-4 h-4 animate-pulse" />
+                        ) : (
+                          <MicOff className="w-4 h-4" />
+                        )}
                         <span>{isListening ? 'Desligar Mic' : 'Ativar Mãos-Livres'}</span>
                       </button>
                       <button
@@ -840,23 +1091,38 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                         className="px-3 py-2.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold hover:bg-rose-500/25 cursor-pointer"
                         title="Calar / Reativar voz"
                       >
-                        {isSaraSilenced ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                        {isSaraSilenced ? (
+                          <VolumeX className="w-4 h-4" />
+                        ) : (
+                          <Volume2 className="w-4 h-4" />
+                        )}
                       </button>
                     </div>
+
+                    {isSaraSpeaking && (
+                      <button
+                        type="button"
+                        onClick={handleBargeIn}
+                        className="w-full py-2 rounded-xl bg-rose-500/20 border border-rose-400/60 text-rose-200 text-xs font-bold flex items-center justify-center gap-2 hover:bg-rose-500/30 cursor-pointer"
+                      >
+                        <Square className="w-3.5 h-3.5 fill-current" />
+                        <span>Interromper SARA e Falar (Esc / Espaço)</span>
+                      </button>
+                    )}
                   </div>
 
                   <div className="space-y-1.5">
                     <div className="text-[10px] font-mono uppercase tracking-widest text-rose-300">
-                      Comandos Rápidos
+                      Sugestões para Testar
                     </div>
                     {[
-                      'Sara, resolve passo a passo a equação 3x + 9 = 24',
-                      'Sara, desenha um diagrama SVG da arquitetura Stark',
-                      'Sara, cria um gráfico de desempenho mensal',
-                      'Sara, coloca música lo-fi eletrónica',
-                      'Sara, marca reunião amanhã às 10:00',
-                      'Sara, acorda-me às 06:30',
-                      'Sara, gera uma planilha HTML de orçamento mensal',
+                      'Explica física quântica de forma simples e depois profunda',
+                      'Resolve passo a passo a equação 3x + 9 = 24',
+                      'Desenha em SVG um esquema do sistema solar',
+                      'Cria um gráfico comparativo de energias renováveis',
+                      'Toca música de Alan Walker no YouTube',
+                      'Mostra um vídeo tutorial sobre motores elétricos',
+                      'Como está o tempo aqui em Inhambane hoje?',
                     ].map((cmd) => (
                       <button
                         key={cmd}
@@ -873,50 +1139,146 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
               {activeModule === 'sistema' && (
                 <div className="space-y-3">
-                  <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/30 space-y-3">
+                  {/* Telemetria REAL do PC / Browser */}
+                  <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/30 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
-                        Diagnóstico HUD
+                        Telemetria Real do Sistema
                       </span>
                       <Activity className="w-4 h-4 text-rose-400" />
                     </div>
-                    <div>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-slate-400">Carga Neural / CPU</span>
-                        <span className="font-mono text-cyan-300">{cpuLoad}%</span>
+
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="p-2 rounded-xl bg-[#040916] border border-cyan-500/20">
+                        <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                          <Cpu className="w-3 h-3 text-cyan-300" />
+                          <span>CPU Lógica</span>
+                        </div>
+                        <div className="font-mono font-bold text-cyan-200 mt-0.5">
+                          {telemetry.cpuCores ? `${telemetry.cpuCores} núcleos` : 'N/D'}
+                        </div>
                       </div>
-                      <div className="h-2 rounded-full bg-[#030712] overflow-hidden border border-cyan-500/20">
-                        <div
-                          className="h-full bg-gradient-to-r from-[#00E5FF] to-[#FF2A4B] transition-all duration-500"
-                          style={{ width: `${cpuLoad}%` }}
-                        />
+
+                      <div className="p-2 rounded-xl bg-[#040916] border border-cyan-500/20">
+                        <div className="text-[10px] text-slate-400 flex items-center gap-1">
+                          <HardDrive className="w-3 h-3 text-rose-300" />
+                          <span>RAM Dispositivo</span>
+                        </div>
+                        <div className="font-mono font-bold text-rose-200 mt-0.5">
+                          {telemetry.deviceMemoryGb ? `~${telemetry.deviceMemoryGb} GB` : 'N/D navegador'}
+                        </div>
                       </div>
                     </div>
+
                     <div>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="text-slate-400">Memória Ativa</span>
-                        <span className="font-mono text-rose-300">{memLoad}%</span>
+                      <div className="flex justify-between text-[11px] mb-1">
+                        <span className="text-slate-400">Heap JS da Aba</span>
+                        <span className="font-mono text-cyan-300">
+                          {telemetry.jsHeapUsedMb !== null && telemetry.jsHeapLimitMb !== null
+                            ? `${telemetry.jsHeapUsedMb} / ${telemetry.jsHeapLimitMb} MB (${jsHeapPct}%)`
+                            : 'Indisponível neste navegador'}
+                        </span>
                       </div>
-                      <div className="h-2 rounded-full bg-[#030712] overflow-hidden border border-rose-500/20">
-                        <div
-                          className="h-full bg-gradient-to-r from-[#3B82F6] to-[#FF2A4B] transition-all duration-500"
-                          style={{ width: `${memLoad}%` }}
-                        />
+                      {jsHeapPct !== null && (
+                        <div className="h-1.5 rounded-full bg-[#030712] overflow-hidden border border-cyan-500/20">
+                          <div
+                            className="h-full bg-gradient-to-r from-[#00E5FF] to-[#FF2A4B] transition-all duration-500"
+                            style={{ width: `${jsHeapPct}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="flex justify-between text-[11px] mb-1">
+                        <span className="text-slate-400 flex items-center gap-1">
+                          {telemetry.batteryCharging ? (
+                            <BatteryCharging className="w-3.5 h-3.5 text-emerald-400" />
+                          ) : (
+                            <BatteryMedium className="w-3.5 h-3.5 text-cyan-300" />
+                          )}
+                          <span>Bateria</span>
+                        </span>
+                        <span className="font-mono text-emerald-300">
+                          {telemetry.batteryPct !== null
+                            ? `${telemetry.batteryPct}% (${
+                                telemetry.batteryCharging ? 'A carregar' : 'Em uso'
+                              })`
+                            : 'Indisponível'}
+                        </span>
                       </div>
+                      {telemetry.batteryPct !== null && (
+                        <div className="h-1.5 rounded-full bg-[#030712] overflow-hidden border border-emerald-500/20">
+                          <div
+                            className="h-full bg-gradient-to-r from-emerald-400 to-cyan-400 transition-all duration-500"
+                            style={{ width: `${telemetry.batteryPct}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-2 rounded-xl bg-[#040916] border border-cyan-500/20 flex items-center justify-between text-[11px]">
+                      <span className="flex items-center gap-1.5 text-slate-300">
+                        {telemetry.online ? (
+                          <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+                        ) : (
+                          <WifiOff className="w-3.5 h-3.5 text-rose-400" />
+                        )}
+                        <span>{telemetry.online ? 'Internet Online' : 'Sem Ligação'}</span>
+                      </span>
+                      <span className="font-mono text-cyan-300">
+                        {[
+                          telemetry.networkType,
+                          telemetry.downlinkMbps !== null ? `${telemetry.downlinkMbps} Mbps` : null,
+                          telemetry.rttMs !== null ? `${telemetry.rttMs} ms` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' • ') || telemetry.timezone}
+                      </span>
                     </div>
                   </div>
 
-                  <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/25 flex items-center justify-between">
-                    <div>
-                      <div className="text-[10px] font-mono uppercase text-cyan-300">Clima Ao Vivo</div>
-                      <div className="text-sm font-bold text-white">
-                        {weather.city} • {weather.tempC}°C
+                  {/* Clima Real via Open-Meteo */}
+                  <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/25 space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-[10px] font-mono uppercase text-cyan-300">
+                          Clima Ao Vivo (Open-Meteo)
+                        </div>
+                        <div className="text-xs font-bold text-white mt-0.5">{weather.city}</div>
                       </div>
-                      <div className="text-xs text-slate-400">
-                        {weather.condition} • Vento {weather.windKmh} km/h
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void refreshWeatherNow(true)}
+                        disabled={isRefreshingWeather}
+                        className="p-1.5 rounded-lg bg-[#040916] border border-cyan-500/30 text-cyan-300 hover:text-white cursor-pointer disabled:opacity-50"
+                        title="Atualizar clima real agora"
+                      >
+                        <RefreshCw
+                          className={`w-3.5 h-3.5 ${isRefreshingWeather ? 'animate-spin' : ''}`}
+                        />
+                      </button>
                     </div>
-                    <CloudSun className="w-8 h-8 text-cyan-300" />
+
+                    {weather.loadedFromApi && weather.tempC !== null ? (
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="text-xl font-black text-cyan-200">{weather.tempC}°C</div>
+                          <div className="text-[11px] text-slate-300">
+                            {weather.condition} • Sensação {weather.feelsLikeC ?? weather.tempC}°C
+                          </div>
+                          <div className="text-[10px] text-slate-400 mt-0.5">
+                            Humidade {weather.humidityPct ?? '--'}% • Vento {weather.windKmh ?? '--'}{' '}
+                            km/h
+                          </div>
+                        </div>
+                        <CloudSun className="w-8 h-8 text-cyan-300 shrink-0" />
+                      </div>
+                    ) : (
+                      <div className="text-xs text-amber-300">
+                        {weather.errorMsg || 'Não consegui buscar o clima real agora.'}
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-1 gap-2">
@@ -926,7 +1288,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       className="w-full py-2.5 px-3 rounded-xl bg-cyan-500/15 border border-cyan-400/50 text-cyan-200 text-xs font-bold flex items-center justify-center gap-2 hover:bg-cyan-500/25 cursor-pointer"
                     >
                       <Sun className="w-4 h-4" />
-                      <span>Rotina Diária & Resumo Matinal</span>
+                      <span>Rotina Diária & Resumo do Dia</span>
                     </button>
 
                     <button
@@ -1011,27 +1373,35 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     <div className="text-[10px] font-mono uppercase tracking-widest text-slate-400">
                       Agenda ({agenda.length})
                     </div>
-                    {agenda.map((ag) => (
-                      <div
-                        key={ag.id}
-                        className="p-2.5 rounded-xl bg-[#071126] border border-cyan-500/20 flex items-center justify-between gap-2"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold text-white truncate">{ag.title}</div>
-                          <div className="text-[10px] font-mono text-cyan-300">
-                            {ag.date} • {ag.time}
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setAgenda((prev) => prev.filter((x) => x.id !== ag.id))}
-                          className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer"
-                          title="Remover"
+                    {agenda.length === 0 ? (
+                      <p className="text-xs text-slate-400 py-3 text-center">
+                        Agenda vazia. Pede por voz para marcar algo ou adiciona acima.
+                      </p>
+                    ) : (
+                      agenda.map((ag) => (
+                        <div
+                          key={ag.id}
+                          className="p-2.5 rounded-xl bg-[#071126] border border-cyan-500/20 flex items-center justify-between gap-2"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold text-white truncate">
+                              {ag.title}
+                            </div>
+                            <div className="text-[10px] font-mono text-cyan-300">
+                              {ag.date} • {ag.time}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setAgenda((prev) => prev.filter((x) => x.id !== ag.id))}
+                            className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer"
+                            title="Remover"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))
+                    )}
                   </div>
 
                   {/* Alarmes / Despertador */}
@@ -1113,8 +1483,15 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   <form
                     onSubmit={async (e) => {
                       e.preventDefault();
-                      if (!musicSearch.trim()) return;
-                      const tr = await searchYouTubeTrack(musicSearch.trim());
+                      const q = musicSearch.trim();
+                      if (!q || isSearchingMusic) return;
+                      setIsSearchingMusic(true);
+                      const tr = await searchYouTubeTrack(q, 'music');
+                      setIsSearchingMusic(false);
+                      if (!tr || !tr.videoId) {
+                        onNotify('Não consegui encontrar essa música no YouTube agora.');
+                        return;
+                      }
                       setPlaylist((prev) => [tr, ...prev.filter((x) => x.id !== tr.id)]);
                       setCurrentTrackIndex(0);
                       setMusicSearch('');
@@ -1131,36 +1508,46 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       type="text"
                       value={musicSearch}
                       onChange={(e) => setMusicSearch(e.target.value)}
-                      placeholder="Pedir música ou artista..."
+                      placeholder="Pesquisar música real no YouTube..."
                       className="flex-1 px-2.5 py-2 rounded-xl bg-[#030815] border border-cyan-500/30 text-xs text-white focus:outline-none focus:border-cyan-400"
                     />
                     <button
                       type="submit"
-                      className="px-3 py-2 rounded-xl bg-cyan-500/25 border border-cyan-400/60 text-cyan-200 text-xs font-bold cursor-pointer"
+                      disabled={isSearchingMusic || !musicSearch.trim()}
+                      className="px-3 py-2 rounded-xl bg-cyan-500/25 border border-cyan-400/60 text-cyan-200 text-xs font-bold cursor-pointer disabled:opacity-45"
                     >
-                      Tocar
+                      {isSearchingMusic ? '...' : 'Tocar'}
                     </button>
                   </form>
 
                   <div className="space-y-1.5">
-                    {playlist.map((tr, idx) => (
-                      <button
-                        key={tr.id}
-                        type="button"
-                        onClick={() => handlePlayTrack(tr, idx)}
-                        className={`w-full p-2.5 rounded-xl border text-left flex items-center gap-2.5 transition cursor-pointer ${
-                          stageContent?.kind === 'music' && stageContent.track.id === tr.id
-                            ? 'bg-cyan-500/20 border-cyan-400 text-white'
-                            : 'bg-[#071126] border-cyan-500/20 text-slate-300 hover:border-cyan-400/50'
-                        }`}
-                      >
-                        <Music2 className="w-4 h-4 text-rose-400 shrink-0" />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-xs font-semibold truncate">{tr.title}</div>
-                          <div className="text-[10px] text-cyan-300/80 truncate">{tr.artist}</div>
-                        </div>
-                      </button>
-                    ))}
+                    {playlist.length === 0 ? (
+                      <p className="text-xs text-slate-400 text-center py-6">
+                        Sem músicas na fila. Pede qualquer música por voz ou pesquisa acima no YouTube.
+                      </p>
+                    ) : (
+                      playlist.map((tr, idx) => (
+                        <button
+                          key={tr.id}
+                          type="button"
+                          onClick={() => handlePlayTrack(tr, idx)}
+                          className={`w-full p-2.5 rounded-xl border text-left flex items-center gap-2.5 transition cursor-pointer ${
+                            stageContent?.kind === 'music' && stageContent.track.id === tr.id
+                              ? 'bg-cyan-500/20 border-cyan-400 text-white'
+                              : 'bg-[#071126] border-cyan-500/20 text-slate-300 hover:border-cyan-400/50'
+                          }`}
+                        >
+                          <Music2 className="w-4 h-4 text-rose-400 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <div className="text-xs font-semibold truncate">{tr.title}</div>
+                            <div className="text-[10px] text-cyan-300/80 truncate">
+                              {tr.artist}
+                              {tr.durationText ? ` • ${tr.durationText}` : ''}
+                            </div>
+                          </div>
+                        </button>
+                      ))
+                    )}
                   </div>
                 </div>
               )}
@@ -1260,53 +1647,59 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   </div>
 
                   <div className="space-y-1.5">
-                    {tasks.map((t) => (
-                      <div
-                        key={t.id}
-                        className="p-2.5 rounded-xl bg-[#071126] border border-cyan-500/20 flex items-center justify-between gap-2"
-                      >
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setTasks((prev) =>
-                              prev.map((x) => (x.id === t.id ? { ...x, done: !x.done } : x))
-                            )
-                          }
-                          className="flex items-center gap-2 text-left min-w-0 flex-1 cursor-pointer"
+                    {tasks.length === 0 ? (
+                      <p className="text-xs text-slate-400 text-center py-4">
+                        Sem tarefas pendentes.
+                      </p>
+                    ) : (
+                      tasks.map((t) => (
+                        <div
+                          key={t.id}
+                          className="p-2.5 rounded-xl bg-[#071126] border border-cyan-500/20 flex items-center justify-between gap-2"
                         >
-                          {t.done ? (
-                            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                          ) : (
-                            <Circle className="w-4 h-4 text-cyan-400 shrink-0" />
-                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setTasks((prev) =>
+                                prev.map((x) => (x.id === t.id ? { ...x, done: !x.done } : x))
+                              )
+                            }
+                            className="flex items-center gap-2 text-left min-w-0 flex-1 cursor-pointer"
+                          >
+                            {t.done ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                            ) : (
+                              <Circle className="w-4 h-4 text-cyan-400 shrink-0" />
+                            )}
+                            <span
+                              className={`text-xs truncate ${
+                                t.done ? 'line-through text-slate-500' : 'text-white'
+                              }`}
+                            >
+                              {t.title}
+                            </span>
+                          </button>
                           <span
-                            className={`text-xs truncate ${
-                              t.done ? 'line-through text-slate-500' : 'text-white'
+                            className={`text-[9px] font-mono uppercase px-1.5 py-0.5 rounded ${
+                              t.priority === 'alta'
+                                ? 'bg-rose-500/20 text-rose-300'
+                                : t.priority === 'media'
+                                ? 'bg-cyan-500/20 text-cyan-300'
+                                : 'bg-slate-800 text-slate-400'
                             }`}
                           >
-                            {t.title}
+                            {t.priority}
                           </span>
-                        </button>
-                        <span
-                          className={`text-[9px] font-mono uppercase px-1.5 py-0.5 rounded ${
-                            t.priority === 'alta'
-                              ? 'bg-rose-500/20 text-rose-300'
-                              : t.priority === 'media'
-                              ? 'bg-cyan-500/20 text-cyan-300'
-                              : 'bg-slate-800 text-slate-400'
-                          }`}
-                        >
-                          {t.priority}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => setTasks((prev) => prev.filter((x) => x.id !== t.id))}
-                          className="text-slate-500 hover:text-rose-400 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
+                          <button
+                            type="button"
+                            onClick={() => setTasks((prev) => prev.filter((x) => x.id !== t.id))}
+                            className="text-slate-500 hover:text-rose-400 cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))
+                    )}
                   </div>
                 </div>
               )}
@@ -1326,25 +1719,40 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           <div className="pointer-events-none absolute bottom-2 left-2 w-6 h-6 border-b-2 border-l-2 border-[#FF2A4B]" />
           <div className="pointer-events-none absolute bottom-2 right-2 w-6 h-6 border-b-2 border-r-2 border-[#00E5FF]" />
 
-          {/* Barra superior de telemetria ao vivo do Palco */}
+          {/* Barra superior de telemetria REAL ao vivo do Palco */}
           <div className="px-4 py-2.5 border-b border-cyan-500/20 bg-[#040A17]/80 backdrop-blur-md flex flex-wrap items-center justify-between gap-2 shrink-0 z-10">
             <div className="flex items-center gap-3 text-xs font-mono">
               <span className="text-cyan-300 font-bold tracking-wider">{timeFormatted}</span>
               <span className="text-slate-400 hidden sm:inline">{todayFormatted}</span>
-              <span className="text-rose-300 flex items-center gap-1">
+              <span
+                className={`flex items-center gap-1 ${
+                  weather.loadedFromApi ? 'text-rose-300' : 'text-amber-300'
+                }`}
+                title={weather.errorMsg || weather.condition}
+              >
                 <CloudSun className="w-3.5 h-3.5" />
-                {weather.city} {weather.tempC}°C
+                {shortCityName}{' '}
+                {weather.loadedFromApi && weather.tempC !== null ? `${weather.tempC}°C` : '--'}
               </span>
             </div>
 
             <div className="flex items-center gap-3">
-              {/* Barra de Energia Stark */}
-              <div className="hidden sm:flex items-center gap-1.5 text-[10px] font-mono text-cyan-300">
-                <span>CORE</span>
-                <div className="w-20 h-2 rounded-full bg-[#020612] border border-cyan-500/40 overflow-hidden">
-                  <div className="h-full w-[94%] bg-gradient-to-r from-[#00E5FF] via-blue-400 to-[#FF2A4B]" />
-                </div>
-                <span className="text-rose-300">94%</span>
+              {/* Estado REAL da Rede e Bateria / CPU */}
+              <div className="hidden sm:flex items-center gap-2 text-[10px] font-mono">
+                <span
+                  className={`px-2 py-0.5 rounded border ${
+                    telemetry.online
+                      ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
+                      : 'bg-rose-500/15 border-rose-400/40 text-rose-300'
+                  }`}
+                >
+                  {telemetry.online ? telemetry.networkType || 'ONLINE' : 'OFFLINE'}
+                </span>
+                {telemetry.batteryPct !== null ? (
+                  <span className="text-cyan-300">BAT {telemetry.batteryPct}%</span>
+                ) : telemetry.cpuCores ? (
+                  <span className="text-cyan-300">{telemetry.cpuCores} CORES</span>
+                ) : null}
               </div>
 
               {/* Espectro de Voz Animado */}
@@ -1408,9 +1816,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   onChangeLayoutMode={setStageLayout}
                   onClose={() => setStageContent(null)}
                   onNextTrack={handleNextTrack}
-                  onAskAboutDocument={(title) =>
-                    setInputText(`Sobre "${title}", `)
-                  }
+                  onAskAboutDocument={(title) => setInputText(`Sobre "${title}", `)}
                   playlist={playlist}
                 />
               </div>
@@ -1422,12 +1828,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   onChangeLayoutMode={setStageLayout}
                   onClose={() => setStageContent(null)}
                   onNextTrack={handleNextTrack}
-                  onAskAboutDocument={(title) =>
-                    setInputText(`Sobre "${title}", `)
-                  }
+                  onAskAboutDocument={(title) => setInputText(`Sobre "${title}", `)}
                   playlist={playlist}
                 />
-                {/* Cabeça encolhida no canto superior esquerdo */}
+                {/* Cabeça encolhida no canto inferior esquerdo */}
                 <div
                   className="hidden sm:flex absolute bottom-3 left-3 z-20 rounded-2xl bg-[#040916]/90 border border-cyan-400/50 shadow-[0_0_24px_rgba(0,229,255,0.28)] p-1 backdrop-blur-md"
                   title="Clica para dividir o ecrã com a Sara"
@@ -1445,7 +1849,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             )}
           </div>
 
-          {/* Barra Inferior: Microfone Grande Animado + Input + Anexar Documento */}
+          {/* Barra Inferior: Microfone Grande Animado + Interromper + Anexar Documento + Input */}
           <div className="p-3 border-t border-cyan-500/25 bg-[#040A17]/90 backdrop-blur-md shrink-0 z-10">
             <input
               ref={fileInputRef}
@@ -1463,16 +1867,42 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             >
               <button
                 type="button"
-                onClick={onToggleMic}
+                onClick={isSaraSpeaking ? handleBargeIn : onToggleMic}
                 className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 border transition cursor-pointer ${
-                  isListening
+                  isSaraSpeaking
+                    ? 'bg-rose-500/25 border-rose-400 text-rose-200 shadow-[0_0_20px_rgba(255,42,75,0.4)] animate-pulse'
+                    : isListening
                     ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300 shadow-[0_0_22px_rgba(16,185,129,0.45)] animate-pulse'
                     : 'bg-gradient-to-br from-cyan-500/25 to-[#FF2A4B]/20 border-[#00E5FF]/60 text-cyan-200 hover:shadow-[0_0_18px_rgba(0,229,255,0.35)]'
                 }`}
-                title={isListening ? 'Microfone contínuo ativo' : 'Falar com a SARA JARVIS'}
+                title={
+                  isSaraSpeaking
+                    ? 'Interromper Sara e falar agora'
+                    : isListening
+                    ? 'Microfone contínuo ativo (clica para desligar)'
+                    : 'Falar com a SARA'
+                }
               >
-                {isListening ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
+                {isSaraSpeaking ? (
+                  <Square className="w-4 h-4 fill-current" />
+                ) : isListening ? (
+                  <Mic className="w-5 h-5" />
+                ) : (
+                  <MicOff className="w-5 h-5" />
+                )}
               </button>
+
+              {isSaraSpeaking && (
+                <button
+                  type="button"
+                  onClick={handleBargeIn}
+                  className="px-2.5 h-10 rounded-xl bg-rose-500/20 border border-rose-400/60 text-rose-200 text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer hover:bg-rose-500/30"
+                  title="Interromper voz da Sara imediatamente"
+                >
+                  <VolumeX className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Interromper</span>
+                </button>
+              )}
 
               <button
                 type="button"
@@ -1487,7 +1917,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Fala ou escreve qualquer pedido à SARA JARVIS (matemática, gráficos, música, agenda, documentos...)"
+                placeholder="Fala ou escreve à SARA (explicações simples ou profundas, música, vídeos, gráficos...)"
                 className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-[#061024] border border-cyan-500/30 text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-none focus:border-[#00E5FF]"
               />
 
@@ -1503,7 +1933,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           </div>
         </section>
 
-        {/* PAINEL DIREITO: PROCESSAMENTO HOMEM DE FERRO + RESPOSTAS + MEMÓRIA PERSISTENTE */}
+        {/* PAINEL DIREITO: PROCESSAMENTO STARK + RESPOSTAS EM STREAM + MEMÓRIA PERSISTENTE */}
         {!focusMode && (
           <aside
             className={`h-full min-h-0 bg-[#050B18] border-l border-cyan-500/25 flex-col overflow-hidden ${
@@ -1542,47 +1972,60 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 Diálogo & Detalhes
               </div>
 
-              {conversation.length === 0 ? (
+              {conversation.length === 0 && !streamingReply ? (
                 <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/25 text-xs text-slate-300 leading-relaxed">
-                  Olá <strong className="text-cyan-300">Eletro-Jr</strong>! Estou pronta no Modo Assistente JARVIS. Podes conversar comigo, pedir gráficos, matemática passo a passo, músicas, gerir a tua agenda ou enviar documentos PDF e imagens.
+                  Olá! Estou ativa no <strong className="text-cyan-300">Modo Assistente SARA</strong>. Podes falar comigo naturalmente para tirar dúvidas (em nível simples, normal ou técnico), procurar músicas ou vídeos no YouTube, ver gráficos, matemática ou analisar documentos.
                 </div>
               ) : (
-                conversation.map((entry) => (
-                  <div
-                    key={entry.id}
-                    className={`p-3 rounded-2xl border text-xs leading-relaxed ${
-                      entry.sender === 'user'
-                        ? 'bg-[#091834] border-cyan-500/35 text-cyan-50 ml-4'
-                        : 'bg-[#060E1F] border-rose-500/25 text-slate-200 mr-2'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1 text-[10px] font-mono">
-                      <span
-                        className={
-                          entry.sender === 'user' ? 'text-cyan-300 font-bold' : 'text-rose-300 font-bold'
-                        }
-                      >
-                        {entry.sender === 'user' ? 'Eletro-Jr' : 'SARA JARVIS'}
-                      </span>
-                      <div className="flex items-center gap-2 text-slate-400">
-                        <span>{entry.timestamp}</span>
-                        {entry.sender === 'sara' && (
-                          <button
-                            type="button"
-                            onClick={() =>
-                              speakAsSara(entry.text, true, { level: 'full', forceSpeak: true })
-                            }
-                            className="text-cyan-300 hover:text-white cursor-pointer"
-                            title="Ouvir resposta"
-                          >
-                            <Volume2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
+                <>
+                  {conversation.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className={`p-3 rounded-2xl border text-xs leading-relaxed ${
+                        entry.sender === 'user'
+                          ? 'bg-[#091834] border-cyan-500/35 text-cyan-50 ml-4'
+                          : 'bg-[#060E1F] border-rose-500/25 text-slate-200 mr-2'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1 text-[10px] font-mono">
+                        <span
+                          className={
+                            entry.sender === 'user'
+                              ? 'text-cyan-300 font-bold'
+                              : 'text-rose-300 font-bold'
+                          }
+                        >
+                          {entry.sender === 'user' ? 'Tu' : 'SARA'}
+                        </span>
+                        <div className="flex items-center gap-2 text-slate-400">
+                          <span>{entry.timestamp}</span>
+                          {entry.sender === 'sara' && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                speakAsSara(entry.text, true, { level: 'full', forceSpeak: true })
+                              }
+                              className="text-cyan-300 hover:text-white cursor-pointer"
+                              title="Ouvir resposta"
+                            >
+                              <Volume2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </div>
+                      <div className="whitespace-pre-wrap">{entry.text}</div>
                     </div>
-                    <div className="whitespace-pre-wrap">{entry.text}</div>
-                  </div>
-                ))
+                  ))}
+
+                  {streamingReply && (
+                    <div className="p-3 rounded-2xl border bg-[#060E1F] border-cyan-400/50 text-slate-200 mr-2 text-xs leading-relaxed">
+                      <div className="flex items-center justify-between mb-1 text-[10px] font-mono">
+                        <span className="text-cyan-300 font-bold">SARA (a escrever...)</span>
+                      </div>
+                      <div className="whitespace-pre-wrap">{streamingReply}</div>
+                    </div>
+                  )}
+                </>
               )}
               <div ref={chatEndRef} />
             </div>

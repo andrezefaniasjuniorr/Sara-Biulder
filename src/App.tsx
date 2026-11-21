@@ -25,7 +25,7 @@ import type {
   VersionSnapshot,
   VoiceLevel,
 } from './types/builder';
-import type { WorkspaceMode } from './types/jarvis';
+import type { JarvisModuleTab, WorkspaceMode } from './types/jarvis';
 import { createStarterProject } from './utils/starterProject';
 import {
   askSaraBuilderStep,
@@ -59,6 +59,7 @@ import {
   getModeSwitchSpeech,
   getPlatformCommandSpeech,
   getSpokenBuildRecap,
+  interruptSaraAndListen,
   normalizePhoneticVoiceTranscript,
   parseVoiceCommand,
   playCompletionChime,
@@ -331,6 +332,10 @@ export default function App() {
     ((promptText: string, source?: 'voice' | 'text') => Promise<void>) | null
   >(null);
   const jarvisFocusRef = useRef<((enabled: boolean) => void) | null>(null);
+  const jarvisModuleRef = useRef<((tab: JarvisModuleTab) => void) | null>(null);
+  const jarvisRepeatRef = useRef<(() => void) | null>(null);
+  const jarvisContinueRef = useRef<(() => Promise<void>) | null>(null);
+  const isSaraSpeakingRef = useRef(false);
   const startupGreetedRef = useRef(false);
 
   useEffect(() => {
@@ -403,10 +408,10 @@ export default function App() {
     mission.paused,
   ]);
 
-  // Saudação falada inicial da SARA JARVIS ao ativar o sistema
+  // Saudação falada inicial da SARA ao ativar o sistema
   useEffect(() => {
     const greeting =
-      'Olá Eletro-Júnior, sou a SARA JARVIS, estou pronta. Queres modo Assistente ou Builder?';
+      'Olá! Sou a SARA, estou pronta. Queres trabalhar no modo Assistente ou abrir o Builder?';
     const speakGreeting = () => {
       if (startupGreetedRef.current) return;
       startupGreetedRef.current = true;
@@ -447,7 +452,10 @@ export default function App() {
   }, [errorsFixedCount]);
 
   useEffect(() => {
-    setSpeakingStateListener((speaking) => setIsSaraSpeaking(speaking));
+    setSpeakingStateListener((speaking) => {
+      isSaraSpeakingRef.current = speaking;
+      setIsSaraSpeaking(speaking);
+    });
     return () => setSpeakingStateListener(null);
   }, []);
 
@@ -989,7 +997,25 @@ export default function App() {
         setIsPresentationMode(false);
         setIsEditorFullscreen(false);
         setIsPreviewFullscreen(false);
-        stopSaraSpeech();
+        interruptSaraAndListen();
+      } else if (
+        e.code === 'Space' &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        isSaraSpeakingRef.current
+      ) {
+        const target = e.target as HTMLElement | null;
+        const tag = target?.tagName || '';
+        const isEditable =
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          Boolean(target?.isContentEditable);
+        if (!isEditable) {
+          e.preventDefault();
+          interruptSaraAndListen();
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -1716,14 +1742,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       if (nextMode === 'builder') {
         showToast('Modo 2: SARA BIULDER ativado');
         speakAsSara(
-          'Modo Builder ativado, Eletro-Júnior. Que sistema ou site vamos construir agora?',
+          'Modo Builder ligado. Que app ou site vamos construir?',
           voiceEnabledRef.current,
           { level: 'short', forceSpeak: true }
         );
       } else {
-        showToast('Modo 1: SARA JARVIS Assistente ativado');
+        showToast('Modo 1: SARA Assistente ativado');
         speakAsSara(
-          'De volta ao modo Assistente JARVIS, Eletro-Júnior. Estou pronta para tudo.',
+          'De volta ao Modo Assistente. Em que posso ajudar agora?',
           voiceEnabledRef.current,
           { level: 'short', forceSpeak: true }
         );
@@ -1953,7 +1979,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
-      // 4b. Troca instantânea entre MODO 1 (Assistente JARVIS) e MODO 2 (Builder) e Modo Foco
+      // 4b. Troca instantânea entre MODO 1 (Assistente JARVIS) e MODO 2 (Builder), Módulos e Modo Foco
       if (cmd.type === 'open_builder_mode') {
         handleChangeWorkspaceMode('builder');
         return true;
@@ -1964,6 +1990,52 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      if (cmd.type === 'open_jarvis_module') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        setTimeout(() => jarvisModuleRef.current?.(cmd.moduleTab), 40);
+        const tabLabels: Record<JarvisModuleTab, string> = {
+          voz: 'canal de voz',
+          sistema: 'diagnóstico do sistema',
+          agenda: 'agenda e alarmes',
+          musica: 'música',
+          documentos: 'documentos',
+          tarefas: 'tarefas',
+        };
+        showToast(`Módulo ${cmd.moduleTab} aberto`);
+        speakAsSara(`A abrir ${tabLabels[cmd.moduleTab]}.`, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'repeat_sara') {
+        if (workspaceModeRef.current === 'jarvis' && jarvisRepeatRef.current) {
+          jarvisRepeatRef.current();
+        } else {
+          const lastSaraMsg = [...messages].reverse().find((m) => m.sender === 'sara');
+          if (lastSaraMsg) {
+            speakAsSara(lastSaraMsg.text, true, { level: 'full', forceSpeak: true });
+          } else {
+            speakAsSara('Ainda não respondi a nada por aqui.', true, {
+              level: 'short',
+              forceSpeak: true,
+            });
+          }
+        }
+        return true;
+      }
+
+      if (cmd.type === 'continue_sara') {
+        if (workspaceModeRef.current === 'jarvis' && jarvisContinueRef.current) {
+          await jarvisContinueRef.current();
+          return true;
+        }
+      }
+
       if (cmd.type === 'focus_mode_on') {
         if (workspaceModeRef.current !== 'jarvis') {
           setWorkspaceMode('jarvis');
@@ -1971,7 +2043,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
         setTimeout(() => jarvisFocusRef.current?.(true), 60);
         showToast('Modo Foco ativado');
-        speakAsSara('Modo foco ligado, Eletro-Júnior.', voiceEnabledRef.current, {
+        speakAsSara('Modo foco ligado.', voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
         });
@@ -1981,7 +2053,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       if (cmd.type === 'focus_mode_off') {
         jarvisFocusRef.current?.(false);
         showToast('Modo Foco desativado');
-        speakAsSara('Modo foco desligado, Eletro-Júnior.', voiceEnabledRef.current, {
+        speakAsSara('Modo foco desligado.', voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
         });
@@ -3635,6 +3707,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
   }, [addConsoleLog, executePlatformCommand, showToast]);
 
   const handleToggleMic = useCallback(() => {
+    if (isSaraSpeakingRef.current) {
+      interruptSaraAndListen();
+      if (!isListening && !shouldKeepListeningRef.current) {
+        startHandsFreeMic();
+      }
+      showToast('Sara interrompida — podes falar agora!');
+      return;
+    }
     if (isListening || shouldKeepListeningRef.current) {
       stopHandsFreeMic();
       showToast('Microfone desligado');
@@ -3823,6 +3903,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           onNotify={showToast}
           externalCommandRef={jarvisPromptRef}
           externalFocusCommandRef={jarvisFocusRef}
+          externalModuleRef={jarvisModuleRef}
+          externalRepeatRef={jarvisRepeatRef}
+          externalContinueRef={jarvisContinueRef}
         />
       ) : (
         <>
@@ -4095,15 +4178,30 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           {isVoiceProcessing && <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
 
           {isSaraSpeaking && (
-            <button
-              type="button"
-              onClick={handleForceSilenceSara}
-              className="px-2 py-1.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer hover:bg-rose-500/30 transition"
-              title="Calar Sara agora"
-            >
-              <VolumeX className="w-3.5 h-3.5" />
-              <span>Calar</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  interruptSaraAndListen();
+                  if (!shouldKeepListeningRef.current) startHandsFreeMic();
+                  showToast('Podes falar agora.');
+                }}
+                className="px-2 py-1.5 rounded-xl bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer hover:bg-cyan-500/30 transition"
+                title="Interromper Sara e falar imediatamente"
+              >
+                <Mic className="w-3.5 h-3.5" />
+                <span>Interromper</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleForceSilenceSara}
+                className="px-2 py-1.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer hover:bg-rose-500/30 transition"
+                title="Calar Sara agora"
+              >
+                <VolumeX className="w-3.5 h-3.5" />
+                <span>Calar</span>
+              </button>
+            </>
           )}
         </div>
       )}

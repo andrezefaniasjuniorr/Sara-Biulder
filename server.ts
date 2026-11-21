@@ -6,8 +6,11 @@ import { createServer as createViteServer } from 'vite';
 import { ThinkingLevel } from '@google/genai';
 import {
   MODEL_PRIORITY_CHAIN,
+  SARA_JARVIS_STREAM_PROTOCOL,
   SARA_STREAM_PROTOCOL,
+  buildJarvisEnvelopeParts,
   buildStreamParts,
+  enrichJarvisActionsNode,
   formatFriendlyAiError,
   getGeminiClient,
   isRetryableModelError,
@@ -179,10 +182,115 @@ async function startServer() {
   app.post('/api/final-test', handleFinalTest);
   app.post('/api/sara/final-test', handleFinalTest);
 
+  const handleJarvisStream = async (req: express.Request, res: express.Response) => {
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const sendEvent = (payload: Record<string, any>) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    };
+
+    try {
+      const headerKey = req.headers['x-gemini-api-key'];
+      const customKey = typeof headerKey === 'string' ? headerKey : undefined;
+      const ai = getGeminiClient(customKey);
+      const contents = buildJarvisEnvelopeParts(req.body);
+
+      let streamed = false;
+      let lastError: any = null;
+
+      for (const model of MODEL_PRIORITY_CHAIN) {
+        const streamStart = Date.now();
+        try {
+          sendEvent({ type: 'status', model });
+          const streamResp = await withTimeout(
+            ai.models.generateContentStream({
+              model,
+              contents,
+              config: {
+                systemInstruction: SARA_JARVIS_STREAM_PROTOCOL,
+                ...(model.startsWith('gemini-4')
+                  ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+                  : model.startsWith('gemini-3.1')
+                  ? { thinkingConfig: { thinkingLevel: ThinkingLevel.MINIMAL } }
+                  : { temperature: 0.9 }),
+              },
+            }),
+            9000,
+            model
+          );
+
+          const iterator = streamResp[Symbol.asyncIterator]();
+          let chunkCount = 0;
+          let fullText = '';
+
+          while (true) {
+            const nextStep = await withTimeout(iterator.next(), 12000, `${model}-chunk`);
+            if (nextStep.done) break;
+            const text = nextStep.value?.text || '';
+            if (text) {
+              chunkCount++;
+              fullText += text;
+              sendEvent({ type: 'chunk', text, model });
+            }
+          }
+
+          if (chunkCount > 0) {
+            streamed = true;
+            const actMatch = fullText.match(/<JARVIS_ACTIONS>([\s\S]*?)<\/JARVIS_ACTIONS>/i);
+            if (actMatch?.[1]) {
+              try {
+                const rawActions = JSON.parse(actMatch[1].trim());
+                if (
+                  Array.isArray(rawActions) &&
+                  rawActions.some((a) => a?.type === 'play_music' || a?.type === 'play_video')
+                ) {
+                  const enriched = await enrichJarvisActionsNode(rawActions);
+                  sendEvent({ type: 'enriched_actions', actions: enriched });
+                }
+              } catch {
+                // fallback handled on client
+              }
+            }
+            console.log(
+              `[Jarvis Stream OK] ${model} enviou ${chunkCount} chunks em ${Date.now() - streamStart}ms`
+            );
+            sendEvent({ type: 'done', model });
+            break;
+          }
+          lastError = new Error(`Streaming vazio no modelo ${model}`);
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[Jarvis Stream Failover] ${model} falhou:`, err?.message?.slice(0, 140));
+          if (!isRetryableModelError(err)) break;
+        }
+      }
+
+      if (!streamed) {
+        sendEvent({
+          type: 'error',
+          error: formatFriendlyAiError(lastError),
+        });
+      }
+    } catch (err: any) {
+      sendEvent({
+        type: 'error',
+        error: formatFriendlyAiError(err),
+      });
+    } finally {
+      res.end();
+    }
+  };
+
   const handleJarvisRequest = async (req: express.Request, res: express.Response) => {
     try {
       if (req.body?.action === 'youtube_search') {
-        const track = await searchYouTubeTrackNode(req.body?.query || '');
+        const track = await searchYouTubeTrackNode(
+          req.body?.query || '',
+          req.body?.kind || 'music'
+        );
         return res.json({ track });
       }
       const headerKey = req.headers['x-gemini-api-key'];
@@ -200,6 +308,7 @@ async function startServer() {
 
   app.post('/api/sara', handleSaraChat);
   app.post('/api/jarvis', handleJarvisRequest);
+  app.post('/api/jarvis-stream', handleJarvisStream);
 
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({

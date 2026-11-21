@@ -5,7 +5,10 @@ import type {
   JarvisAssistantResponse,
   JarvisConversationEntry,
   JarvisDocumentItem,
+  JarvisHeadMood,
   JarvisMemoryState,
+  JarvisModuleTab,
+  JarvisSystemTelemetry,
   JarvisTaskItem,
   JarvisTrack,
   JarvisWeatherInfo,
@@ -23,36 +26,23 @@ const JARVIS_STORAGE_KEYS = {
   weather: 'sara_jarvis_weather_v1',
 };
 
-export const DEFAULT_JARVIS_MEMORY: JarvisMemoryState = {
-  userName: 'Eletro-Jr',
-  preferences: ['Interface HUD Stark Azul Elétrico e Vermelho Neon', 'Comunicação rápida e natural por voz'],
-  facts: ['Fundador e arquiteto principal na plataforma SARA BIULDER'],
+const INHAMBANE_DEFAULT = {
+  lat: -23.865,
+  lon: 35.3833,
+  city: 'Inhambane Cidade, Inhambane, Moçambique',
 };
 
-export const DEFAULT_JARVIS_TRACKS: JarvisTrack[] = [
-  {
-    id: 'synth_stark_pulse',
-    title: 'Stark Core Ambient Focus',
-    artist: 'SARA Audio Engine',
-    source: 'synth',
-    durationSec: 240,
-  },
-  {
-    id: 'yt_lofi_study',
-    title: 'Lofi Hip Hop Radio — Beats to Code / Study',
-    artist: 'Lofi Girl',
-    videoId: 'jfKfPfyJRdk',
-    thumbnailUrl: 'https://i.ytimg.com/vi/jfKfPfyJRdk/hqdefault.jpg',
-    source: 'youtube',
-  },
-  {
-    id: 'synth_neon_drive',
-    title: 'Electric Horizon Synthwave',
-    artist: 'SARA Audio Engine',
-    source: 'synth',
-    durationSec: 210,
-  },
-];
+const LEGACY_MOCK_AGENDA_IDS = new Set(['ag_welcome']);
+const LEGACY_MOCK_TASK_IDS = new Set(['tsk_1']);
+const LEGACY_MOCK_TRACK_IDS = new Set(['synth_stark_pulse', 'yt_lofi_study', 'synth_neon_drive']);
+
+export const DEFAULT_JARVIS_MEMORY: JarvisMemoryState = {
+  userName: 'Eletro-Jr',
+  preferences: ['Inhambane Cidade, Inhambane, Moçambique'],
+  facts: ['Reside em Inhambane Cidade, Inhambane, Moçambique'],
+};
+
+export const DEFAULT_JARVIS_TRACKS: JarvisTrack[] = [];
 
 function safeReadJson<T>(key: string, fallback: T): T {
   try {
@@ -73,36 +63,60 @@ function safeWriteJson(key: string, value: unknown): void {
 }
 
 export function loadJarvisLocalBundle() {
-  const today = new Date().toISOString().slice(0, 10);
-  const defaultAgenda: JarvisAgendaItem[] = [
-    {
-      id: 'ag_welcome',
-      title: 'Revisão diária de arquitetura & ideias',
-      date: today,
-      time: '15:00',
-      notes: 'Sessão estratégica com a SARA JARVIS',
-      completed: false,
-      createdAt: new Date().toISOString(),
-    },
-  ];
-  const defaultTasks: JarvisTaskItem[] = [
-    {
-      id: 'tsk_1',
-      title: 'Explorar módulos de Voz, Agenda e Documentos da SARA JARVIS',
-      priority: 'media',
-      done: false,
-      createdAt: new Date().toISOString(),
-    },
-  ];
+  const rawAgenda = safeReadJson<JarvisAgendaItem[]>(JARVIS_STORAGE_KEYS.agenda, []);
+  const agenda = Array.isArray(rawAgenda)
+    ? rawAgenda.filter((item) => item && !LEGACY_MOCK_AGENDA_IDS.has(item.id))
+    : [];
+
+  const rawTasks = safeReadJson<JarvisTaskItem[]>(JARVIS_STORAGE_KEYS.tasks, []);
+  const tasks = Array.isArray(rawTasks)
+    ? rawTasks.filter((item) => item && !LEGACY_MOCK_TASK_IDS.has(item.id))
+    : [];
+
+  const rawPlaylist = safeReadJson<JarvisTrack[]>(JARVIS_STORAGE_KEYS.playlist, []);
+  const playlist = Array.isArray(rawPlaylist)
+    ? rawPlaylist.filter(
+        (tr) =>
+          tr &&
+          tr.source === 'youtube' &&
+          Boolean(tr.videoId) &&
+          !LEGACY_MOCK_TRACK_IDS.has(tr.id) &&
+          !tr.id.startsWith('synth_')
+      )
+    : [];
+
+  const rawMem = safeReadJson<JarvisMemoryState>(JARVIS_STORAGE_KEYS.memory, DEFAULT_JARVIS_MEMORY);
+  const cleanedFacts = (rawMem?.facts || []).filter(
+    (f) => !/\b(luanda|angola|matola)\b/i.test(f)
+  );
+  const memory: JarvisMemoryState = {
+    userName: rawMem?.userName || DEFAULT_JARVIS_MEMORY.userName,
+    preferences: rawMem?.preferences || DEFAULT_JARVIS_MEMORY.preferences,
+    facts: cleanedFacts.length > 0 ? cleanedFacts : DEFAULT_JARVIS_MEMORY.facts,
+    lastRoutineGreetingDate: rawMem?.lastRoutineGreetingDate,
+  };
+
+  // Remove eventual cache antigo de Luanda/Angola/Matola
+  try {
+    const cachedW = safeReadJson<{ ts: number; data: JarvisWeatherInfo } | null>(
+      JARVIS_STORAGE_KEYS.weather,
+      null
+    );
+    if (cachedW?.data?.city && /\b(luanda|angola|matola)\b/i.test(cachedW.data.city)) {
+      localStorage.removeItem(JARVIS_STORAGE_KEYS.weather);
+    }
+  } catch {
+    // ignore
+  }
 
   return {
-    agenda: safeReadJson<JarvisAgendaItem[]>(JARVIS_STORAGE_KEYS.agenda, defaultAgenda),
+    agenda,
     alarms: safeReadJson<JarvisAlarmItem[]>(JARVIS_STORAGE_KEYS.alarms, []),
-    tasks: safeReadJson<JarvisTaskItem[]>(JARVIS_STORAGE_KEYS.tasks, defaultTasks),
-    memory: safeReadJson<JarvisMemoryState>(JARVIS_STORAGE_KEYS.memory, DEFAULT_JARVIS_MEMORY),
+    tasks,
+    memory,
     documents: safeReadJson<JarvisDocumentItem[]>(JARVIS_STORAGE_KEYS.docs, []),
     conversation: safeReadJson<JarvisConversationEntry[]>(JARVIS_STORAGE_KEYS.chat, []),
-    playlist: safeReadJson<JarvisTrack[]>(JARVIS_STORAGE_KEYS.playlist, DEFAULT_JARVIS_TRACKS),
+    playlist,
   };
 }
 
@@ -140,77 +154,278 @@ export function saveJarvisPlaylist(tracks: JarvisTrack[]) {
   safeWriteJson(JARVIS_STORAGE_KEYS.playlist, tracks.slice(0, 25));
 }
 
-function buildLocalJarvisFallback(prompt: string): JarvisAssistantResponse {
-  const clean = prompt.trim();
-  const lower = clean
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '');
+function documentAttachmentMime(doc: JarvisDocumentItem): string {
+  if (doc.mimeType) return doc.mimeType;
+  const lower = doc.name.toLowerCase();
+  if (lower.endsWith('.pdf')) return 'application/pdf';
+  if (lower.endsWith('.png')) return 'image/png';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+  return 'text/plain';
+}
 
-  const actions: JarvisActionPayload[] = [];
+function normalizeJarvisAction(act: any): JarvisActionPayload {
+  const normalized: JarvisActionPayload = { ...act };
+  if (normalized.type === 'open_module' && !normalized.moduleTab && act?.module) {
+    normalized.moduleTab = act.module as JarvisModuleTab;
+  }
+  return normalized;
+}
 
-  if (/\b(modo foco|ativa foco|silencio total|foco total)\b/i.test(lower)) {
-    actions.push({ type: 'toggle_focus', enabled: true });
-    return {
-      reply: 'Modo Foco ativado, Eletro-Jr. Limpei as distrações laterais e mantive apenas o palco principal.',
-      voiceSummary: 'Modo foco ligado, Eletro-Júnior. Tudo limpo para te concentrares.',
-      mood: 'focus',
-      actions,
-    };
+function maybeExtractSvgAction(
+  prompt: string,
+  reply: string,
+  actions: JarvisActionPayload[]
+): JarvisActionPayload[] {
+  const hasSvgAction = actions.some((a) => a.type === 'show_svg' && a.svgCode);
+  if (hasSvgAction) return actions;
+
+  const svgMatch = reply.match(/<svg\b[\s\S]*?<\/svg>/i);
+  if (svgMatch?.[0]) {
+    return [
+      ...actions,
+      {
+        type: 'show_svg',
+        title: prompt.slice(0, 52) || 'Ilustração Vetorial SARA',
+        svgCode: svgMatch[0],
+      },
+    ];
+  }
+  return actions;
+}
+
+function parseStreamingJarvisTags(buffer: string): {
+  speak: string;
+  speakComplete: boolean;
+  reply: string;
+  actions: JarvisActionPayload[];
+  mood?: JarvisHeadMood;
+} {
+  const speakOpen = buffer.indexOf('<JARVIS_SPEAK>');
+  const speakClose = buffer.indexOf('</JARVIS_SPEAK>');
+  let speak = '';
+  let speakComplete = false;
+  if (speakOpen !== -1) {
+    if (speakClose !== -1) {
+      speak = buffer.slice(speakOpen + 14, speakClose).trim();
+      speakComplete = true;
+    } else {
+      speak = buffer.slice(speakOpen + 14).trim();
+    }
   }
 
-  if (/\b(sai do foco|desativa foco|modo normal)\b/i.test(lower)) {
-    actions.push({ type: 'toggle_focus', enabled: false });
-    return {
-      reply: 'Saí do Modo Foco e restaurei todos os módulos HUD no painel, Eletro-Jr.',
-      voiceSummary: 'Módulos principais restaurados, Eletro-Júnior.',
-      mood: 'idle',
-      actions,
-    };
+  let reply = '';
+  const replyOpen = buffer.indexOf('<JARVIS_REPLY>');
+  const replyClose = buffer.indexOf('</JARVIS_REPLY>');
+  if (replyOpen !== -1) {
+    reply =
+      replyClose !== -1
+        ? buffer.slice(replyOpen + 14, replyClose).trim()
+        : buffer.slice(replyOpen + 14).trim();
   }
 
-  const alarmMatch = lower.match(/\b(acorda|alarme|despertador|lembra).*?(\d{1,2})\s*(?:h|:)\s*(\d{0,2})/i);
-  if (alarmMatch) {
-    const hh = alarmMatch[2].padStart(2, '0');
-    const mm = (alarmMatch[3] || '00').padStart(2, '0');
-    const time = `${hh}:${mm}`;
-    actions.push({ type: 'add_alarm', time, label: clean });
-    return {
-      reply: `Alarme definido para as **${time}**, Eletro-Jr. Vou tocar o sinal e avisar-te por voz na hora certa.`,
-      voiceSummary: `Alarme marcado para as ${hh} horas e ${mm} minutos, Eletro-Júnior.`,
-      mood: 'happy',
-      actions,
-    };
+  let actions: JarvisActionPayload[] = [];
+  const actMatch = buffer.match(/<JARVIS_ACTIONS>([\s\S]*?)<\/JARVIS_ACTIONS>/i);
+  if (actMatch?.[1]) {
+    try {
+      const parsed = JSON.parse(actMatch[1].trim());
+      if (Array.isArray(parsed)) {
+        actions = parsed.map(normalizeJarvisAction);
+      }
+    } catch {
+      // ignore invalid partial JSON
+    }
   }
 
-  const musicMatch = clean.match(/\b(?:coloca|toca|mete|ouvir|play)\s+(?:a\s+m[uú]sica\s+)?(.+)/i);
-  if (musicMatch && musicMatch[1]) {
-    const query = musicMatch[1].trim();
-    actions.push({ type: 'play_music', query, title: query });
-    return {
-      reply: `A preparar e reproduzir **${query}** no palco principal, Eletro-Jr.`,
-      voiceSummary: `A colocar ${query} agora no palco, Eletro-Júnior.`,
-      mood: 'happy',
-      actions,
-    };
+  const moodMatch = buffer.match(/<JARVIS_MOOD>\s*(idle|listening|thinking|speaking|happy|focus)\s*<\/JARVIS_MOOD>/i);
+  const mood = moodMatch?.[1] as JarvisHeadMood | undefined;
+
+  return { speak, speakComplete, reply, actions, mood };
+}
+
+export interface JarvisStreamCallbacks {
+  onSpeakReady?: (speakText: string) => void;
+  onReplyPartial?: (partialReply: string) => void;
+  onModelStatus?: (model: string) => void;
+}
+
+export async function askJarvisAssistantStream(
+  params: {
+    prompt: string;
+    history: JarvisConversationEntry[];
+    memory: JarvisMemoryState;
+    agenda: JarvisAgendaItem[];
+    tasks: JarvisTaskItem[];
+    alarms: JarvisAlarmItem[];
+    weather?: JarvisWeatherInfo | null;
+    telemetry?: JarvisSystemTelemetry | null;
+    documentAttachment?: JarvisDocumentItem | null;
+    activeDocument?: JarvisDocumentItem | null;
+  },
+  callbacks?: JarvisStreamCallbacks
+): Promise<JarvisAssistantResponse> {
+  const apiKey = getSavedGeminiKey();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['x-gemini-api-key'] = apiKey;
+
+  const requestBody = JSON.stringify({
+    prompt: params.prompt,
+    history: params.history.slice(-10),
+    memory: params.memory,
+    agenda: params.agenda,
+    tasks: params.tasks,
+    alarms: params.alarms,
+    weather: params.weather || null,
+    telemetry: params.telemetry || null,
+    documentAttachment: params.documentAttachment
+      ? {
+          name: params.documentAttachment.name,
+          mimeType: documentAttachmentMime(params.documentAttachment),
+          textContent: params.documentAttachment.textContent,
+          base64Data: params.documentAttachment.base64Data,
+        }
+      : null,
+    activeDocument: params.activeDocument
+      ? {
+          name: params.activeDocument.name,
+          summary: params.activeDocument.summary,
+          textContent: params.activeDocument.textContent,
+        }
+      : null,
+    nowIso: new Date().toISOString(),
+  });
+
+  try {
+    const resp = await fetch('/api/jarvis-stream', {
+      method: 'POST',
+      headers,
+      body: requestBody,
+    });
+
+    if (resp.ok && resp.body) {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let sseBuffer = '';
+      let rawAccum = '';
+      let modelUsed = '';
+      let speakEmitted = false;
+      let lastPartialReply = '';
+      let enrichedActionsFromServer: JarvisActionPayload[] | null = null;
+      let streamError = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const rawJson = line.slice(6).trim();
+          if (!rawJson) continue;
+          try {
+            const evt = JSON.parse(rawJson);
+            if (evt.type === 'status' && evt.model) {
+              modelUsed = evt.model;
+              callbacks?.onModelStatus?.(evt.model);
+            } else if (evt.type === 'chunk' && evt.text) {
+              rawAccum += evt.text;
+              const parsed = parseStreamingJarvisTags(rawAccum);
+              if (!speakEmitted && parsed.speakComplete && parsed.speak) {
+                speakEmitted = true;
+                callbacks?.onSpeakReady?.(parsed.speak);
+              }
+              if (parsed.reply && parsed.reply !== lastPartialReply) {
+                lastPartialReply = parsed.reply;
+                callbacks?.onReplyPartial?.(parsed.reply);
+              }
+            } else if (evt.type === 'enriched_actions' && Array.isArray(evt.actions)) {
+              enrichedActionsFromServer = evt.actions.map(normalizeJarvisAction);
+            } else if (evt.type === 'error' && evt.error) {
+              streamError = evt.error;
+            }
+          } catch {
+            // ignore incomplete SSE line
+          }
+        }
+      }
+
+      if (rawAccum.trim()) {
+        const finalParsed = parseStreamingJarvisTags(rawAccum);
+        const strippedFallback = rawAccum
+          .replace(/<JARVIS_SPEAK>[\s\S]*?<\/JARVIS_SPEAK>/gi, '')
+          .replace(/<JARVIS_ACTIONS>[\s\S]*?<\/JARVIS_ACTIONS>/gi, '')
+          .replace(/<JARVIS_MOOD>[\s\S]*?<\/JARVIS_MOOD>/gi, '')
+          .replace(/<\/?JARVIS_REPLY>/gi, '')
+          .trim();
+
+        const finalReply = finalParsed.reply || strippedFallback || finalParsed.speak || 'Feito.';
+        const finalSpeak = finalParsed.speak || finalReply;
+        if (!speakEmitted && finalSpeak) {
+          callbacks?.onSpeakReady?.(finalSpeak);
+        }
+        const rawActions = enrichedActionsFromServer || finalParsed.actions;
+        const finalActions = maybeExtractSvgAction(params.prompt, finalReply, rawActions);
+
+        return {
+          reply: finalReply,
+          voiceSummary: finalSpeak,
+          mood: finalParsed.mood || 'speaking',
+          actions: finalActions,
+          modelUsed,
+        };
+      }
+
+      if (streamError) {
+        // Fallback para endpoint JSON padrão antes de desistir
+      }
+    }
+  } catch {
+    // fallback para /api/jarvis padrão abaixo
   }
 
-  if (/\b(horas|que horas|data|hoje)\b/i.test(lower)) {
-    const now = new Date();
-    const hStr = now.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
-    const dStr = now.toLocaleDateString('pt-PT', { weekday: 'long', day: 'numeric', month: 'long' });
-    return {
-      reply: `Agora são **${hStr}** (${dStr}), Eletro-Jr.`,
-      voiceSummary: `Agora são ${hStr}, ${dStr}, Eletro-Júnior.`,
-      mood: 'speaking',
-      actions: [],
-    };
+  return askJarvisAssistantFallbackJson(requestBody, headers, params.prompt, callbacks);
+}
+
+async function askJarvisAssistantFallbackJson(
+  requestBody: string,
+  headers: Record<string, string>,
+  prompt: string,
+  callbacks?: JarvisStreamCallbacks
+): Promise<JarvisAssistantResponse> {
+  try {
+    const resp = await fetch('/api/jarvis', {
+      method: 'POST',
+      headers,
+      body: requestBody,
+    });
+    if (resp.ok) {
+      const data = (await resp.json()) as JarvisAssistantResponse;
+      if (data && typeof data.reply === 'string') {
+        const spoken = data.voiceSummary || data.reply;
+        callbacks?.onSpeakReady?.(spoken);
+        return {
+          ...data,
+          actions: maybeExtractSvgAction(
+            prompt,
+            data.reply,
+            (data.actions || []).map(normalizeJarvisAction)
+          ),
+        };
+      }
+    }
+  } catch {
+    // offline or API unreachable
   }
 
+  const honestUnavailable =
+    'Não consegui ligar-me ao motor neural neste momento. Verifica a tua ligação à internet ou a chave API e tenta novamente.';
+  callbacks?.onSpeakReady?.('Não consegui responder agora porque falhou a ligação ao motor.');
   return {
-    reply: `Recebi o teu pedido ("${clean}"), Eletro-Jr. Estou a operar em modo local rápido enquanto restabeleço a ligação ao motor neural — queres agendar uma tarefa, tocar música ou criar algo no Builder?`,
-    voiceSummary: 'Estou contigo em modo local rápido, Eletro-Júnior. Em que posso avançar agora?',
-    mood: 'speaking',
+    reply: honestUnavailable,
+    voiceSummary: 'Não consegui responder agora porque falhou a ligação.',
+    mood: 'idle',
     actions: [],
   };
 }
@@ -222,157 +437,210 @@ export async function askJarvisAssistant(params: {
   agenda: JarvisAgendaItem[];
   tasks: JarvisTaskItem[];
   alarms: JarvisAlarmItem[];
+  weather?: JarvisWeatherInfo | null;
+  telemetry?: JarvisSystemTelemetry | null;
   documentAttachment?: JarvisDocumentItem | null;
   activeDocument?: JarvisDocumentItem | null;
 }): Promise<JarvisAssistantResponse> {
-  const apiKey = getSavedGeminiKey();
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (apiKey) headers['x-gemini-api-key'] = apiKey;
-
-  try {
-    const resp = await fetch('/api/jarvis', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        prompt: params.prompt,
-        history: params.history.slice(-10),
-        memory: params.memory,
-        agenda: params.agenda,
-        tasks: params.tasks,
-        alarms: params.alarms,
-        documentAttachment: params.documentAttachment
-          ? {
-              name: params.documentAttachment.name,
-              mimeType: documentAttachmentMime(params.documentAttachment),
-              textContent: params.documentAttachment.textContent,
-              base64Data: params.documentAttachment.base64Data,
-            }
-          : null,
-        activeDocument: params.activeDocument
-          ? {
-              name: params.activeDocument.name,
-              summary: params.activeDocument.summary,
-              textContent: params.activeDocument.textContent,
-            }
-          : null,
-        nowIso: new Date().toISOString(),
-      }),
-    });
-
-    if (!resp.ok) {
-      return buildLocalJarvisFallback(params.prompt);
-    }
-    const data = (await resp.json()) as JarvisAssistantResponse;
-    if (!data || typeof data.reply !== 'string') {
-      return buildLocalJarvisFallback(params.prompt);
-    }
-    return data;
-  } catch {
-    return buildLocalJarvisFallback(params.prompt);
-  }
+  return askJarvisAssistantStream(params);
 }
 
-function documentAttachmentMime(doc: JarvisDocumentItem): string {
-  if (doc.mimeType) return doc.mimeType;
-  const lower = doc.name.toLowerCase();
-  if (lower.endsWith('.pdf')) return 'application/pdf';
-  if (lower.endsWith('.png')) return 'image/png';
-  if (lower.endsWith('.webp')) return 'image/webp';
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
-  return 'text/plain';
-}
-
-export async function searchYouTubeTrack(query: string): Promise<JarvisTrack> {
-  const clean = query.trim() || 'Stark Tech Ambient';
+export async function searchYouTubeTrack(
+  query: string,
+  kind: 'music' | 'video' = 'music'
+): Promise<JarvisTrack | null> {
+  const clean = query.trim();
+  if (!clean) return null;
   try {
     const resp = await fetch('/api/jarvis', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'youtube_search', query: clean }),
+      body: JSON.stringify({ action: 'youtube_search', query: clean, kind }),
     });
     if (resp.ok) {
       const json = await resp.json();
       if (json?.track?.videoId) {
-        return json.track as JarvisTrack;
+        return {
+          ...(json.track as JarvisTrack),
+          watchUrl:
+            json.track.watchUrl || `https://www.youtube.com/watch?v=${json.track.videoId}`,
+          source: 'youtube',
+        };
       }
     }
   } catch {
-    // fallback silencioso
+    // sem fallback fictício
   }
-
-  return {
-    id: `synth_${Date.now()}`,
-    title: clean,
-    artist: 'SARA Audio Engine',
-    source: 'synth',
-    durationSec: 210,
-  };
+  return null;
 }
 
-function mapWeatherCodeToCondition(code: number): string {
-  if (code === 0) return 'Céu limpo';
+function mapWeatherCodeToCondition(code: number, isDay?: boolean): string {
+  if (code === 0) return isDay === false ? 'Noite limpa em Inhambane' : 'Sol limpo';
+  if (code === 1) return isDay === false ? 'Céu pouco nublado' : 'Predomínio de sol';
   if (code <= 3) return 'Parcialmente nublado';
-  if (code <= 48) return 'Neblina';
-  if (code <= 67) return 'Chuva ligeira';
-  if (code <= 77) return 'Neve / Granizo';
-  if (code <= 82) return 'Aguaceiros';
+  if (code <= 48) return 'Neblina costeira';
+  if (code <= 57) return 'Chuvisco ligeiro';
+  if (code <= 67) return 'Chuva moderada';
+  if (code <= 77) return 'Granizo';
+  if (code <= 82) return 'Aguaceiros fortes';
   return 'Trovoada';
 }
 
-export async function fetchLiveWeather(): Promise<JarvisWeatherInfo> {
+async function reverseGeocodeCityName(lat: number, lon: number): Promise<string | null> {
+  try {
+    const resp = await fetch(
+      `https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat.toFixed(
+        4
+      )}&longitude=${lon.toFixed(4)}&localityLanguage=pt`
+    );
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const cityPart = data?.city || data?.locality || '';
+    const subPart = data?.principalSubdivision || '';
+    const countryPart = data?.countryName || '';
+    const joined = [cityPart, subPart, countryPart].filter(Boolean).join(', ');
+    if (!joined || /\b(luanda|angola|matola)\b/i.test(joined)) return null;
+    return joined;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchLiveWeather(forceRefresh = false): Promise<JarvisWeatherInfo> {
   const cached = safeReadJson<{ ts: number; data: JarvisWeatherInfo } | null>(
     JARVIS_STORAGE_KEYS.weather,
     null
   );
-  if (cached && Date.now() - cached.ts < 15 * 60 * 1000) {
+  const cacheIsValidLocation =
+    cached?.data?.city && !/\b(luanda|angola|matola)\b/i.test(cached.data.city);
+
+  if (!forceRefresh && cached && cacheIsValidLocation && Date.now() - cached.ts < 10 * 60 * 1000) {
     return cached.data;
   }
 
-  let lat = -8.8383;
-  let lon = 13.2344;
-  let city = 'Luanda';
+  let lat = INHAMBANE_DEFAULT.lat;
+  let lon = INHAMBANE_DEFAULT.lon;
+  let city = INHAMBANE_DEFAULT.city;
 
   if (typeof navigator !== 'undefined' && navigator.geolocation) {
     try {
       const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
-        navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 2200 });
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          timeout: 2800,
+          maximumAge: 5 * 60 * 1000,
+          enableHighAccuracy: false,
+        });
       });
-      lat = pos.coords.latitude;
-      lon = pos.coords.longitude;
-      city = 'Local Atual';
+      const gLat = pos.coords.latitude;
+      const gLon = pos.coords.longitude;
+      if (Number.isFinite(gLat) && Number.isFinite(gLon)) {
+        lat = gLat;
+        lon = gLon;
+        const resolvedName = await reverseGeocodeCityName(gLat, gLon);
+        if (resolvedName) {
+          city = resolvedName;
+        }
+      }
     } catch {
-      // Usa Luanda como fallback limpo
+      // Permissão negada ou indisponível -> fallback fixo: Inhambane Cidade, Inhambane, Moçambique
     }
   }
 
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(
-      3
-    )}&current=temperature_2m,weather_code,wind_speed_10m`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(
+      4
+    )}&longitude=${lon.toFixed(
+      4
+    )}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day&timezone=auto`;
     const resp = await fetch(url);
     if (resp.ok) {
       const json = await resp.json();
-      const info: JarvisWeatherInfo = {
-        tempC: Math.round(Number(json?.current?.temperature_2m ?? 26)),
-        condition: mapWeatherCodeToCondition(Number(json?.current?.weather_code ?? 1)),
-        city,
-        windKmh: Math.round(Number(json?.current?.wind_speed_10m ?? 12)),
-      };
-      safeWriteJson(JARVIS_STORAGE_KEYS.weather, { ts: Date.now(), data: info });
-      return info;
+      const curr = json?.current;
+      if (curr && typeof curr.temperature_2m === 'number') {
+        const isDay = curr.is_day !== 0;
+        const info: JarvisWeatherInfo = {
+          tempC: Math.round(Number(curr.temperature_2m)),
+          feelsLikeC:
+            typeof curr.apparent_temperature === 'number'
+              ? Math.round(Number(curr.apparent_temperature))
+              : Math.round(Number(curr.temperature_2m)),
+          humidityPct:
+            typeof curr.relative_humidity_2m === 'number'
+              ? Math.round(Number(curr.relative_humidity_2m))
+              : null,
+          windKmh:
+            typeof curr.wind_speed_10m === 'number'
+              ? Math.round(Number(curr.wind_speed_10m))
+              : null,
+          condition: mapWeatherCodeToCondition(Number(curr.weather_code ?? 0), isDay),
+          city,
+          isDay,
+          loadedFromApi: true,
+          updatedAt: new Date().toISOString(),
+        };
+        safeWriteJson(JARVIS_STORAGE_KEYS.weather, { ts: Date.now(), data: info });
+        return info;
+      }
     }
   } catch {
-    // offline fallback
+    // Sem rede ou erro na Open-Meteo
   }
 
-  return (
-    cached?.data || {
-      tempC: 26,
-      condition: 'Estável',
-      city,
-      windKmh: 12,
-    }
-  );
+  if (cached && cacheIsValidLocation && Date.now() - cached.ts < 30 * 60 * 1000) {
+    return cached.data;
+  }
+
+  return {
+    tempC: null,
+    feelsLikeC: null,
+    humidityPct: null,
+    windKmh: null,
+    condition: 'Clima indisponível',
+    city,
+    loadedFromApi: false,
+    errorMsg: 'Não consegui buscar o clima real agora',
+  };
+}
+
+export function readSyncSystemTelemetry(batteryInfo?: {
+  pct: number | null;
+  charging: boolean | null;
+}): JarvisSystemTelemetry {
+  if (typeof navigator === 'undefined') {
+    return {
+      cpuCores: null,
+      deviceMemoryGb: null,
+      jsHeapUsedMb: null,
+      jsHeapLimitMb: null,
+      batteryPct: null,
+      batteryCharging: null,
+      online: true,
+      networkType: null,
+      downlinkMbps: null,
+      rttMs: null,
+      timezone: 'Africa/Maputo',
+    };
+  }
+
+  const navAny = navigator as any;
+  const perfMem = typeof performance !== 'undefined' ? (performance as any)?.memory : null;
+  const conn = navAny?.connection || navAny?.mozConnection || navAny?.webkitConnection;
+
+  return {
+    cpuCores: typeof navigator.hardwareConcurrency === 'number' ? navigator.hardwareConcurrency : null,
+    deviceMemoryGb: typeof navAny.deviceMemory === 'number' ? navAny.deviceMemory : null,
+    jsHeapUsedMb:
+      perfMem?.usedJSHeapSize ? Math.round(perfMem.usedJSHeapSize / (1024 * 1024)) : null,
+    jsHeapLimitMb:
+      perfMem?.jsHeapSizeLimit ? Math.round(perfMem.jsHeapSizeLimit / (1024 * 1024)) : null,
+    batteryPct: batteryInfo?.pct ?? null,
+    batteryCharging: batteryInfo?.charging ?? null,
+    online: navigator.onLine,
+    networkType: conn?.effectiveType ? String(conn.effectiveType).toUpperCase() : null,
+    downlinkMbps: typeof conn?.downlink === 'number' ? Number(conn.downlink.toFixed(1)) : null,
+    rttMs: typeof conn?.rtt === 'number' ? conn.rtt : null,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'Africa/Maputo',
+  };
 }
 
 export async function readDocumentFile(file: File): Promise<JarvisDocumentItem> {

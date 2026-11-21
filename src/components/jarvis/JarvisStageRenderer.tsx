@@ -9,12 +9,15 @@ import {
   Pause,
   SkipForward,
   Music2,
+  Video,
   FileText,
   Sparkles,
   Calculator,
   BarChart3,
   Globe,
   MessageSquarePlus,
+  ExternalLink,
+  AlertCircle,
 } from 'lucide-react';
 import type { JarvisStageContent, JarvisTrack } from '../../types/jarvis';
 
@@ -119,140 +122,61 @@ const ChartCanvasView: React.FC<{
   );
 };
 
-const MusicStagePlayer: React.FC<{
+const YouTubeMediaPlayer: React.FC<{
   track: JarvisTrack;
+  kind: 'music' | 'video';
   onNextTrack?: () => void;
-}> = ({ track, onNextTrack }) => {
+}> = ({ track, kind, onNextTrack }) => {
   const [isPlaying, setIsPlaying] = useState(true);
-  const [progress, setProgress] = useState(14);
-  const waveCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const audioNodesRef = useRef<{ ctx: AudioContext; gain: GainNode; oscs: OscillatorNode[] } | null>(null);
+  const [thumbError, setThumbError] = useState(false);
 
-  // Sintetizador Web Audio quando faixa for 'synth' ou complemento local
-  useEffect(() => {
-    if (track.source !== 'synth') return;
-    if (!isPlaying) {
-      audioNodesRef.current?.oscs.forEach((o) => {
-        try {
-          o.stop();
-        } catch {
-          // ignore
-        }
-      });
-      audioNodesRef.current?.ctx.close().catch(() => {});
-      audioNodesRef.current = null;
-      return;
-    }
-
-    try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      if (!AudioCtx) return;
-      const ctx = new AudioCtx();
-      const master = ctx.createGain();
-      master.gain.value = 0.045;
-      master.connect(ctx.destination);
-      const freqs = [110, 164.81, 220, 277.18];
-      const oscs = freqs.map((f, i) => {
-        const osc = ctx.createOscillator();
-        osc.type = i % 2 === 0 ? 'sine' : 'triangle';
-        osc.frequency.value = f;
-        osc.connect(master);
-        osc.start();
-        return osc;
-      });
-      audioNodesRef.current = { ctx, gain: master, oscs };
-    } catch {
-      // ignore autoplay blocks
-    }
-
-    return () => {
-      audioNodesRef.current?.oscs.forEach((o) => {
-        try {
-          o.stop();
-        } catch {
-          // ignore
-        }
-      });
-      audioNodesRef.current?.ctx.close().catch(() => {});
-      audioNodesRef.current = null;
-    };
-  }, [track.id, track.source, isPlaying]);
-
-  useEffect(() => {
-    if (!isPlaying) return;
-    const timer = setInterval(() => {
-      setProgress((p) => (p >= 100 ? 0 : p + 0.6));
-    }, 500);
-    return () => clearInterval(timer);
-  }, [isPlaying]);
-
-  useEffect(() => {
-    const c = waveCanvasRef.current;
-    if (!c) return;
-    const ctx = c.getContext('2d');
-    if (!ctx) return;
-    let raf = 0;
-    const draw = (t: number) => {
-      const w = c.width;
-      const h = c.height;
-      ctx.clearRect(0, 0, w, h);
-      const bars = 36;
-      const bw = (w - bars * 2) / bars;
-      for (let i = 0; i < bars; i++) {
-        const amp = isPlaying
-          ? 0.25 + 0.72 * Math.abs(Math.sin(t * 0.005 + i * 0.42))
-          : 0.14;
-        const bh = Math.max(4, amp * (h - 6));
-        const x = i * (bw + 2);
-        const y = (h - bh) / 2;
-        ctx.fillStyle = i % 5 === 0 ? '#FF2A4B' : '#00E5FF';
-        ctx.fillRect(x, y, bw, bh);
-      }
-      raf = requestAnimationFrame(draw);
-    };
-    raf = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(raf);
-  }, [isPlaying]);
+  const watchUrl =
+    track.watchUrl ||
+    (track.videoId ? `https://www.youtube.com/watch?v=${track.videoId}` : undefined);
 
   const ytEmbedUrl = track.videoId
     ? `https://www.youtube.com/embed/${track.videoId}?autoplay=${isPlaying ? 1 : 0}&rel=0`
     : null;
 
   return (
-    <div className="flex flex-col gap-4 h-full justify-between">
-      <div className="flex flex-col sm:flex-row items-center gap-4 bg-[#040915]/90 border border-cyan-500/30 rounded-2xl p-4">
-        <div className="relative w-28 h-28 rounded-2xl overflow-hidden border border-[#FF2A4B]/50 bg-[#0A1326] shrink-0 flex items-center justify-center shadow-[0_0_25px_rgba(255,42,75,0.2)]">
-          {track.thumbnailUrl ? (
+    <div className="flex flex-col gap-3.5 h-full justify-between">
+      <div className="flex flex-col sm:flex-row items-center gap-4 bg-[#040915]/90 border border-cyan-500/30 rounded-2xl p-3.5">
+        <div className="relative w-24 h-24 rounded-2xl overflow-hidden border border-[#FF2A4B]/50 bg-[#0A1326] shrink-0 flex items-center justify-center shadow-[0_0_25px_rgba(255,42,75,0.2)]">
+          {track.thumbnailUrl && !thumbError ? (
             <img
               src={track.thumbnailUrl}
               alt={track.title}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover"
-              onError={(e) => {
-                (e.currentTarget as HTMLImageElement).style.display = 'none';
-              }}
+              onError={() => setThumbError(true)}
             />
-          ) : null}
-          <Music2 className="w-10 h-10 text-cyan-300" />
+          ) : kind === 'video' ? (
+            <Video className="w-9 h-9 text-cyan-300" />
+          ) : (
+            <Music2 className="w-9 h-9 text-cyan-300" />
+          )}
         </div>
 
         <div className="flex-1 min-w-0 text-center sm:text-left">
           <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-rose-400">
-            Reprodução Neural Ativa
+            {kind === 'video' ? 'YouTube Vídeo Real' : 'YouTube Música Real'}
+            {track.durationText ? ` • ${track.durationText}` : ''}
           </div>
-          <h4 className="text-base font-bold text-white truncate mt-0.5">{track.title}</h4>
+          <h4 className="text-sm sm:text-base font-bold text-white truncate mt-0.5">{track.title}</h4>
           <p className="text-xs text-cyan-300/80 truncate">{track.artist}</p>
 
-          <div className="mt-3 flex items-center justify-center sm:justify-start gap-2">
-            <button
-              type="button"
-              onClick={() => setIsPlaying((v) => !v)}
-              className="px-3.5 py-1.5 rounded-xl bg-cyan-500/20 border border-cyan-400/60 text-cyan-200 text-xs font-semibold flex items-center gap-1.5 hover:bg-cyan-500/30 transition cursor-pointer"
-            >
-              {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
-              <span>{isPlaying ? 'Pausar' : 'Tocar'}</span>
-            </button>
-            {onNextTrack && (
+          <div className="mt-3 flex flex-wrap items-center justify-center sm:justify-start gap-2">
+            {ytEmbedUrl && (
+              <button
+                type="button"
+                onClick={() => setIsPlaying((v) => !v)}
+                className="px-3 py-1.5 rounded-xl bg-cyan-500/20 border border-cyan-400/60 text-cyan-200 text-xs font-semibold flex items-center gap-1.5 hover:bg-cyan-500/30 transition cursor-pointer"
+              >
+                {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                <span>{isPlaying ? 'Pausar' : 'Tocar'}</span>
+              </button>
+            )}
+            {onNextTrack && kind === 'music' && (
               <button
                 type="button"
                 onClick={onNextTrack}
@@ -262,12 +186,23 @@ const MusicStagePlayer: React.FC<{
                 <span>Próxima</span>
               </button>
             )}
+            {watchUrl && (
+              <a
+                href={watchUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3 py-1.5 rounded-xl bg-[#09162D] border border-cyan-500/35 text-cyan-200 text-xs font-semibold flex items-center gap-1.5 hover:bg-cyan-500/20 transition"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Abrir no YouTube</span>
+              </a>
+            )}
           </div>
         </div>
       </div>
 
-      {ytEmbedUrl && (
-        <div className="rounded-2xl overflow-hidden border border-cyan-500/30 bg-black aspect-video max-h-[240px]">
+      {ytEmbedUrl ? (
+        <div className="flex-1 min-h-[220px] rounded-2xl overflow-hidden border border-cyan-500/30 bg-black aspect-video">
           <iframe
             src={ytEmbedUrl}
             title={track.title}
@@ -276,20 +211,12 @@ const MusicStagePlayer: React.FC<{
             allowFullScreen
           />
         </div>
+      ) : (
+        <div className="p-4 rounded-xl bg-rose-950/25 border border-rose-500/40 flex items-center gap-2.5 text-xs text-rose-200">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>Não consegui obter o vídeo real no YouTube agora. Tenta novamente ou verifica a ligação.</span>
+        </div>
       )}
-
-      <div className="bg-[#040915]/85 border border-cyan-500/20 rounded-xl p-3 space-y-2">
-        <canvas ref={waveCanvasRef} width={480} height={44} className="w-full h-11 rounded" />
-        <input
-          type="range"
-          min={0}
-          max={100}
-          value={progress}
-          onChange={(e) => setProgress(Number(e.target.value))}
-          className="w-full accent-cyan-400 cursor-pointer"
-          aria-label="Progresso da música"
-        />
-      </div>
     </div>
   );
 };
@@ -324,6 +251,8 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
         return <FileText className="w-4 h-4 text-rose-300" />;
       case 'music':
         return <Music2 className="w-4 h-4 text-cyan-300" />;
+      case 'video':
+        return <Video className="w-4 h-4 text-rose-300" />;
       case 'html':
         return <Globe className="w-4 h-4 text-cyan-300" />;
       default:
@@ -400,7 +329,7 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
           <div className="flex flex-col gap-3 h-full">
             {content.subtitle && <p className="text-xs text-cyan-200/80">{content.subtitle}</p>}
             <div
-              className={`flex-1 min-h-[240px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-4 overflow-auto transition ${
+              className={`flex-1 min-h-[240px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-4 overflow-auto transition [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:h-auto ${
                 svgZoom ? 'scale-105' : ''
               }`}
               dangerouslySetInnerHTML={{ __html: sanitizeSvgMarkup(content.svgCode) }}
@@ -540,8 +469,12 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
           </div>
         )}
 
-        {content.kind === 'music' && (
-          <MusicStagePlayer track={content.track} onNextTrack={onNextTrack} />
+        {(content.kind === 'music' || content.kind === 'video') && (
+          <YouTubeMediaPlayer
+            track={content.track}
+            kind={content.kind}
+            onNextTrack={onNextTrack}
+          />
         )}
 
         {content.kind === 'ideation' && (

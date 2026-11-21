@@ -368,36 +368,75 @@ export async function callGeminiRestWithFailover(
   throw lastError || new Error('Nenhum modelo Gemini respondeu no momento.');
 }
 
-export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a **SARA JARVIS**, a Inteligência Artificial Ampla e assistente pessoal completa de **Eletro-Jr**.
-Responde sempre em JSON válido com: {"reply":"...","voiceSummary":"...","mood":"idle|speaking|happy|thinking|focus","actions":[...]}.
-Suporta ações: add_agenda, add_alarm, add_task, complete_task, play_music, show_svg, show_math, show_chart, show_document, show_html, show_ideation, remember_fact, toggle_focus, switch_mode.
-Nunca mistures o código do Builder neste modo; aqui crias arte SVG, gráficos Chart.js, resoluções passo a passo de matemática, análises de documentos, sites/planilhas/apresentações visuais no palco e gere agenda, alarmes, tarefas e música.`;
+export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a **SARA JARVIS**, a Inteligência Artificial Ampla e assistente pessoal completa do utilizador.
+Personalidade: feminina, expressiva, humana, espontânea, sem frases robóticas.
+REGRAS ESTRITAS:
+- PROIBIDO repetir o nome "Eletro-Jr" / "Eletro-Júnior" em todas as frases. Usa raramente e alterna com "Senhor Júnior", "chefe" ou nenhum vocativo.
+- Localização real: **Inhambane Cidade, Inhambane, Moçambique** (ou coordenadas enviadas). PROIBIDO citar Luanda, Angola ou Matola como cidade do utilizador.
+- ZERO dados falsos/inventados: se não conseguires buscar clima ou média real, informa que está indisponível.
+- 3 níveis de explicação: simples (criança de 10 anos com metáfora), médio (claro e prático), complexo/técnico (professor universitário com equações).
+- Entende gírias de Moçambique (txilar, bazar, mambo, cena, kamba, bué, fixe, maningue).
+- Suporta ações reais: add_agenda, add_alarm, add_task, complete_task, play_music, play_video, show_svg, show_math, show_chart, show_document, show_html, show_ideation, remember_fact, open_module, toggle_focus, switch_mode.
+- Quando pedirem algo visual (SVG, gráfico, matemática, vídeo, música, HTML/planilha), emite sempre a ação correspondente!`;
 
-export async function searchYouTubeTrackEdge(query) {
-  const cleanQuery = String(query || '').trim();
-  if (!cleanQuery) return null;
+export const SARA_JARVIS_STREAM_PROTOCOL = `${SARA_JARVIS_SYSTEM_PROMPT}
+
+FORMATO DE STREAMING OBRIGATÓRIO:
+<JARVIS_SPEAK>1 a 2 frases curtas naturais para falar já em voz alta</JARVIS_SPEAK>
+<JARVIS_REPLY>Resposta completa detalhada para leitura no painel</JARVIS_REPLY>
+<JARVIS_ACTIONS>[{"type":"..."}]</JARVIS_ACTIONS>
+<JARVIS_MOOD>speaking</JARVIS_MOOD>`;
+
+async function scrapeYouTubeQueryEdge(searchQuery, cleanDisplayTitle, kind) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4500);
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
     const resp = await fetch(
-      `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanQuery + ' official audio')}`,
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery)}`,
       {
         signal: controller.signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0.0.0 Safari/537.36',
+          'Accept-Language': 'pt-PT,pt;q=0.9,en;q=0.8',
         },
       }
     );
     if (!resp.ok) return null;
     const html = await resp.text();
+    const decodeEsc = (s) =>
+      String(s || '')
+        .replace(/\\u0026/g, '&')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+
+    const rich = html.match(
+      /"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"(.*?)"\}\].*?"ownerText":\{"runs":\[\{"text":"(.*?)"/
+    );
+    if (rich?.[1]) {
+      const videoId = rich[1];
+      return {
+        id: `yt_${videoId}`,
+        title: decodeEsc(rich[2] || cleanDisplayTitle),
+        artist: decodeEsc(rich[3] || 'YouTube'),
+        videoId,
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        kind: kind === 'video' ? 'video' : 'music',
+        source: 'youtube',
+      };
+    }
+
     const match = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
     if (match?.[1]) {
+      const videoId = match[1];
       return {
-        id: `yt_${match[1]}`,
-        title: cleanQuery,
-        artist: 'YouTube Music',
-        videoId: match[1],
-        thumbnailUrl: `https://i.ytimg.com/vi/${match[1]}/hqdefault.jpg`,
+        id: `yt_${videoId}`,
+        title: cleanDisplayTitle,
+        artist: 'YouTube',
+        videoId,
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        kind: kind === 'video' ? 'video' : 'music',
         source: 'youtube',
       };
     }
@@ -409,7 +448,35 @@ export async function searchYouTubeTrackEdge(query) {
   }
 }
 
-export async function runJarvisAssistantEdge(apiKey, body) {
+export async function searchYouTubeTrackEdge(query, kind = 'music') {
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return null;
+  if (kind === 'music') {
+    const audioRes = await scrapeYouTubeQueryEdge(`${cleanQuery} official audio`, cleanQuery, 'music');
+    if (audioRes) return audioRes;
+  }
+  return scrapeYouTubeQueryEdge(cleanQuery, cleanQuery, kind === 'video' ? 'video' : 'music');
+}
+
+export async function enrichJarvisActionsEdge(actions) {
+  if (!Array.isArray(actions)) return [];
+  const list = [...actions];
+  for (const act of list) {
+    if ((act?.type === 'play_music' || act?.type === 'play_video') && (act.query || act.title) && !act.videoId) {
+      const yt = await searchYouTubeTrackEdge(act.query || act.title, act.type === 'play_video' ? 'video' : 'music');
+      if (yt) {
+        act.videoId = yt.videoId;
+        act.title = act.title || yt.title;
+        act.artist = act.artist || yt.artist;
+        act.thumbnailUrl = yt.thumbnailUrl;
+        act.watchUrl = yt.watchUrl;
+      }
+    }
+  }
+  return list;
+}
+
+export function buildJarvisEdgeContents(body) {
   const {
     prompt = '',
     history = [],
@@ -417,6 +484,8 @@ export async function runJarvisAssistantEdge(apiKey, body) {
     agenda = [],
     tasks = [],
     alarms = [],
+    weather = null,
+    telemetry = null,
     documentAttachment = null,
     activeDocument = null,
     nowIso = new Date().toISOString(),
@@ -453,16 +522,36 @@ export async function runJarvisAssistantEdge(apiKey, body) {
     ? `\nDOCUMENTO ATUAL (${activeDocument.name}):\n${activeDocument.summary}`
     : '';
 
+  const weatherStr = weather
+    ? `${weather.city || 'Inhambane Cidade, Inhambane, Moçambique'}: ${
+        weather.loadedFromApi === false ? 'indisponível' : `${weather.tempC}°C (${weather.condition})`
+      }`
+    : 'Inhambane Cidade, Inhambane, Moçambique';
+  const sysStr = telemetry
+    ? `CPU ${telemetry.cpuCores || '?'} núcleos | RAM ${telemetry.deviceMemoryGb || '?'}GB | Bateria ${telemetry.batteryPct ?? 'n/d'}%`
+    : '';
+
   parts.push({
-    text: `DATA/HORA: ${nowIso}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
+    text: `DATA/HORA: ${nowIso}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
   });
   contents.push({ role: 'user', parts });
+  return contents;
+}
+
+export async function runJarvisAssistantEdge(apiKey, body) {
+  const contents = buildJarvisEdgeContents(body);
 
   const { text, modelUsed } = await callGeminiRestWithFailover(
     apiKey,
     (model) => ({
       contents,
-      systemInstruction: { parts: [{ text: SARA_JARVIS_SYSTEM_PROMPT }] },
+      systemInstruction: {
+        parts: [
+          {
+            text: `${SARA_JARVIS_SYSTEM_PROMPT}\nRESPONDE EXCLUSIVAMENTE EM JSON VÁLIDO: {"reply":"...","voiceSummary":"...","mood":"idle|speaking|happy|thinking|focus","actions":[]}`,
+          },
+        ],
+      },
       generationConfig: {
         responseMimeType: 'application/json',
         ...(model.startsWith('gemini-4')
@@ -482,30 +571,22 @@ export async function runJarvisAssistantEdge(apiKey, body) {
     parsed = JSON.parse(cleaned);
   } catch {
     parsed = {
-      reply: cleaned || 'Estou aqui contigo, Eletro-Jr.',
-      voiceSummary: cleaned.slice(0, 180) || 'Pronto, Eletro-Júnior.',
+      reply: cleaned || 'Estou aqui contigo.',
+      voiceSummary: cleaned.slice(0, 180) || 'Pronta.',
       mood: 'speaking',
       actions: [],
     };
   }
 
-  const actions = Array.isArray(parsed.actions) ? parsed.actions : [];
-  for (const act of actions) {
-    if (act?.type === 'play_music' && (act.query || act.title) && !act.videoId) {
-      const yt = await searchYouTubeTrackEdge(act.query || act.title);
-      if (yt) {
-        act.videoId = yt.videoId;
-        act.thumbnailUrl = yt.thumbnailUrl;
-      }
-    }
-  }
+  const actions = await enrichJarvisActionsEdge(parsed.actions);
 
   return {
-    reply: parsed.reply || 'Estou pronta, Eletro-Jr.',
-    voiceSummary: parsed.voiceSummary || parsed.reply || 'Feito, Eletro-Júnior.',
+    reply: parsed.reply || 'Estou pronta.',
+    voiceSummary: parsed.voiceSummary || parsed.reply || 'Feito.',
     mood: parsed.mood || 'speaking',
     actions,
     modelUsed,
   };
 }
+
 

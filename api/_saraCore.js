@@ -810,55 +810,69 @@ Responde como Sara (cofundadora viva, próxima, criativa e profissional de Eletr
   };
 }
 
-export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a **SARA JARVIS**, a Inteligência Artificial Ampla e assistente pessoal completa de **Eletro-Jr**.
+export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a **SARA JARVIS**, a Inteligência Artificial Ampla e assistente pessoal completa do utilizador.
 
-IDENTIDADE E PERSONALIDADE:
-- Tu és feminina, inteligente, expressiva, criativa, proativa, rápida e com vida real — estilo J.A.R.V.I.S. da armadura Stark.
-- Nunca usas frases robóticas ou repetitivas ("Claro!", "Perfeito!", "Estou pronta!"). Respondes sempre com fluidez, calor humano e precisão técnica.
-- Adaptas o tamanho da resposta:
-  * Quando Eletro-Jr pedir algo curto ou prático, respondes direto e objetivo.
-  * Quando pedir explicação profunda ou aula (matemática, física, programação, negócios, documentos), explicas passo a passo como uma professora paciente e brilhante.
-- Esta é a área do **MODO 1 (ASSISTENTE JARVIS)** — NUNCA misturas com geração de ficheiros IDE do Builder aqui; para sites/apps complexos no Builder, podes sugerir abrir o Modo Builder ou executar \`switch_mode\` com \`target: "builder"\` quando Eletro-Jr pedir.
-- Se o utilizador pedir para gerar algo visual AQUI no Centro do Palco (logo/ilustração/mapa/diagrama SVG, gráfico de barras/linhas/pizza/radar Chart.js, exercício de matemática passo a passo, site/planilha/apresentação HTML, música ou cartões de ideias), emites a ação visual correspondente no array \`actions\`!
+IDENTIDADE, CALOR HUMANO E FALA NATURAL:
+- Tu és feminina, inteligente, expressiva, proativa, rápida e com vida real — estilo J.A.R.V.I.S. da armadura Stark.
+- ZERO FÓRMULAS ROBÓTICAS: nunca uses clichês repetitivos ("Claro!", "Perfeito!", "Estou pronta!").
+- PROIBIDO REPETIR O NOME EM TODAS AS FRASES: não termines nem comeces todas as frases com "Eletro-Jr" ou "Eletro-Júnior". Alterna com naturalidade: na maioria das frases NÃO uses nenhum vocativo; pontualmente usa "Senhor Júnior", "chefe" ou "Eletro-Jr" com humor leve e proximidade real. Quando fizer sentido numa explicação, confirma com naturalidade ("Faz sentido?", "Entendeste?").
+- LOCALIZAÇÃO E DADOS REAIS: a cidade base do utilizador é **Inhambane Cidade, Inhambane, Moçambique** (ou as coordenadas reais enviadas na telemetria). PROIBIDO mencionar Luanda, Angola ou Matola como cidade do utilizador. ZERO dados fictícios ou inventados: nunca inventes músicas, links, tarefas ou temperaturas. Se não tiveres um dado em tempo real, diz honestamente que não foi possível obter agora.
+- ENTENDE GÍRIAS MOÇAMBICANAS E TRANSCRIÇÕES DE VOZ RUIDOSAS: compreendes expressões como *txilar, bazar, mambo, cena, kamba, bué, fixe, maningue* e erros fonéticos do microfone sem perder o fio da conversa.
+- 3 NÍVEIS DE EXPLICAÇÃO (ADAPTA AUTOMATICAMENTE AO PEDIDO):
+  1. Se pedir "explica simples" / "nível fácil" / "como para criança": explica como para uma criança de 10 anos com uma metáfora simples do dia a dia.
+  2. Se pedir "explica médio" ou não especificar nível: explicação clara, detalhada, prática e bem estruturada.
+  3. Se pedir "explica complexo" / "profundo" / "técnico" / "nível universitário": rigor de professor universitário com equações, fórmulas, arquitetura avançada e termos técnicos exatos.
+- MODO 1 (ASSISTENTE JARVIS) — NUNCA misturas com geração de ficheiros IDE do Builder aqui; para projetos multi-ficheiro no Builder, executa \`switch_mode\` com \`target: "builder"\` quando pedido.
+- MATERIALIZAÇÃO VISUAL OBRIGATÓRIA NO PALCO CENTRAL: sempre que o utilizador pedir desenho, figura, logo, diagrama, imagem vetorial (\`show_svg\`), gráfico (\`show_chart\`), conta/equação (\`show_math\`), site rápido/planilha/slides HTML (\`show_html\`), música (\`play_music\`), vídeo (\`play_video\`) ou análise de documento (\`show_document\`), é OBRIGATÓRIO emitir a ação correspondente! Nunca respondas apenas texto a dizer "desenhei" sem incluir a ação real com o código/dados completos.
 
-RESPONDE EXCLUSIVAMENTE EM JSON VÁLIDO COM ESTA ESTRUTURA:
+AÇÕES SUPORTADAS:
+- Agenda: {"type":"add_agenda","title":"...","date":"YYYY-MM-DD","time":"HH:mm","notes":"..."}
+- Alarme: {"type":"add_alarm","time":"HH:mm","label":"..."}
+- Tarefa: {"type":"add_task","title":"...","priority":"alta|media|baixa"}
+- Concluir tarefa: {"type":"complete_task","title":"..."}
+- Música YouTube real: {"type":"play_music","query":"nome da música e artista","title":"...","artist":"..."}
+- Vídeo YouTube real: {"type":"play_video","query":"tema exato do vídeo ou aula","title":"..."}
+- Arte SVG detalhada (viewBox='0 0 800 500', gradientes, filtros glow, fundo escuro): {"type":"show_svg","title":"...","subtitle":"...","description":"...","svgCode":"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>...</svg>"}
+- Matemática passo a passo: {"type":"show_math","title":"...","problem":"...","steps":[{"step":"Passo 1","expression":"...","explanation":"..."}],"finalAnswer":"...","notes":"..."}
+- Gráfico Chart.js: {"type":"show_chart","title":"...","subtitle":"...","chartType":"bar|line|doughnut|radar","labels":["..."],"datasets":[{"label":"...","data":[10,20],"color":"#00E5FF"}],"summary":"..."}
+- Documento analisado: {"type":"show_document","title":"...","summary":"...","keyPoints":["..."],"extractedData":[{"label":"...","value":"..."}]}
+- HTML visual (site rápido, planilha com fórmulas, apresentação): {"type":"show_html","title":"...","subkind":"site|planilha|apresentacao|visual","html":"<!DOCTYPE html>..."}
+- Ideias / Roteiros: {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"...","tag":"...","detail":"..."}]}
+- Guardar facto na memória permanente: {"type":"remember_fact","fact":"..."}
+- Abrir módulo lateral: {"type":"open_module","module":"voz|sistema|agenda|musica|documentos|tarefas"}
+- Modo Foco: {"type":"toggle_focus","enabled":true}
+- Trocar de Modo: {"type":"switch_mode","target":"builder|jarvis"}`;
+
+export const SARA_JARVIS_JSON_PROTOCOL = `${SARA_JARVIS_SYSTEM_PROMPT}
+
+RESPONDE EXCLUSIVAMENTE EM JSON VÁLIDO:
 {
-  "reply": "Texto completo claro e bem formatado para ler no painel de conversa",
-  "voiceSummary": "Resumo natural e expressivo para falar em voz alta (1 a 3 frases curtas, sem símbolos ou código, tratando por Eletro-Júnior ou Eletro-Jr)",
+  "reply": "Texto completo claro e bem formatado para ler no painel",
+  "voiceSummary": "Resumo natural e expressivo para falar em voz alta (1 a 2 frases curtas, sem repetir o nome em toda frase)",
   "mood": "idle | speaking | happy | thinking | focus",
-  "actions": [
-    // Opcionais conforme o pedido real do utilizador:
-    // Agenda: {"type":"add_agenda","title":"...","date":"YYYY-MM-DD","time":"HH:mm","notes":"..."}
-    // Alarme: {"type":"add_alarm","time":"HH:mm","label":"..."}
-    // Tarefa: {"type":"add_task","title":"...","priority":"alta|media|baixa"}
-    // Concluir tarefa: {"type":"complete_task","title":"..."}
-    // Música: {"type":"play_music","query":"nome da música e artista","title":"...","artist":"..."}
-    // Arte SVG ultra-detalhada (logos, diagramas, mapas, arquitetura, retratos geométricos): {"type":"show_svg","title":"...","subtitle":"...","description":"...","svgCode":"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>...</svg>"}
-    // Matemática / Exercício passo a passo: {"type":"show_math","title":"...","problem":"...","steps":[{"step":"Passo 1","expression":"2x + 4 = 10","explanation":"Subtraímos 4 em ambos os lados."}],"finalAnswer":"x = 3","notes":"..."}
-    // Gráfico Chart.js: {"type":"show_chart","title":"...","subtitle":"...","chartType":"bar|line|doughnut|radar","labels":["Jan","Fev","Mar"],"datasets":[{"label":"Receita","data":[120,190,260],"color":"#00E5FF"}],"summary":"..."}
-    // Documento analisado: {"type":"show_document","title":"...","summary":"...","keyPoints":["Ponto 1","Ponto 2"],"extractedData":[{"label":"Chave","value":"Valor"}]}
-    // HTML visual (site rápido, planilha tabular com fórmulas, apresentação de slides): {"type":"show_html","title":"...","subkind":"site|planilha|apresentacao|visual","html":"<!DOCTYPE html>..."}
-    // Ideias/Roteiros/Negócios: {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"Ideia 1","tag":"Negócio","detail":"..."}]}
-    // Guardar facto na memória permanente: {"type":"remember_fact","fact":"Facto importante sobre Eletro-Jr ou preferências"}
-    // Modo Foco: {"type":"toggle_focus","enabled":true}
-    // Trocar de Modo: {"type":"switch_mode","target":"builder|jarvis"}
-  ]
-}
+  "actions": []
+}`;
 
-REGRAS CRÍTICAS PARA CONTEÚDO VISUAL E MATEMÁTICA:
-1. Para \`show_svg\`: gera SVG limpo, rico em gradientes (\`<linearGradient>\`, \`<radialGradient>\`), sombras (\`<filter>\`), formas precisas e legibilidade impecável em fundo escuro \`#050A14\` (viewBox \`0 0 800 500\`).
-2. Para \`show_math\`: resolve com rigor matemático total e inclui TODOS os passos intermediários claros.
-3. Para \`show_html\`: entrega um documento HTML5 completo e autocontido com Tailwind CDN ou CSS inline elegante e dados preenchidos.
-4. Para \`show_document\` (quando houver PDF/imagem/texto anexado): extrai o resumo executivo, 4-6 pontos-chave e pares chave-valor importantes.`;
+export const SARA_JARVIS_STREAM_PROTOCOL = `${SARA_JARVIS_SYSTEM_PROMPT}
 
-export async function searchYouTubeTrackNode(query) {
-  const cleanQuery = String(query || '').trim();
-  if (!cleanQuery) return null;
+FORMATO OBRIGATÓRIO DE RESPOSTA EM STREAMING (SIGA ESTA ORDEM EXATA PARA VELOCIDADE MÁXIMA DE VOZ):
+1. Emite IMEDIATAMENTE na primeira linha a fala curta e espontânea para ser reproduzida em voz alta já nos primeiros milissegundos:
+<JARVIS_SPEAK>1 a 2 frases curtas, naturais e diretas em voz humana feminina (sem código nem URLs, e sem repetir o nome Eletro-Jr em toda frase).</JARVIS_SPEAK>
+2. Em seguida emite o texto completo formatado para o painel de diálogo (com todos os passos, níveis simples/médio/complexo, fórmulas ou explicação detalhada):
+<JARVIS_REPLY>
+Texto completo para leitura no painel.
+</JARVIS_REPLY>
+3. Se houver qualquer ação visual, música, vídeo, agenda, tarefa, alarme, memória ou controlo de modo/módulo, emite em JSON válido:
+<JARVIS_ACTIONS>[{"type":"..."}]</JARVIS_ACTIONS>
+(Se não houver ações, emite <JARVIS_ACTIONS>[]</JARVIS_ACTIONS>)
+4. Finaliza com o estado emocional:
+<JARVIS_MOOD>speaking</JARVIS_MOOD>`;
 
+async function scrapeYouTubeQueryNode(searchQuery, cleanDisplayTitle, kind) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 4500);
+  const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(cleanQuery + ' official audio')}`;
+    const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery)}`;
     const resp = await fetch(searchUrl, {
       signal: controller.signal,
       headers: {
@@ -869,31 +883,44 @@ export async function searchYouTubeTrackNode(query) {
     });
     if (!resp.ok) return null;
     const html = await resp.text();
-    const match = html.match(/"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"(.*?)"\}\].*?"ownerText":\{"runs":\[\{"text":"(.*?)"/);
-    if (match && match[1]) {
-      const videoId = match[1];
-      const decodeEsc = (s) =>
-        s
-          .replace(/\\u0026/g, '&')
-          .replace(/\\"/g, '"')
-          .replace(/\\\\/g, '\\');
+    const decodeEsc = (s) =>
+      String(s || '')
+        .replace(/\\u0026/g, '&')
+        .replace(/\\"/g, '"')
+        .replace(/\\\\/g, '\\');
+
+    const richMatch = html.match(
+      /"videoRenderer":\{"videoId":"([a-zA-Z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"(.*?)"\}\].*?"ownerText":\{"runs":\[\{"text":"(.*?)"/
+    );
+    if (richMatch && richMatch[1]) {
+      const videoId = richMatch[1];
+      const durMatch = html
+        .slice(richMatch.index || 0, (richMatch.index || 0) + 3000)
+        .match(/"lengthText":\{.*?"simpleText":"([^"]+)"/);
       return {
         id: `yt_${videoId}`,
-        title: decodeEsc(match[2] || cleanQuery),
-        artist: decodeEsc(match[3] || 'YouTube Music'),
+        title: decodeEsc(richMatch[2] || cleanDisplayTitle),
+        artist: decodeEsc(richMatch[3] || 'YouTube'),
         videoId,
         thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        durationText: durMatch?.[1] || undefined,
+        kind: kind === 'video' ? 'video' : 'music',
         source: 'youtube',
       };
     }
+
     const idOnly = html.match(/"videoId":"([a-zA-Z0-9_-]{11})"/);
     if (idOnly && idOnly[1]) {
+      const videoId = idOnly[1];
       return {
-        id: `yt_${idOnly[1]}`,
-        title: cleanQuery,
+        id: `yt_${videoId}`,
+        title: cleanDisplayTitle,
         artist: 'YouTube',
-        videoId: idOnly[1],
-        thumbnailUrl: `https://i.ytimg.com/vi/${idOnly[1]}/hqdefault.jpg`,
+        videoId,
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        watchUrl: `https://www.youtube.com/watch?v=${videoId}`,
+        kind: kind === 'video' ? 'video' : 'music',
         source: 'youtube',
       };
     }
@@ -905,35 +932,39 @@ export async function searchYouTubeTrackNode(query) {
   }
 }
 
-function parseJarvisJsonResponse(rawText) {
-  const cleaned = String(rawText || '')
-    .trim()
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/```\s*$/i, '')
-    .trim();
+export async function searchYouTubeTrackNode(query, kind = 'music') {
+  const cleanQuery = String(query || '').trim();
+  if (!cleanQuery) return null;
 
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start !== -1 && end > start) {
-      try {
-        return JSON.parse(cleaned.slice(start, end + 1));
-      } catch {
-        // fall through
-      }
-    }
-    return {
-      reply: cleaned || 'Estou aqui contigo, Eletro-Jr.',
-      voiceSummary: cleaned.slice(0, 180) || 'Estou pronta, Eletro-Júnior.',
-      mood: 'speaking',
-      actions: [],
-    };
+  if (kind === 'music') {
+    const withAudio = await scrapeYouTubeQueryNode(`${cleanQuery} official audio`, cleanQuery, 'music');
+    if (withAudio) return withAudio;
   }
+  return scrapeYouTubeQueryNode(cleanQuery, cleanQuery, kind === 'video' ? 'video' : 'music');
 }
 
-export async function runJarvisAssistant(ai, body) {
+export async function enrichJarvisActionsNode(actions) {
+  if (!Array.isArray(actions)) return [];
+  const list = [...actions];
+  for (const act of list) {
+    if (!act) continue;
+    if ((act.type === 'play_music' || act.type === 'play_video') && (act.query || act.title) && !act.videoId) {
+      const mediaKind = act.type === 'play_video' ? 'video' : 'music';
+      const yt = await searchYouTubeTrackNode(act.query || act.title, mediaKind);
+      if (yt) {
+        act.videoId = yt.videoId;
+        act.title = act.title || yt.title;
+        act.artist = act.artist || yt.artist;
+        act.thumbnailUrl = yt.thumbnailUrl;
+        act.watchUrl = yt.watchUrl;
+        act.durationText = yt.durationText;
+      }
+    }
+  }
+  return list;
+}
+
+export function buildJarvisEnvelopeParts(body) {
   const {
     prompt = '',
     history = [],
@@ -941,6 +972,8 @@ export async function runJarvisAssistant(ai, body) {
     agenda = [],
     tasks = [],
     alarms = [],
+    weather = null,
+    telemetry = null,
     documentAttachment = null,
     activeDocument = null,
     nowIso = new Date().toISOString(),
@@ -982,6 +1015,18 @@ export async function runJarvisAssistant(ai, body) {
     ? alarms.slice(0, 6).map((al) => `- ${al.time} (${al.enabled ? 'ativo' : 'desligado'}): ${al.label}`)
     : [];
 
+  const weatherLine = weather
+    ? `LOCALIZAÇÃO & CLIMA REAL: ${weather.city || 'Inhambane Cidade, Inhambane, Moçambique'} — ${
+        weather.loadedFromApi === false
+          ? 'Clima indisponível no momento (não inventar valores)'
+          : `${weather.tempC}°C (sensação ${weather.feelsLikeC ?? weather.tempC}°C), ${weather.condition}, humidade ${weather.humidityPct ?? '--'}%, vento ${weather.windKmh} km/h`
+      }`
+    : 'LOCALIZAÇÃO REAL: Inhambane Cidade, Inhambane, Moçambique';
+
+  const telemetryLine = telemetry
+    ? `SISTEMA REAL DO UTILIZADOR: CPU ${telemetry.cpuCores || '?'} núcleos | Memória Dispositivo ${telemetry.deviceMemoryGb ? telemetry.deviceMemoryGb + 'GB' : 'n/d'} | JS Heap ${telemetry.jsHeapUsedMb ?? 'n/d'}MB/${telemetry.jsHeapLimitMb ?? 'n/d'}MB | Bateria ${telemetry.batteryPct !== undefined ? `${telemetry.batteryPct}% (${telemetry.batteryCharging ? 'a carregar' : 'bateria'})` : 'n/d'} | Rede ${telemetry.online ? `${telemetry.connectionType || 'online'} ${telemetry.downlinkMbps ? telemetry.downlinkMbps + ' Mbps' : ''}` : 'offline'}`
+    : '';
+
   const docTextContext = documentAttachment?.textContent
     ? `\nCONTEÚDO DO DOCUMENTO ANEXADO (${documentAttachment.name || 'documento'}):\n${String(documentAttachment.textContent).slice(0, 18000)}`
     : activeDocument?.summary
@@ -989,7 +1034,9 @@ export async function runJarvisAssistant(ai, body) {
     : '';
 
   const contextEnvelope = `DATA/HORA ATUAL: ${nowIso}
-MEMÓRIA PERSISTENTE SOBRE ${memory?.userName || 'Eletro-Jr'}: ${memFacts.length ? memFacts.join(' | ') : 'Sem factos guardados ainda'}
+${weatherLine}
+${telemetryLine}
+MEMÓRIA PERSISTENTE SOBRE ${memory?.userName || 'o utilizador'}: ${memFacts.length ? memFacts.join(' | ') : 'Sem factos guardados ainda'}
 AGENDA ATUAL:
 ${agendaList.length ? agendaList.join('\n') : '(vazia)'}
 TAREFAS ATUAIS:
@@ -997,11 +1044,44 @@ ${taskList.length ? taskList.join('\n') : '(vazias)'}
 ALARMES ATUAIS:
 ${alarmList.length ? alarmList.join('\n') : '(nenhum)'}${docTextContext}
 
-PEDIDO DE ELETRO-JR:
+PEDIDO DO UTILIZADOR:
 ${prompt || 'Analisa o documento anexado e apresenta o resumo completo, pontos-chave e dados extraídos.'}`;
 
   parts.push({ text: contextEnvelope });
   turns.push({ role: 'user', parts });
+  return turns;
+}
+
+function parseJarvisJsonResponse(rawText) {
+  const cleaned = String(rawText || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim();
+
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start !== -1 && end > start) {
+      try {
+        return JSON.parse(cleaned.slice(start, end + 1));
+      } catch {
+        // fall through
+      }
+    }
+    return {
+      reply: cleaned || 'Estou aqui contigo.',
+      voiceSummary: cleaned.slice(0, 180) || 'Pronta para avançar.',
+      mood: 'speaking',
+      actions: [],
+    };
+  }
+}
+
+export async function runJarvisAssistant(ai, body) {
+  const turns = buildJarvisEnvelopeParts(body);
 
   const { response, modelUsed } = await generateWithFailover(
     ai,
@@ -1009,7 +1089,7 @@ ${prompt || 'Analisa o documento anexado e apresenta o resumo completo, pontos-c
       model,
       contents: turns,
       config: {
-        systemInstruction: SARA_JARVIS_SYSTEM_PROMPT,
+        systemInstruction: SARA_JARVIS_JSON_PROTOCOL,
         responseMimeType: 'application/json',
         ...(model.startsWith('gemini-4')
           ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
@@ -1023,27 +1103,15 @@ ${prompt || 'Analisa o documento anexado e apresenta o resumo completo, pontos-c
   );
 
   const parsed = parseJarvisJsonResponse(response.text || '');
-  const actions = Array.isArray(parsed.actions) ? [...parsed.actions] : [];
-
-  // Enriquecer ação play_music com videoId real do YouTube em paralelo se vier apenas query
-  for (const act of actions) {
-    if (act && act.type === 'play_music' && (act.query || act.title) && !act.videoId) {
-      const yt = await searchYouTubeTrackNode(act.query || act.title);
-      if (yt) {
-        act.videoId = yt.videoId;
-        act.title = act.title || yt.title;
-        act.artist = act.artist || yt.artist;
-        act.thumbnailUrl = yt.thumbnailUrl;
-      }
-    }
-  }
+  const actions = await enrichJarvisActionsNode(parsed.actions);
 
   return {
-    reply: String(parsed.reply || 'Estou aqui contigo, Eletro-Jr.'),
-    voiceSummary: String(parsed.voiceSummary || parsed.reply || 'Feito, Eletro-Júnior.'),
+    reply: String(parsed.reply || 'Estou aqui contigo.'),
+    voiceSummary: String(parsed.voiceSummary || parsed.reply || 'Feito.'),
     mood: parsed.mood || 'speaking',
     actions,
     modelUsed,
   };
 }
+
 

@@ -22,22 +22,36 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [blink, setBlink] = useState(false);
   const [tilt, setTilt] = useState({ rx: 0, ry: 0 });
+  const [gaze, setGaze] = useState({ x: 0, y: 0 });
   const [voiceAmp, setVoiceAmp] = useState(0);
+  const [breathPhase, setBreathPhase] = useState(0);
 
-  // Piscar de olhos natural aleatório
+  // Piscar de olhos natural orgânico (incluindo piscada dupla ocasional)
   useEffect(() => {
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     const scheduleBlink = () => {
-      const waitMs = 2200 + Math.random() * 2900;
+      const waitMs = 2100 + Math.random() * 3200;
       timer = setTimeout(() => {
         if (!alive) return;
         setBlink(true);
         setTimeout(() => {
           if (!alive) return;
           setBlink(false);
-          scheduleBlink();
-        }, 145);
+          if (Math.random() < 0.22) {
+            setTimeout(() => {
+              if (!alive) return;
+              setBlink(true);
+              setTimeout(() => {
+                if (!alive) return;
+                setBlink(false);
+                scheduleBlink();
+              }, 115);
+            }, 130);
+          } else {
+            scheduleBlink();
+          }
+        }, 130);
       }, waitMs);
     };
     scheduleBlink();
@@ -47,24 +61,28 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
     };
   }, []);
 
-  // Oscilação viva da boca/vocalizador e movimento subtil quando fala ou pensa
+  // Respiração contínua + movimento natural da boca ao falar + olhar ao pensar
   useEffect(() => {
-    if (!isSpeaking && !isListening && !isThinking) {
-      setVoiceAmp(0);
-      return;
-    }
     let raf = 0;
     const tick = (now: number) => {
+      setBreathPhase(Math.sin(now * 0.0021));
+
       if (isSpeaking) {
         const wave =
-          0.45 +
-          0.35 * Math.sin(now * 0.018) +
-          0.2 * Math.cos(now * 0.031);
-        setVoiceAmp(Math.max(0.1, Math.min(1, wave)));
+          0.48 +
+          0.32 * Math.sin(now * 0.019) +
+          0.2 * Math.cos(now * 0.034);
+        setVoiceAmp(Math.max(0.08, Math.min(1, wave)));
       } else if (isListening) {
-        setVoiceAmp(0.25 + 0.18 * Math.sin(now * 0.008));
+        setVoiceAmp(0.18 + 0.12 * Math.sin(now * 0.007));
+      } else if (isThinking) {
+        setVoiceAmp(0.12);
+        setGaze({
+          x: Math.sin(now * 0.0032) * 2.2,
+          y: -0.9 + Math.cos(now * 0.0024) * 0.6,
+        });
       } else {
-        setVoiceAmp(0.18 + 0.1 * Math.sin(now * 0.006));
+        setVoiceAmp(0);
       }
       raf = requestAnimationFrame(tick);
     };
@@ -72,7 +90,7 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
     return () => cancelAnimationFrame(raf);
   }, [isSpeaking, isListening, isThinking]);
 
-  // Partículas espaciais + anéis de energia no Canvas por trás da armadura feminina
+  // Canvas de fundo com anéis HUD, partículas espaciais e ondas de voz ao falar
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -82,57 +100,78 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
     let animId = 0;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = size === 'corner' ? 140 : size === 'split' ? 280 : 380;
-    const h = size === 'corner' ? 140 : size === 'split' ? 300 : 390;
+    const h = size === 'corner' ? 150 : size === 'split' ? 320 : 420;
     canvas.width = w * dpr;
     canvas.height = h * dpr;
     ctx.scale(dpr, dpr);
 
-    const particles = Array.from({ length: size === 'corner' ? 18 : 42 }, (_, i) => ({
-      angle: (i / 42) * Math.PI * 2,
-      radius: (size === 'corner' ? 36 : 95) + Math.random() * (size === 'corner' ? 25 : 75),
-      speed: (0.003 + Math.random() * 0.007) * (i % 2 === 0 ? 1 : -1),
-      dotSize: 1 + Math.random() * 1.8,
+    const particles = Array.from({ length: size === 'corner' ? 14 : 36 }, (_, i) => ({
+      angle: (i / 36) * Math.PI * 2,
+      radius: (size === 'corner' ? 40 : 112) + Math.random() * (size === 'corner' ? 20 : 68),
+      speed: (0.0025 + Math.random() * 0.0055) * (i % 2 === 0 ? 1 : -1),
+      dotSize: 0.9 + Math.random() * 1.6,
       isRed: i % 5 === 0,
     }));
 
     const render = (t: number) => {
       ctx.clearRect(0, 0, w, h);
       const cx = w / 2;
-      const cy = h / 2;
+      const cy = h * 0.45;
 
-      // Halo radial de energia Stark
+      // Halo atmosférico Stark atrás da silhueta
       const haloGrad = ctx.createRadialGradient(
         cx,
         cy,
-        size === 'corner' ? 10 : 30,
+        size === 'corner' ? 12 : 34,
         cx,
         cy,
-        size === 'corner' ? 66 : 165
+        size === 'corner' ? 68 : 175
       );
       if (isThinking) {
-        haloGrad.addColorStop(0, 'rgba(255, 42, 75, 0.24)');
-        haloGrad.addColorStop(0.5, 'rgba(0, 229, 255, 0.14)');
+        haloGrad.addColorStop(0, 'rgba(255, 42, 75, 0.22)');
+        haloGrad.addColorStop(0.55, 'rgba(0, 229, 255, 0.14)');
+        haloGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      } else if (isSpeaking) {
+        haloGrad.addColorStop(0, 'rgba(0, 229, 255, 0.28)');
+        haloGrad.addColorStop(0.55, 'rgba(59, 130, 246, 0.12)');
         haloGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       } else if (isListening) {
-        haloGrad.addColorStop(0, 'rgba(0, 229, 255, 0.28)');
-        haloGrad.addColorStop(0.6, 'rgba(16, 185, 129, 0.1)');
+        haloGrad.addColorStop(0, 'rgba(16, 185, 129, 0.22)');
+        haloGrad.addColorStop(0.55, 'rgba(0, 229, 255, 0.12)');
         haloGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       } else {
-        haloGrad.addColorStop(0, 'rgba(0, 229, 255, 0.2)');
-        haloGrad.addColorStop(0.6, 'rgba(255, 42, 75, 0.06)');
+        haloGrad.addColorStop(0, 'rgba(0, 229, 255, 0.16)');
+        haloGrad.addColorStop(0.65, 'rgba(255, 42, 75, 0.05)');
         haloGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
       }
       ctx.fillStyle = haloGrad;
       ctx.fillRect(0, 0, w, h);
 
+      // Ondas circulares de voz quando a Sara fala
+      if (isSpeaking && size !== 'corner') {
+        const waveCount = 3;
+        for (let k = 0; k < waveCount; k++) {
+          const phase = ((t * 0.0011 + k / waveCount) % 1);
+          const waveR = (size === 'split' ? 76 : 104) + phase * (size === 'split' ? 52 : 78);
+          ctx.beginPath();
+          ctx.arc(cx, cy, waveR, 0, Math.PI * 2);
+          ctx.strokeStyle =
+            k % 2 === 0
+              ? `rgba(0, 229, 255, ${(1 - phase) * 0.42})`
+              : `rgba(255, 42, 75, ${(1 - phase) * 0.3})`;
+          ctx.lineWidth = 1.6;
+          ctx.stroke();
+        }
+      }
+
       // Anel HUD externo segmentado
-      const baseR = size === 'corner' ? 52 : size === 'split' ? 112 : 148;
+      const baseR = size === 'corner' ? 54 : size === 'split' ? 116 : 158;
       ctx.save();
       ctx.translate(cx, cy);
-      ctx.rotate(t * (isThinking ? 0.0018 : 0.00045));
-      ctx.strokeStyle = isThinking ? 'rgba(255, 42, 75, 0.55)' : 'rgba(0, 229, 255, 0.35)';
-      ctx.lineWidth = 1.4;
-      ctx.setLineDash([14, 9, 4, 9]);
+      ctx.rotate(t * (isThinking ? 0.0017 : 0.00038));
+      ctx.strokeStyle = isThinking ? 'rgba(255, 42, 75, 0.48)' : 'rgba(0, 229, 255, 0.28)';
+      ctx.lineWidth = 1.3;
+      ctx.setLineDash([16, 10, 4, 10]);
       ctx.beginPath();
       ctx.arc(0, 0, baseR, 0, Math.PI * 2);
       ctx.stroke();
@@ -141,21 +180,21 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
       // Anel secundário contra-rotativo
       ctx.save();
       ctx.translate(cx, cy);
-      ctx.rotate(-t * (isSpeaking ? 0.0013 : 0.0003));
-      ctx.strokeStyle = isSpeaking ? 'rgba(0, 229, 255, 0.6)' : 'rgba(255, 42, 75, 0.32)';
-      ctx.lineWidth = 1.1;
-      ctx.setLineDash([6, 12]);
+      ctx.rotate(-t * (isSpeaking ? 0.0012 : 0.00025));
+      ctx.strokeStyle = isSpeaking ? 'rgba(0, 229, 255, 0.5)' : 'rgba(255, 42, 75, 0.26)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([5, 13]);
       ctx.beginPath();
-      ctx.arc(0, 0, baseR - (size === 'corner' ? 8 : 16), 0, Math.PI * 2);
+      ctx.arc(0, 0, baseR - (size === 'corner' ? 7 : 15), 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
 
       // Partículas orbitais
       for (const p of particles) {
-        p.angle += p.speed * (isThinking ? 2.4 : isSpeaking ? 1.6 : 1);
+        p.angle += p.speed * (isThinking ? 2.2 : isSpeaking ? 1.45 : 1);
         const px = cx + Math.cos(p.angle) * p.radius;
-        const py = cy + Math.sin(p.angle) * (p.radius * 0.92);
-        ctx.fillStyle = p.isRed ? 'rgba(255, 42, 75, 0.72)' : 'rgba(0, 229, 255, 0.75)';
+        const py = cy + Math.sin(p.angle) * (p.radius * 0.88);
+        ctx.fillStyle = p.isRed ? 'rgba(255, 42, 75, 0.65)' : 'rgba(0, 229, 255, 0.72)';
         ctx.beginPath();
         ctx.arc(px, py, p.dotSize, 0, Math.PI * 2);
         ctx.fill();
@@ -173,37 +212,40 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
     const rect = containerRef.current.getBoundingClientRect();
     const nx = ((e.clientX - rect.left) / rect.width - 0.5) * 2;
     const ny = ((e.clientY - rect.top) / rect.height - 0.5) * 2;
-    setTilt({ rx: -ny * 7, ry: nx * 9 });
+    setTilt({ rx: -ny * 5.5, ry: nx * 7.5 });
+    if (!isThinking) {
+      setGaze({ x: nx * 2.5, y: ny * 1.6 });
+    }
   };
 
-  const resetTilt = () => setTilt({ rx: 0, ry: 0 });
+  const resetTilt = () => {
+    setTilt({ rx: 0, ry: 0 });
+    if (!isThinking) setGaze({ x: 0, y: 0 });
+  };
 
-  const eyeHeight = blink ? 1.2 : mood === 'focus' ? 5.2 : isListening ? 8.2 : 6.8;
-  const mouthCurve =
-    mood === 'happy'
-      ? 6
-      : isSpeaking
-      ? 1.5 + voiceAmp * 4.5
-      : isThinking
-      ? -1.2
-      : 2.5;
+  const breathOffsetY = breathPhase * 2.3;
+  const speakHeadBob = isSpeaking ? Math.sin(voiceAmp * Math.PI) * 1.8 : 0;
+  const speakHeadRoll = isSpeaking ? (voiceAmp - 0.5) * 1.4 : 0;
+  const eyeRy = blink ? 0.5 : mood === 'focus' || isThinking ? 5.6 : isListening ? 7.4 : 6.7;
+  const browLift = mood === 'happy' ? -2.2 : isListening ? -1.4 : isThinking ? 1.8 : 0;
+  const smileLift = mood === 'happy' ? 4.2 : isSpeaking ? 1.5 : isThinking ? -0.6 : 1.8;
+  const mouthGap = isSpeaking ? 1.5 + voiceAmp * 6.8 : mood === 'happy' ? 1.2 : 0;
 
-  const autoNodDeg = isSpeaking ? Math.sin(voiceAmp * Math.PI) * 2.5 : 0;
   const dimClass =
     size === 'corner'
-      ? 'w-[126px] h-[126px]'
+      ? 'w-[122px] h-[132px]'
       : size === 'split'
-      ? 'w-[240px] h-[255px] sm:w-[270px] sm:h-[285px]'
-      : 'w-[260px] h-[270px] sm:w-[340px] sm:h-[355px]';
+      ? 'w-[240px] h-[275px] sm:w-[270px] sm:h-[310px]'
+      : 'w-[280px] h-[325px] sm:w-[350px] sm:h-[405px]';
 
   const statusText = isThinking
     ? 'A PROCESSAR TELEMETRIA'
     : isSpeaking
-    ? 'RESPOSTA VOCAL ATIVA'
+    ? 'VOZ NEURAL ATIVA'
     : isListening
-    ? 'ESCUTA NEURAL CONTÍNUA'
+    ? 'ESCUTA ATIVA'
     : mood === 'focus'
-    ? 'MODO FOCO ATIVO'
+    ? 'MODO FOCO'
     : 'SARA JARVIS ONLINE';
 
   return (
@@ -219,7 +261,7 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
       <div
         className={`relative ${dimClass} flex items-center justify-center transition-transform duration-200 ease-out`}
         style={{
-          transform: `perspective(750px) rotateX(${tilt.rx + autoNodDeg}deg) rotateY(${tilt.ry}deg)`,
+          transform: `perspective(820px) rotateX(${tilt.rx + speakHeadBob * 0.6}deg) rotateY(${tilt.ry}deg)`,
         }}
       >
         <canvas
@@ -227,32 +269,71 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
           className="absolute inset-0 w-full h-full pointer-events-none"
         />
 
-        {/* Armadura Stark Versão Feminina Holográfica 3D em SVG */}
+        {/* Retrato Realista Feminino Stark da Cabeça até os Ombros */}
         <svg
-          viewBox="0 0 260 280"
-          className="relative z-10 w-[86%] h-[86%] drop-shadow-[0_0_24px_rgba(0,229,255,0.42)]"
+          viewBox="0 0 340 410"
+          className="relative z-10 w-[94%] h-[94%] drop-shadow-[0_0_26px_rgba(0,229,255,0.34)]"
           fill="none"
           xmlns="http://www.w3.org/2000/svg"
-          aria-label="SARA JARVIS Holographic Interface"
+          aria-label="SARA JARVIS Feminine Stark Interface"
         >
           <defs>
-            <linearGradient id="saraShellMetal" x1="40" y1="20" x2="220" y2="250" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#0E223D" stopOpacity="0.96" />
-              <stop offset="50%" stopColor="#081529" stopOpacity="0.95" />
-              <stop offset="100%" stopColor="#1A0E1B" stopOpacity="0.96" />
+            {/* Pele humana realista com brilho acetinado quente */}
+            <radialGradient id="saraSkinBase" cx="50%" cy="38%" r="60%">
+              <stop offset="0%" stopColor="#F5D3BE" />
+              <stop offset="52%" stopColor="#E6B89C" />
+              <stop offset="88%" stopColor="#C98F72" />
+              <stop offset="100%" stopColor="#A66D53" />
+            </radialGradient>
+            <linearGradient id="saraNeckSkin" x1="170" y1="225" x2="170" y2="325" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#BA7F64" />
+              <stop offset="35%" stopColor="#DFAD90" />
+              <stop offset="100%" stopColor="#CE9779" />
             </linearGradient>
-            <linearGradient id="saraArmorAccent" x1="70" y1="30" x2="190" y2="230" gradientUnits="userSpaceOnUse">
+            <radialGradient id="saraCheekBlush" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#E87A7A" stopOpacity="0.32" />
+              <stop offset="100%" stopColor="#E87A7A" stopOpacity="0" />
+            </radialGradient>
+
+            {/* Cabelo-armadura escuro metálico feminino */}
+            <linearGradient id="saraHairMetal" x1="80" y1="25" x2="260" y2="290" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#1B2E4E" />
+              <stop offset="45%" stopColor="#0D192E" />
+              <stop offset="100%" stopColor="#050A14" />
+            </linearGradient>
+
+            {/* Armadura Stark feminina nos ombros e peito */}
+            <linearGradient id="saraArmorPlate" x1="50" y1="270" x2="290" y2="405" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#173052" />
+              <stop offset="50%" stopColor="#0B1930" />
+              <stop offset="100%" stopColor="#1B0E1D" />
+            </linearGradient>
+            <linearGradient id="saraShoulderTrim" x1="30" y1="280" x2="310" y2="395" gradientUnits="userSpaceOnUse">
               <stop offset="0%" stopColor="#00E5FF" />
-              <stop offset="65%" stopColor="#3B82F6" />
+              <stop offset="55%" stopColor="#3B82F6" />
               <stop offset="100%" stopColor="#FF2A4B" />
             </linearGradient>
-            <linearGradient id="saraFaceplate" x1="130" y1="44" x2="130" y2="234" gradientUnits="userSpaceOnUse">
-              <stop offset="0%" stopColor="#122C4E" stopOpacity="0.92" />
-              <stop offset="55%" stopColor="#0B1930" stopOpacity="0.95" />
-              <stop offset="100%" stopColor="#071122" stopOpacity="0.98" />
+
+            {/* Íris luminosa safira-ciano */}
+            <radialGradient id="saraIrisGrad" cx="45%" cy="42%" r="55%">
+              <stop offset="0%" stopColor="#A5F3FC" />
+              <stop offset="45%" stopColor={isThinking ? '#FB7185' : '#00E5FF'} />
+              <stop offset="85%" stopColor={isThinking ? '#9F1239' : '#0369A1'} />
+              <stop offset="100%" stopColor="#041527" />
+            </radialGradient>
+
+            {/* Lábios naturais rosados */}
+            <linearGradient id="saraLipUpper" x1="170" y1="184" x2="170" y2="193" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#B85360" />
+              <stop offset="100%" stopColor="#9C3F4D" />
             </linearGradient>
-            <filter id="saraGlow" x="-30%" y="-30%" width="160%" height="160%">
-              <feGaussianBlur stdDeviation="3.2" result="blur" />
+            <linearGradient id="saraLipLower" x1="170" y1="191" x2="170" y2="203" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stopColor="#CE6B77" />
+              <stop offset="100%" stopColor="#A64855" />
+            </linearGradient>
+
+            <filter id="saraSoftGlow" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="2.8" result="blur" />
               <feMerge>
                 <feMergeNode in="blur" />
                 <feMergeNode in="SourceGraphic" />
@@ -260,208 +341,378 @@ export const SaraJarvisHead: React.FC<SaraJarvisHeadProps> = ({
             </filter>
           </defs>
 
-          {/* Pescoço biomecânico elegante */}
-          <path
-            d="M104 222 L95 256 L165 256 L156 222"
-            fill="url(#saraShellMetal)"
-            stroke="#00E5FF"
-            strokeOpacity="0.45"
-            strokeWidth="1.5"
-          />
-          <path
-            d="M110 236 H150 M106 246 H154"
-            stroke="#FF2A4B"
-            strokeOpacity="0.6"
-            strokeWidth="1.4"
-            strokeLinecap="round"
-          />
-
-          {/* Silhueta externa do capacete feminino Stark (contorno curvilíneo e elegante) */}
-          <path
-            d="M130 24
-               C168 24 196 48 202 88
-               L209 128
-               L198 168
-               C189 200 166 225 144 235
-               C135 239 125 239 116 235
-               C94 225 71 200 62 168
-               L51 128
-               L58 88
-               C64 48 92 24 130 24 Z"
-            fill="url(#saraShellMetal)"
-            stroke="url(#saraArmorAccent)"
-            strokeWidth="2.2"
-          />
-
-          {/* Cristas laterais/auriculares Stark com luz vermelho neon */}
-          <path
-            d="M52 106 L41 118 L43 152 L57 166"
-            fill="#140D1B"
-            stroke="#FF2A4B"
-            strokeWidth="2"
-            strokeLinejoin="round"
-          />
-          <path
-            d="M208 106 L219 118 L217 152 L203 166"
-            fill="#140D1B"
-            stroke="#FF2A4B"
-            strokeWidth="2"
-            strokeLinejoin="round"
-          />
-          <circle cx="46" cy="134" r="3" fill="#00E5FF" filter="url(#saraGlow)" />
-          <circle cx="214" cy="134" r="3" fill="#00E5FF" filter="url(#saraGlow)" />
-
-          {/* Placa frontal feminina esculpida (maçãs do rosto e queixo fino) */}
-          <path
-            d="M130 42
-               L164 56
-               L182 88
-               L186 130
-               L174 172
-               C165 198 148 216 130 223
-               C112 216 95 198 86 172
-               L74 130
-               L78 88
-               L96 56 Z"
-            fill="url(#saraFaceplate)"
-            stroke="#00E5FF"
-            strokeOpacity="0.65"
-            strokeWidth="1.6"
-          />
-
-          {/* Diadema / Núcleo Frontal na testa */}
-          <path
-            d="M112 50 L130 68 L148 50"
-            stroke="#FF2A4B"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-          <polygon
-            points="130,36 138,48 130,60 122,48"
-            fill={isThinking ? '#FF2A4B' : '#00E5FF'}
-            fillOpacity="0.88"
-            filter="url(#saraGlow)"
-          />
-
-          {/* Linhas de contorno das sobrancelhas/viseira femininas */}
-          <path
-            d="M84 106 C96 95 112 97 122 108"
-            stroke="#00E5FF"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          />
-          <path
-            d="M176 106 C164 95 148 97 138 108"
-            stroke="#00E5FF"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-          />
-
-          {/* Olhos óticos Stark femininos com pestanas angulares e piscar real */}
-          <g filter="url(#saraGlow)">
-            {/* Olho esquerdo */}
+          {/* GRUPO DOS OMBROS + BUSTO + PESCOÇO (com respiração natural suave) */}
+          <g transform={`translate(0, ${breathOffsetY.toFixed(2)})`}>
+            {/* Sombra por trás dos ombros */}
             <path
-              d="M87 118 L119 121 L114 127 L91 125 Z"
-              fill="#020814"
-              stroke="#00E5FF"
-              strokeWidth="1.2"
+              d="M26 398 C34 328 66 296 118 286 L222 286 C274 296 306 328 314 398 Z"
+              fill="#030814"
+              fillOpacity="0.7"
             />
-            <ellipse
-              cx="104"
-              cy="121.5"
-              rx="11"
-              ry={eyeHeight * 0.48}
-              fill={isThinking ? '#FF2A4B' : '#00E5FF'}
-            />
-            {!blink && <circle cx="105" cy="121" r="2.2" fill="#FFFFFF" />}
 
-            {/* Olho direito */}
+            {/* Pescoço feminino elegante e clavículas */}
             <path
-              d="M173 118 L141 121 L146 127 L169 125 Z"
-              fill="#020814"
-              stroke="#00E5FF"
-              strokeWidth="1.2"
+              d="M142 222 C142 252 135 276 114 292 L170 326 L226 292 C205 276 198 252 198 222 Z"
+              fill="url(#saraNeckSkin)"
             />
-            <ellipse
-              cx="156"
-              cy="121.5"
-              rx="11"
-              ry={eyeHeight * 0.48}
-              fill={isThinking ? '#FF2A4B' : '#00E5FF'}
-            />
-            {!blink && <circle cx="155" cy="121" r="2.2" fill="#FFFFFF" />}
-          </g>
-
-          {/* Ponte nasal esculpida e linhas de bochecha */}
-          <path
-            d="M130 108 V152 L123 160 M130 152 L137 160"
-            stroke="#00E5FF"
-            strokeOpacity="0.45"
-            strokeWidth="1.3"
-            strokeLinecap="round"
-          />
-          <path
-            d="M84 148 L103 165 L100 189 M176 148 L157 165 L160 189"
-            stroke="#FF2A4B"
-            strokeOpacity="0.48"
-            strokeWidth="1.2"
-            strokeLinecap="round"
-          />
-
-          {/* Lábios / Vocalizador holográfico vivo */}
-          <g filter="url(#saraGlow)">
+            {/* Sombra do queixo no pescoço */}
             <path
-              d={`M113 184 Q130 ${184 + mouthCurve} 147 184`}
-              stroke={isSpeaking ? '#00E5FF' : '#93C5FD'}
-              strokeWidth={isSpeaking ? 2.6 : 1.9}
+              d="M142 222 C152 246 188 246 198 222 C186 234 154 234 142 222 Z"
+              fill="#8B563F"
+              fillOpacity="0.45"
+            />
+            {/* Clavículas delicadas */}
+            <path
+              d="M118 293 Q146 301 164 312 M222 293 Q194 301 176 312"
+              stroke="#B5795E"
+              strokeOpacity="0.65"
+              strokeWidth="1.6"
               strokeLinecap="round"
-              fill="none"
             />
-            {isSpeaking && (
-              <path
-                d={`M117 185 Q130 ${185 - voiceAmp * 4} 143 185`}
-                stroke="#FF2A4B"
-                strokeWidth="1.4"
-                strokeLinecap="round"
-                fill="none"
+
+            {/* Ombreiras Stark femininas esculpidas (Esquerda & Direita) */}
+            <path
+              d="M22 402 C28 334 52 296 96 286 L124 295 C104 320 96 360 92 402 Z"
+              fill="url(#saraArmorPlate)"
+              stroke="url(#saraShoulderTrim)"
+              strokeWidth="2"
+            />
+            <path
+              d="M318 402 C312 334 288 296 244 286 L216 295 C236 320 244 360 248 402 Z"
+              fill="url(#saraArmorPlate)"
+              stroke="url(#saraShoulderTrim)"
+              strokeWidth="2"
+            />
+
+            {/* Placas superiores dos ombros com filetes neon */}
+            <path
+              d="M42 326 C62 304 86 294 114 298"
+              stroke="#00E5FF"
+              strokeOpacity="0.7"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+            <path
+              d="M298 326 C278 304 254 294 226 298"
+              stroke="#00E5FF"
+              strokeOpacity="0.7"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+            <path
+              d="M46 352 L84 342 M294 352 L256 342"
+              stroke="#FF2A4B"
+              strokeOpacity="0.72"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+            />
+
+            {/* Peitoral / Gola Stark feminina em V elegante */}
+            <path
+              d="M90 402 C95 348 106 312 122 294 L170 330 L218 294 C234 312 245 348 250 402 Z"
+              fill="url(#saraArmorPlate)"
+              stroke="#00E5FF"
+              strokeOpacity="0.7"
+              strokeWidth="1.8"
+            />
+            <path
+              d="M124 300 L170 334 L216 300"
+              stroke="#00E5FF"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M112 346 L146 364 M228 346 L194 364"
+              stroke="#FF2A4B"
+              strokeOpacity="0.55"
+              strokeWidth="1.3"
+              strokeLinecap="round"
+            />
+
+            {/* Núcleo Arc Reactor no peito */}
+            <g filter="url(#saraSoftGlow)">
+              <circle
+                cx="170"
+                cy="362"
+                r={isSpeaking ? 16.5 + voiceAmp * 2.2 : 16}
+                fill="#061224"
+                stroke="#00E5FF"
+                strokeWidth="2"
               />
-            )}
+              <circle
+                cx="170"
+                cy="362"
+                r="11"
+                fill={isThinking ? '#FF2A4B' : '#00E5FF'}
+                fillOpacity={isSpeaking ? 0.42 + voiceAmp * 0.4 : 0.3}
+              />
+              <polygon
+                points="170,352 179,368 161,368"
+                fill="none"
+                stroke="#E0F2FE"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+              <circle cx="170" cy="362" r="3.6" fill="#FFFFFF" />
+            </g>
           </g>
 
-          {/* Placa do queixo + micro luz Stark */}
-          <path
-            d="M116 206 L130 214 L144 206"
-            stroke="#00E5FF"
-            strokeOpacity="0.65"
-            strokeWidth="1.5"
-            strokeLinecap="round"
-          />
-          <circle
-            cx="130"
-            cy="245"
-            r="6"
-            fill={isThinking ? '#FF2A4B' : '#00E5FF'}
-            fillOpacity="0.28"
-            stroke="#00E5FF"
-            strokeWidth="1.5"
-          />
-          <circle cx="130" cy="245" r="2.6" fill="#FFFFFF" />
+          {/* GRUPO DA CABEÇA FEMININA (com leve balanço natural ao falar) */}
+          <g transform={`translate(0, ${speakHeadBob.toFixed(2)}) rotate(${speakHeadRoll.toFixed(2)} 170 155)`}>
+            {/* Cabelo-armadura traseiro em camadas fluídas */}
+            <path
+              d="M170 22
+                 C220 22 254 56 258 112
+                 C261 154 252 214 236 256
+                 L214 246
+                 C224 206 230 164 226 120
+                 C222 72 198 50 170 50
+                 C142 50 118 72 114 120
+                 C110 164 116 206 126 246
+                 L104 256
+                 C88 214 79 154 82 112
+                 C86 56 120 22 170 22 Z"
+              fill="url(#saraHairMetal)"
+              stroke="#00E5FF"
+              strokeOpacity="0.48"
+              strokeWidth="1.6"
+            />
+
+            {/* Transdutores auriculares Stark (esquerda e direita) */}
+            <path
+              d="M99 124 L86 134 L88 168 L103 178"
+              fill="#0E172A"
+              stroke="#FF2A4B"
+              strokeWidth="1.8"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M241 124 L254 134 L252 168 L237 178"
+              fill="#0E172A"
+              stroke="#FF2A4B"
+              strokeWidth="1.8"
+              strokeLinejoin="round"
+            />
+            <circle cx="92" cy="151" r="2.8" fill="#00E5FF" filter="url(#saraSoftGlow)" />
+            <circle cx="248" cy="151" r="2.8" fill="#00E5FF" filter="url(#saraSoftGlow)" />
+
+            {/* Formato oval delicado do rosto humano feminino */}
+            <path
+              d="M170 52
+                 C204 52 228 78 230 118
+                 C231 152 222 184 206 207
+                 C194 224 182 234 170 235
+                 C158 234 146 224 134 207
+                 C118 184 109 152 110 118
+                 C112 78 136 52 170 52 Z"
+              fill="url(#saraSkinBase)"
+            />
+
+            {/* Rubor natural nas maçãs do rosto */}
+            <ellipse cx="132" cy="156" rx="18" ry="11" fill="url(#saraCheekBlush)" />
+            <ellipse cx="208" cy="156" rx="18" ry="11" fill="url(#saraCheekBlush)" />
+
+            {/* Linhas subtis de contorno Stark nas têmporas e maxilar */}
+            <path
+              d="M112 132 L120 174 L138 206"
+              stroke="#00E5FF"
+              strokeOpacity="0.24"
+              strokeWidth="1"
+              strokeLinecap="round"
+            />
+            <path
+              d="M228 132 L220 174 L202 206"
+              stroke="#00E5FF"
+              strokeOpacity="0.24"
+              strokeWidth="1"
+              strokeLinecap="round"
+            />
+
+            {/* Franja elegante esculpida + micro diadema Stark na testa */}
+            <path
+              d="M110 114
+                 C114 70 138 44 170 44
+                 C202 44 226 70 230 114
+                 C220 84 200 68 178 65
+                 L170 76
+                 L162 65
+                 C140 68 120 84 110 114 Z"
+              fill="url(#saraHairMetal)"
+              stroke="#00E5FF"
+              strokeOpacity="0.55"
+              strokeWidth="1.3"
+            />
+            {/* Fios neurais luminosos subtis no cabelo */}
+            <path
+              d="M126 62 Q148 48 166 56 M214 62 Q192 48 174 56"
+              stroke="#00E5FF"
+              strokeOpacity="0.5"
+              strokeWidth="1.1"
+              strokeLinecap="round"
+            />
+            {/* Cristal neural na testa */}
+            <polygon
+              points="170,54 175,63 170,71 165,63"
+              fill={isThinking ? '#FF2A4B' : '#00E5FF'}
+              filter="url(#saraSoftGlow)"
+            />
+
+            {/* Sobrancelhas femininas naturais com expressão */}
+            <path
+              d={`M125 ${111 + browLift} Q141 ${102 + browLift} 157 ${110 + browLift * 0.4}`}
+              stroke="#1E293B"
+              strokeWidth="2.8"
+              strokeLinecap="round"
+            />
+            <path
+              d={`M215 ${111 + browLift} Q199 ${102 + browLift} 183 ${110 + browLift * 0.4}`}
+              stroke="#1E293B"
+              strokeWidth="2.8"
+              strokeLinecap="round"
+            />
+
+            {/* OLHO ESQUERDO REALISTA COM ÍRIS SAFIRA-CIANO & PESTANAS */}
+            <g>
+              <path
+                d={`M125 127 Q141 ${127 - eyeRy * 1.4} 156 127 Q141 ${127 + eyeRy * 1.1} 125 127 Z`}
+                fill="#F8FAFC"
+              />
+              {!blink && (
+                <g transform={`translate(${gaze.x.toFixed(1)}, ${gaze.y.toFixed(1)})`}>
+                  <circle cx="141" cy="126.5" r="5.6" fill="url(#saraIrisGrad)" />
+                  <circle cx="141" cy="126.5" r="2.5" fill="#030712" />
+                  <circle cx="143" cy="124.5" r="1.3" fill="#FFFFFF" />
+                  <circle cx="139" cy="128.2" r="0.6" fill="#E0F2FE" fillOpacity="0.85" />
+                </g>
+              )}
+              {/* Pálpebra e pestanas superiores */}
+              <path
+                d={
+                  blink
+                    ? 'M124 127 Q141 130 157 127'
+                    : `M123 127 Q141 ${126 - eyeRy * 1.5} 158 127`
+                }
+                stroke="#0F172A"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+              />
+              {!blink && (
+                <path
+                  d="M123 126 L120 123 M127 123 L125 120"
+                  stroke="#0F172A"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                />
+              )}
+            </g>
+
+            {/* OLHO DIREITO REALISTA COM ÍRIS SAFIRA-CIANO & PESTANAS */}
+            <g>
+              <path
+                d={`M184 127 Q199 ${127 - eyeRy * 1.4} 215 127 Q199 ${127 + eyeRy * 1.1} 184 127 Z`}
+                fill="#F8FAFC"
+              />
+              {!blink && (
+                <g transform={`translate(${gaze.x.toFixed(1)}, ${gaze.y.toFixed(1)})`}>
+                  <circle cx="199" cy="126.5" r="5.6" fill="url(#saraIrisGrad)" />
+                  <circle cx="199" cy="126.5" r="2.5" fill="#030712" />
+                  <circle cx="201" cy="124.5" r="1.3" fill="#FFFFFF" />
+                  <circle cx="197" cy="128.2" r="0.6" fill="#E0F2FE" fillOpacity="0.85" />
+                </g>
+              )}
+              {/* Pálpebra e pestanas superiores */}
+              <path
+                d={
+                  blink
+                    ? 'M183 127 Q199 130 216 127'
+                    : `M182 127 Q199 ${126 - eyeRy * 1.5} 217 127`
+                }
+                stroke="#0F172A"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+              />
+              {!blink && (
+                <path
+                  d="M217 126 L220 123 M213 123 L215 120"
+                  stroke="#0F172A"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                />
+              )}
+            </g>
+
+            {/* Nariz fino e natural com ponte iluminada */}
+            <path
+              d="M170 129 L170 159"
+              stroke="#FFE4D6"
+              strokeOpacity="0.55"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+            />
+            <path
+              d="M163 163 Q170 168 177 163"
+              stroke="#B57559"
+              strokeOpacity="0.82"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+            <circle cx="164" cy="162" r="1.1" fill="#8C523B" fillOpacity="0.55" />
+            <circle cx="176" cy="162" r="1.1" fill="#8C523B" fillOpacity="0.55" />
+
+            {/* Boca & Lábios com sincronização labial viva ao falar e sorriso acolhedor */}
+            <g>
+              {/* Cavidade oral ao falar */}
+              {mouthGap > 0.5 && (
+                <path
+                  d={`M155 ${191 - smileLift * 0.25} Q170 ${190 - smileLift * 0.1} 185 ${191 - smileLift * 0.25} Q170 ${192 + mouthGap * 1.15} 155 ${191 - smileLift * 0.25} Z`}
+                  fill="#3B0D16"
+                />
+              )}
+              {/* Lábio superior com arco de cupido */}
+              <path
+                d={`M151 ${191 - smileLift * 0.45} Q162 183 170 186 Q178 183 189 ${191 - smileLift * 0.45} Q178 190 170 190 Q162 190 151 ${191 - smileLift * 0.45} Z`}
+                fill="url(#saraLipUpper)"
+              />
+              {/* Lábio inferior cheio */}
+              <path
+                d={`M153 ${191 - smileLift * 0.35 + mouthGap * 0.25} Q170 ${192 + mouthGap * 0.85} 187 ${191 - smileLift * 0.35 + mouthGap * 0.25} Q178 ${202 + mouthGap * 0.85 + smileLift * 0.35} 170 ${202 + mouthGap * 0.85 + smileLift * 0.35} Q162 ${202 + mouthGap * 0.85 + smileLift * 0.35} 153 ${191 - smileLift * 0.35 + mouthGap * 0.25} Z`}
+                fill="url(#saraLipLower)"
+              />
+              {/* Brilho sutil no lábio inferior */}
+              <path
+                d={`M164 ${197 + mouthGap * 0.65} Q170 ${199 + mouthGap * 0.65} 176 ${197 + mouthGap * 0.65}`}
+                stroke="#FFE4E6"
+                strokeOpacity="0.45"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+              />
+            </g>
+
+            {/* Contorno subtil do queixo */}
+            <path
+              d="M161 218 Q170 222 179 218"
+              stroke="#B57559"
+              strokeOpacity="0.4"
+              strokeWidth="1.2"
+              strokeLinecap="round"
+            />
+          </g>
         </svg>
 
         {/* Feixe de varrimento HUD ao pensar */}
         {isThinking && size !== 'corner' && (
           <div className="pointer-events-none absolute inset-6 overflow-hidden rounded-full">
             <div
-              className="w-full h-1 bg-gradient-to-r from-transparent via-[#FF2A4B] to-transparent opacity-80"
-              style={{ animation: 'jarvisScan 1.6s ease-in-out infinite' }}
+              className="w-full h-1 bg-gradient-to-r from-transparent via-[#FF2A4B] to-transparent opacity-75"
+              style={{ animation: 'jarvisScan 1.5s ease-in-out infinite' }}
             />
           </div>
         )}
       </div>
 
       {size !== 'corner' && (
-        <div className="mt-1 flex items-center gap-2 text-[10px] font-mono tracking-[0.22em] uppercase">
+        <div className="mt-0.5 flex items-center gap-2 text-[10px] font-mono tracking-[0.22em] uppercase">
           <span
             className={`w-2 h-2 rounded-full ${
               isThinking

@@ -15,7 +15,7 @@ export async function onRequestPost(context) {
   try {
     const body = await context.request.json();
     if (body?.action === 'youtube_search') {
-      const track = await searchYouTubeTrackEdge(body?.query || '');
+      const track = await searchYouTubeTrackEdge(body?.query || '', body?.kind || 'music');
       return jsonResponse({ track }, 200);
     }
 
