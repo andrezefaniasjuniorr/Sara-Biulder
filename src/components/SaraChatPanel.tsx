@@ -75,6 +75,8 @@ interface SaraChatPanelProps {
   onApplySuggestion: (suggestion: string) => void;
   onListenMessageDetail: (text: string) => void;
   onSilenceSara: () => void;
+  callName?: string;
+  isOwner?: boolean;
 }
 
 function formatTimer(seconds: number): string {
@@ -173,6 +175,8 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   pendingConfirmation = null,
   liveBuild,
   mission,
+  callName = 'Utilizador',
+  isOwner = false,
   manualProposal,
   hasResumableMission,
   resumableGoal,
@@ -439,8 +443,8 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                       : 'A construir módulos'
                   } · ${formatTimer(liveBuild.elapsedSeconds)}`
                 : agentMode === 'manual'
-                ? 'Contigo passo a passo · Eletro-Jr'
-                : 'Autónomo sem limites · Eletro-Jr'}
+                ? `Contigo passo a passo · ${isOwner ? 'Eletro-Jr' : callName}`
+                : `Autónomo sem limites · ${isOwner ? 'Eletro-Jr' : callName}`}
             </p>
           </div>
         </div>
@@ -1195,7 +1199,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleComposerKeyDown}
             onPaste={handlePaste}
-            placeholder="Escreve ou fala com a Sara, Eletro-Jr... (Enter envia, Shift+Enter quebra linha)"
+            placeholder={`Escreve ou fala com a Sara, ${isOwner ? 'Eletro-Jr' : callName}... (Enter envia, Shift+Enter quebra linha)`}
             className="flex-1 min-w-0 bg-transparent text-xs sm:text-sm text-white placeholder-[#A1A1AA]/60 outline-none resize-none overflow-y-auto overflow-x-auto sara-scroll py-1.5 leading-5 max-h-[120px]"
           />
 

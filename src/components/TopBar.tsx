@@ -15,11 +15,18 @@ import {
   X,
   Sparkles,
   Hammer,
+  Shield,
+  LogOut,
+  Clock,
 } from 'lucide-react';
 import type { AgentMode, FirebaseUserProfile, VoiceLevel } from '../types/builder';
 import type { WorkspaceMode } from '../types/jarvis';
+import type { SaraSession } from '../types/auth';
 
 interface TopBarProps {
+  session: SaraSession;
+  guestSecondsLeft?: number | null;
+  unreadAlertsCount?: number;
   workspaceMode: WorkspaceMode;
   projectName: string;
   agentMode: AgentMode;
@@ -44,9 +51,21 @@ interface TopBarProps {
   onOpenProjects: () => void;
   onOpenSettings: () => void;
   onOpenDeploy: () => void;
+  onOpenAdmin?: () => void;
+  onLogout: () => void;
+}
+
+function formatGuestCountdown(seconds?: number | null): string {
+  const s = Math.max(0, Math.floor(seconds ?? 0));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
+  session,
+  guestSecondsLeft = null,
+  unreadAlertsCount = 0,
   workspaceMode,
   projectName,
   agentMode,
@@ -56,7 +75,6 @@ export const TopBar: React.FC<TopBarProps> = ({
   isSaraSpeaking,
   isSaraSilenced,
   isThinking,
-  firebaseUser,
   isSyncingFirebase = false,
   isJarvisPanelOpen = false,
   onToggleJarvisPanel,
@@ -71,10 +89,13 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenProjects,
   onOpenSettings,
   onOpenDeploy,
+  onOpenAdmin,
+  onLogout,
 }) => {
   const voiceLevelLabel =
     voiceLevel === 'full' ? 'Longo' : voiceLevel === 'medium' ? 'Médio' : 'Curto';
   const isJarvis = workspaceMode === 'jarvis';
+  const isOwner = Boolean(session?.isOwner);
 
   return (
     <header
@@ -167,9 +188,9 @@ export const TopBar: React.FC<TopBarProps> = ({
               </span>
             </>
           )}
-          {isSyncingFirebase && (
+          {isOwner && isSyncingFirebase && (
             <span className="hidden xl:inline-flex items-center gap-1 text-[10px] font-mono text-cyan-300/90 px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25">
-              Firebase
+              Cloud Sync
             </span>
           )}
         </div>
@@ -263,11 +284,40 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
       )}
 
-      {/* Direita: Eletro-Jr, Calar Sara, Voz: Curto/Médio/Longo, Mic (+ botões Builder quando no Builder) */}
+      {/* Direita: Identidade / Admin (só dono) / Calar Sara / Voz / Mic / Builder / Sair */}
       <div className="flex items-center gap-1.5 shrink-0">
-        <span className="hidden sm:inline text-xs font-semibold text-cyan-100 mr-1 whitespace-nowrap">
-          {firebaseUser?.displayName || 'Eletro-Jr'}
-        </span>
+        {isOwner ? (
+          <div className="hidden sm:flex items-center gap-1.5 mr-1">
+            <span className="px-2 py-1 rounded-lg bg-emerald-500/12 border border-emerald-400/35 text-[10px] font-bold tracking-wider uppercase text-emerald-200 whitespace-nowrap">
+              DONO: Eletro-Júnior • ADMIN ATIVO
+            </span>
+            {onOpenAdmin && (
+              <button
+                type="button"
+                onClick={onOpenAdmin}
+                className="relative px-2.5 py-1 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-400/45 text-cyan-200 text-[11px] font-bold tracking-wider uppercase flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer transition"
+                title="Abrir Painel Admin"
+              >
+                <Shield className="w-3.5 h-3.5 text-cyan-300" />
+                <span>ADMIN</span>
+                {unreadAlertsCount > 0 && (
+                  <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-mono font-bold">
+                    {unreadAlertsCount}
+                  </span>
+                )}
+              </button>
+            )}
+          </div>
+        ) : session.isGuest ? (
+          <span className="hidden sm:inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-amber-500/15 border border-amber-400/35 text-[11px] font-semibold text-amber-200 mr-1 whitespace-nowrap font-mono tabular-nums">
+            <Clock className="w-3 h-3 text-amber-300" />
+            Convidado • {formatGuestCountdown(guestSecondsLeft)}
+          </span>
+        ) : (
+          <span className="hidden sm:inline text-xs font-semibold text-cyan-100 mr-1 whitespace-nowrap">
+            {session.callName}
+          </span>
+        )}
 
         <button
           type="button"
@@ -355,14 +405,16 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span className="hidden sm:inline">Projetos</span>
             </button>
 
-            <button
-              type="button"
-              onClick={onOpenSettings}
-              className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#8B5CF6]/50 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-              title="Configurações"
-            >
-              <Settings className="w-3.5 h-3.5 text-[#8B5CF6]" />
-            </button>
+            {isOwner && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#8B5CF6]/50 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+                title="Configurações"
+              >
+                <Settings className="w-3.5 h-3.5 text-[#8B5CF6]" />
+              </button>
+            )}
 
             <button
               type="button"
@@ -374,6 +426,16 @@ export const TopBar: React.FC<TopBarProps> = ({
             </button>
           </>
         )}
+
+        <button
+          type="button"
+          onClick={onLogout}
+          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold tracking-wider uppercase bg-rose-500/12 hover:bg-rose-500/25 border border-rose-500/35 text-rose-200 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+          title="Terminar sessão e voltar ao ecrã de entrada"
+        >
+          <LogOut className="w-3.5 h-3.5" />
+          <span>SAIR</span>
+        </button>
       </div>
     </header>
   );

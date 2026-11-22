@@ -17,6 +17,8 @@ import type {
   JarvisWeatherInfo,
 } from '../types/jarvis';
 import { getSavedGeminiKey } from './saraAiService';
+import type { SaraUserIdentityPayload } from '../types/auth';
+import { sanitizeNonOwnerAiReply } from './authService';
 
 const JARVIS_STORAGE_KEYS = {
   agenda: 'sara_jarvis_agenda_v1',
@@ -30,6 +32,10 @@ const JARVIS_STORAGE_KEYS = {
   hudFeed: 'sara_jarvis_hud_feed_v1',
 };
 
+function scopedJarvisKey(baseKey: string, userId?: string): string {
+  return userId ? `${baseKey}_${userId}` : baseKey;
+}
+
 const INHAMBANE_DEFAULT = {
   lat: -23.865,
   lon: 35.3833,
@@ -41,9 +47,9 @@ const LEGACY_MOCK_TASK_IDS = new Set(['tsk_1']);
 const LEGACY_MOCK_TRACK_IDS = new Set(['synth_stark_pulse', 'yt_lofi_study', 'synth_neon_drive']);
 
 export const DEFAULT_JARVIS_MEMORY: JarvisMemoryState = {
-  userName: 'Eletro-Jr',
+  userName: 'Utilizador',
   preferences: ['Inhambane Cidade, Inhambane, Moçambique'],
-  facts: ['Reside em Inhambane Cidade, Inhambane, Moçambique'],
+  facts: ['Localização base: Inhambane Cidade, Inhambane, Moçambique'],
 };
 
 export const DEFAULT_JARVIS_TRACKS: JarvisTrack[] = [];
@@ -66,18 +72,40 @@ function safeWriteJson(key: string, value: unknown): void {
   }
 }
 
-export function loadJarvisLocalBundle() {
-  const rawAgenda = safeReadJson<JarvisAgendaItem[]>(JARVIS_STORAGE_KEYS.agenda, []);
+export function loadJarvisLocalBundle(
+  userId?: string,
+  callName?: string,
+  isGuest = false
+) {
+  const defaultMemory: JarvisMemoryState = {
+    userName: callName || DEFAULT_JARVIS_MEMORY.userName,
+    preferences: ['Inhambane Cidade, Inhambane, Moçambique'],
+    facts: ['Localização base: Inhambane Cidade, Inhambane, Moçambique'],
+  };
+
+  if (isGuest || (userId && userId.startsWith('guest_'))) {
+    return {
+      agenda: [] as JarvisAgendaItem[],
+      alarms: [] as JarvisAlarmItem[],
+      tasks: [] as JarvisTaskItem[],
+      memory: defaultMemory,
+      documents: [] as JarvisDocumentItem[],
+      conversation: [] as JarvisConversationEntry[],
+      playlist: [] as JarvisTrack[],
+    };
+  }
+
+  const rawAgenda = safeReadJson<JarvisAgendaItem[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.agenda, userId), []);
   const agenda = Array.isArray(rawAgenda)
     ? rawAgenda.filter((item) => item && !LEGACY_MOCK_AGENDA_IDS.has(item.id))
     : [];
 
-  const rawTasks = safeReadJson<JarvisTaskItem[]>(JARVIS_STORAGE_KEYS.tasks, []);
+  const rawTasks = safeReadJson<JarvisTaskItem[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.tasks, userId), []);
   const tasks = Array.isArray(rawTasks)
     ? rawTasks.filter((item) => item && !LEGACY_MOCK_TASK_IDS.has(item.id))
     : [];
 
-  const rawPlaylist = safeReadJson<JarvisTrack[]>(JARVIS_STORAGE_KEYS.playlist, []);
+  const rawPlaylist = safeReadJson<JarvisTrack[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.playlist, userId), []);
   const playlist = Array.isArray(rawPlaylist)
     ? rawPlaylist.filter(
         (tr) =>
@@ -89,14 +117,17 @@ export function loadJarvisLocalBundle() {
       )
     : [];
 
-  const rawMem = safeReadJson<JarvisMemoryState>(JARVIS_STORAGE_KEYS.memory, DEFAULT_JARVIS_MEMORY);
+  const rawMem = safeReadJson<JarvisMemoryState>(
+    scopedJarvisKey(JARVIS_STORAGE_KEYS.memory, userId),
+    defaultMemory
+  );
   const cleanedFacts = (rawMem?.facts || []).filter(
     (f) => !/\b(luanda|angola|matola)\b/i.test(f)
   );
   const memory: JarvisMemoryState = {
-    userName: rawMem?.userName || DEFAULT_JARVIS_MEMORY.userName,
-    preferences: rawMem?.preferences || DEFAULT_JARVIS_MEMORY.preferences,
-    facts: cleanedFacts.length > 0 ? cleanedFacts : DEFAULT_JARVIS_MEMORY.facts,
+    userName: callName || rawMem?.userName || defaultMemory.userName,
+    preferences: rawMem?.preferences || defaultMemory.preferences,
+    facts: cleanedFacts.length > 0 ? cleanedFacts : defaultMemory.facts,
     lastRoutineGreetingDate: rawMem?.lastRoutineGreetingDate,
     lastVisitDate: rawMem?.lastVisitDate,
     lastActiveProjectName: rawMem?.lastActiveProjectName,
@@ -118,47 +149,54 @@ export function loadJarvisLocalBundle() {
 
   return {
     agenda,
-    alarms: safeReadJson<JarvisAlarmItem[]>(JARVIS_STORAGE_KEYS.alarms, []),
+    alarms: safeReadJson<JarvisAlarmItem[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.alarms, userId), []),
     tasks,
     memory,
-    documents: safeReadJson<JarvisDocumentItem[]>(JARVIS_STORAGE_KEYS.docs, []),
-    conversation: safeReadJson<JarvisConversationEntry[]>(JARVIS_STORAGE_KEYS.chat, []),
+    documents: safeReadJson<JarvisDocumentItem[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.docs, userId), []),
+    conversation: safeReadJson<JarvisConversationEntry[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.chat, userId), []),
     playlist,
   };
 }
 
-export function saveJarvisAgenda(items: JarvisAgendaItem[]) {
-  safeWriteJson(JARVIS_STORAGE_KEYS.agenda, items);
+export function saveJarvisAgenda(items: JarvisAgendaItem[], userId?: string, isGuest = false) {
+  if (isGuest || userId?.startsWith('guest_')) return;
+  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.agenda, userId), items);
 }
 
-export function saveJarvisAlarms(items: JarvisAlarmItem[]) {
-  safeWriteJson(JARVIS_STORAGE_KEYS.alarms, items);
+export function saveJarvisAlarms(items: JarvisAlarmItem[], userId?: string, isGuest = false) {
+  if (isGuest || userId?.startsWith('guest_')) return;
+  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.alarms, userId), items);
 }
 
-export function saveJarvisTasks(items: JarvisTaskItem[]) {
-  safeWriteJson(JARVIS_STORAGE_KEYS.tasks, items);
+export function saveJarvisTasks(items: JarvisTaskItem[], userId?: string, isGuest = false) {
+  if (isGuest || userId?.startsWith('guest_')) return;
+  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.tasks, userId), items);
 }
 
-export function saveJarvisMemory(memory: JarvisMemoryState) {
-  safeWriteJson(JARVIS_STORAGE_KEYS.memory, memory);
+export function saveJarvisMemory(memory: JarvisMemoryState, userId?: string, isGuest = false) {
+  if (isGuest || userId?.startsWith('guest_')) return;
+  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.memory, userId), memory);
 }
 
-export function saveJarvisDocuments(docs: JarvisDocumentItem[]) {
+export function saveJarvisDocuments(docs: JarvisDocumentItem[], userId?: string, isGuest = false) {
+  if (isGuest || userId?.startsWith('guest_')) return;
   const compact = docs.slice(0, 20).map((d) => ({
     ...d,
     base64Data: undefined,
     previewBlobUrl: undefined,
     textContent: d.textContent ? d.textContent.slice(0, 6000) : undefined,
   }));
-  safeWriteJson(JARVIS_STORAGE_KEYS.docs, compact);
+  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.docs, userId), compact);
 }
 
-export function saveJarvisConversation(entries: JarvisConversationEntry[]) {
-  safeWriteJson(JARVIS_STORAGE_KEYS.chat, entries.slice(-40));
+export function saveJarvisConversation(entries: JarvisConversationEntry[], userId?: string, isGuest = false) {
+  if (isGuest || userId?.startsWith('guest_')) return;
+  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.chat, userId), entries.slice(-40));
 }
 
-export function saveJarvisPlaylist(tracks: JarvisTrack[]) {
-  safeWriteJson(JARVIS_STORAGE_KEYS.playlist, tracks.slice(0, 25));
+export function saveJarvisPlaylist(tracks: JarvisTrack[], userId?: string, isGuest = false) {
+  if (isGuest || userId?.startsWith('guest_')) return;
+  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.playlist, userId), tracks.slice(0, 25));
 }
 
 function documentAttachmentMime(doc: JarvisDocumentItem): string {
@@ -507,9 +545,11 @@ export async function askJarvisAssistantStream(
     documentAttachment?: JarvisDocumentItem | null;
     activeDocument?: JarvisDocumentItem | null;
     builderContext?: JarvisBuilderContext | null;
+    userIdentity?: SaraUserIdentityPayload | null;
   },
   callbacks?: JarvisStreamCallbacks
 ): Promise<JarvisAssistantResponse> {
+  const isOwner = Boolean(params.userIdentity?.isOwner);
   const apiKey = getSavedGeminiKey();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers['x-gemini-api-key'] = apiKey;
@@ -525,6 +565,7 @@ export async function askJarvisAssistantStream(
     telemetry: params.telemetry || null,
     mediaState: params.mediaState || null,
     builderContext: params.builderContext || null,
+    userIdentity: params.userIdentity || null,
     documentAttachment: params.documentAttachment
       ? {
           name: params.documentAttachment.name,
@@ -581,14 +622,20 @@ export async function askJarvisAssistantStream(
               rawAccum += evt.text;
               const parsed = parseStreamingJarvisTags(rawAccum);
               if (!speakEmitted && parsed.speakComplete && parsed.speak) {
-                const cleanSpeak = sanitizeAssistantPlainText(parsed.speak);
+                const cleanSpeak = sanitizeNonOwnerAiReply(
+                  sanitizeAssistantPlainText(parsed.speak),
+                  isOwner
+                );
                 if (cleanSpeak) {
                   speakEmitted = true;
                   callbacks?.onSpeakReady?.(cleanSpeak);
                 }
               }
               if (parsed.reply) {
-                const cleanPartial = sanitizeAssistantPlainText(parsed.reply);
+                const cleanPartial = sanitizeNonOwnerAiReply(
+                  sanitizeAssistantPlainText(parsed.reply),
+                  isOwner
+                );
                 if (cleanPartial && cleanPartial !== lastPartialReply) {
                   lastPartialReply = cleanPartial;
                   callbacks?.onReplyPartial?.(cleanPartial);
@@ -622,11 +669,19 @@ export async function askJarvisAssistantStream(
           rawActions
         );
         const cleanReply =
-          sanitizeAssistantPlainText(
-            finalParsed.reply || strippedFallback || finalParsed.speak
+          sanitizeNonOwnerAiReply(
+            sanitizeAssistantPlainText(finalParsed.reply || strippedFallback || finalParsed.speak),
+            isOwner
           ) || 'Mostrei no preview.';
-        const cleanChatSummary = sanitizeAssistantPlainText(finalParsed.chatSummary || '');
-        const cleanSpeak = sanitizeAssistantPlainText(finalParsed.speak || cleanReply) || cleanReply;
+        const cleanChatSummary = sanitizeNonOwnerAiReply(
+          sanitizeAssistantPlainText(finalParsed.chatSummary || ''),
+          isOwner
+        );
+        const cleanSpeak =
+          sanitizeNonOwnerAiReply(
+            sanitizeAssistantPlainText(finalParsed.speak || cleanReply),
+            isOwner
+          ) || cleanReply;
 
         if (!speakEmitted && cleanSpeak) {
           callbacks?.onSpeakReady?.(cleanSpeak);
@@ -650,14 +705,15 @@ export async function askJarvisAssistantStream(
     // fallback para /api/jarvis padrão abaixo
   }
 
-  return askJarvisAssistantFallbackJson(requestBody, headers, params.prompt, callbacks);
+  return askJarvisAssistantFallbackJson(requestBody, headers, params.prompt, callbacks, isOwner);
 }
 
 async function askJarvisAssistantFallbackJson(
   requestBody: string,
   headers: Record<string, string>,
   prompt: string,
-  callbacks?: JarvisStreamCallbacks
+  callbacks?: JarvisStreamCallbacks,
+  isOwner = false
 ): Promise<JarvisAssistantResponse> {
   try {
     const resp = await fetch('/api/jarvis', {
@@ -673,10 +729,17 @@ async function askJarvisAssistantFallbackJson(
           data.reply,
           (data.actions || []).map(normalizeJarvisAction)
         );
-        const cleanReply = sanitizeAssistantPlainText(data.reply) || 'Feito.';
-        const cleanChat = sanitizeAssistantPlainText(data.chatSummary || '');
+        const cleanReply =
+          sanitizeNonOwnerAiReply(sanitizeAssistantPlainText(data.reply), isOwner) || 'Feito.';
+        const cleanChat = sanitizeNonOwnerAiReply(
+          sanitizeAssistantPlainText(data.chatSummary || ''),
+          isOwner
+        );
         const spoken =
-          sanitizeAssistantPlainText(data.voiceSummary || cleanReply) || cleanReply;
+          sanitizeNonOwnerAiReply(
+            sanitizeAssistantPlainText(data.voiceSummary || cleanReply),
+            isOwner
+          ) || cleanReply;
         callbacks?.onSpeakReady?.(spoken);
         return {
           ...data,
@@ -688,16 +751,17 @@ async function askJarvisAssistantFallbackJson(
       }
     }
   } catch {
-    // offline or API unreachable
+    // offline or external failure
   }
 
-  const honestUnavailable =
-    'Não consegui ligar-me ao motor agora. Verifica a ligação ou a chave API.';
-  callbacks?.onSpeakReady?.('Não consegui responder agora porque falhou a ligação ao servidor.');
+  const honestUnavailable = isOwner
+    ? 'Não consegui ligar-me ao motor agora. Verifica a ligação ou a chave.'
+    : 'Não consegui responder neste instante. Verifica a tua ligação e tenta novamente.';
+  callbacks?.onSpeakReady?.(honestUnavailable);
   return {
     reply: honestUnavailable,
-    chatSummary: 'Falha na ligação ao servidor.',
-    voiceSummary: 'Não consegui responder agora porque falhou a ligação ao servidor.',
+    chatSummary: 'Ligação indisponível no momento.',
+    voiceSummary: honestUnavailable,
     mood: 'idle',
     actions: [],
   };
@@ -716,6 +780,7 @@ export async function askJarvisAssistant(params: {
   documentAttachment?: JarvisDocumentItem | null;
   activeDocument?: JarvisDocumentItem | null;
   builderContext?: JarvisBuilderContext | null;
+  userIdentity?: SaraUserIdentityPayload | null;
 }): Promise<JarvisAssistantResponse> {
   return askJarvisAssistantStream(params);
 }

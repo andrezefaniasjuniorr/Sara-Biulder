@@ -96,6 +96,12 @@ import {
   buscarJarvisStateFirebase,
   salvarJarvisStateFirebase,
 } from '../../services/firebaseService';
+import { evaluateNonOwnerGuard } from '../../services/authService';
+import type {
+  ActivityCategory,
+  SaraSession,
+  SaraUserIdentityPayload,
+} from '../../types/auth';
 import {
   getBackgroundBuildAckSpeech,
   getVoiceReadingStatus,
@@ -114,6 +120,10 @@ import { SaraJarvisHead } from './SaraJarvisHead';
 import { JarvisStageRenderer } from './JarvisStageRenderer';
 
 interface JarvisWorkspaceProps {
+  session: SaraSession;
+  userIdentity: SaraUserIdentityPayload;
+  onUserActivity?: (category?: ActivityCategory) => void;
+  onRequestAdmin?: () => void;
   voiceEnabled: boolean;
   isListening: boolean;
   isSaraSpeaking: boolean;
@@ -258,11 +268,14 @@ function formatMiniMmSs(sec: number): string {
 }
 
 export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
+  session,
+  userIdentity,
+  onUserActivity,
+  onRequestAdmin,
   voiceEnabled,
   isListening,
   isSaraSpeaking,
   isSaraSilenced,
-  firebaseUserUid,
   activeBuilderProjectName,
   activeBuilderFiles,
   liveBuild,
@@ -286,7 +299,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   externalRepeatRef,
   externalContinueRef,
 }) => {
-  const initialBundle = useMemo(() => loadJarvisLocalBundle(), []);
+  const initialBundle = useMemo(
+    () => loadJarvisLocalBundle(session.userId, session.callName, session.isGuest),
+    [session.userId, session.callName, session.isGuest]
+  );
   const [activeModule, setActiveModule] = useState<JarvisModuleTab>('voz');
   const [readingStatus, setReadingStatus] = useState<VoiceReadingStatus>(() =>
     getVoiceReadingStatus()
@@ -430,21 +446,21 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     );
   }, [isPanelOpen]);
 
-  // Persistência local automática
-  useEffect(() => saveJarvisAgenda(agenda), [agenda]);
-  useEffect(() => saveJarvisAlarms(alarms), [alarms]);
-  useEffect(() => saveJarvisTasks(tasks), [tasks]);
-  useEffect(() => saveJarvisMemory(memory), [memory]);
-  useEffect(() => saveJarvisDocuments(documents), [documents]);
-  useEffect(() => saveJarvisConversation(conversation), [conversation]);
-  useEffect(() => saveJarvisPlaylist(playlist), [playlist]);
+  // Persistência local automática isolada por usuário (zero persistência para convidado)
+  useEffect(() => saveJarvisAgenda(agenda, session.userId, session.isGuest), [agenda, session.userId, session.isGuest]);
+  useEffect(() => saveJarvisAlarms(alarms, session.userId, session.isGuest), [alarms, session.userId, session.isGuest]);
+  useEffect(() => saveJarvisTasks(tasks, session.userId, session.isGuest), [tasks, session.userId, session.isGuest]);
+  useEffect(() => saveJarvisMemory(memory, session.userId, session.isGuest), [memory, session.userId, session.isGuest]);
+  useEffect(() => saveJarvisDocuments(documents, session.userId, session.isGuest), [documents, session.userId, session.isGuest]);
+  useEffect(() => saveJarvisConversation(conversation, session.userId, session.isGuest), [conversation, session.userId, session.isGuest]);
+  useEffect(() => saveJarvisPlaylist(playlist, session.userId, session.isGuest), [playlist, session.userId, session.isGuest]);
 
   // Inteligência Proativa & Continuidade entre dias
   useEffect(() => {
-    if (proactiveCheckedRef.current) return;
+    if (proactiveCheckedRef.current || session.isGuest) return;
     proactiveCheckedRef.current = true;
     const todayKey = new Date().toISOString().slice(0, 10);
-    const sessionKey = `sara_proactive_checked_${todayKey}`;
+    const sessionKey = `sara_proactive_checked_${session.userId}_${todayKey}`;
     try {
       if (sessionStorage.getItem(sessionKey)) return;
       sessionStorage.setItem(sessionKey, '1');
@@ -466,9 +482,11 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
     let proactiveMsg = '';
     if (urgentToday) {
-      proactiveMsg = `Chefe, hoje às ${urgentToday.time} tens "${urgentToday.title}" na agenda. Queres rever ou preparar alguma coisa agora?`;
+      proactiveMsg = session.isOwner
+        ? `Chefe, hoje às ${urgentToday.time} tens "${urgentToday.title}" na agenda. Queres rever ou preparar alguma coisa agora?`
+        : `${session.callName}, hoje às ${urgentToday.time} tens "${urgentToday.title}" na agenda. Queres rever ou preparar alguma coisa agora?`;
     } else if (urgentTask) {
-      proactiveMsg = `Olha, tens "${urgentTask.title}" em aberto nas tarefas. Queres despachar isso já?`;
+      proactiveMsg = `Tens "${urgentTask.title}" em aberto nas tarefas. Queres tratar disso já?`;
     } else if (
       memory.lastVisitDate &&
       memory.lastVisitDate < todayKey &&
@@ -573,10 +591,11 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     };
   }, [externalMediaControlRef]);
 
-  // Hidratação + sync opcional Firebase (sara_jarvis_memory)
+  // Hidratação + sync isolado por usuário (ignorado em Modo Convidado)
   useEffect(() => {
+    if (session.isGuest) return;
     let active = true;
-    buscarJarvisStateFirebase(firebaseUserUid).then((cloud) => {
+    buscarJarvisStateFirebase(session.userId).then((cloud) => {
       if (!active || !cloud) return;
       if (Array.isArray(cloud.agenda) && cloud.agenda.length > 0 && agenda.length === 0) {
         setAgenda(cloud.agenda as JarvisAgendaItem[]);
@@ -595,6 +614,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           ...DEFAULT_JARVIS_MEMORY,
           ...prev,
           ...(cloud.memory as Partial<JarvisMemoryState>),
+          userName: session.callName || prev.userName,
           facts: Array.from(new Set([...(prev.facts || []), ...cleanCloudFacts])).slice(-25),
         }));
       }
@@ -602,14 +622,15 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     return () => {
       active = false;
     };
-  }, [firebaseUserUid]);
+  }, [session.userId, session.isGuest, session.callName]);
 
   useEffect(() => {
+    if (session.isGuest) return;
     const t = setTimeout(() => {
-      salvarJarvisStateFirebase({ agenda, alarms, tasks, memory }, firebaseUserUid).catch(() => {});
+      salvarJarvisStateFirebase({ agenda, alarms, tasks, memory }, session.userId).catch(() => {});
     }, 1800);
     return () => clearTimeout(t);
-  }, [agenda, alarms, tasks, memory, firebaseUserUid]);
+  }, [agenda, alarms, tasks, memory, session.userId, session.isGuest]);
 
   // Listener real de Bateria + Rede do dispositivo
   useEffect(() => {
@@ -970,6 +991,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'add_agenda': {
+            onUserActivity?.('agenda');
             const item: JarvisAgendaItem = {
               id: `ag_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
               title: act.title || 'Compromisso',
@@ -985,6 +1007,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'add_alarm': {
+            onUserActivity?.('agenda');
             const item: JarvisAlarmItem = {
               id: `al_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
               time: act.time || '07:00',
@@ -997,6 +1020,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'add_task': {
+            onUserActivity?.('agenda');
             const item: JarvisTaskItem = {
               id: `tsk_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
               title: act.title || 'Nova tarefa',
@@ -1010,6 +1034,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'complete_task': {
+            onUserActivity?.('agenda');
             const needle = (act.title || '').toLowerCase();
             setTasks((prev) =>
               prev.map((t) =>
@@ -1019,6 +1044,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'play_music': {
+            onUserActivity?.('music');
             const query = act.query || act.title || '';
             let track: JarvisTrack | null = act.videoId
               ? {
@@ -1130,6 +1156,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'show_3d': {
+            onUserActivity?.('calc');
             setStageContent({
               id: `stg_3d_${Date.now()}`,
               kind: '3d',
@@ -1164,6 +1191,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'show_math': {
+            onUserActivity?.('calc');
             setStageContent({
               id: `stg_math_${Date.now()}`,
               kind: 'math',
@@ -1205,6 +1233,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'show_document': {
+            onUserActivity?.('docs');
             const docTarget = uploadedDoc || activeDoc;
             const summary = act.summary || '';
             const keyPoints = Array.isArray(act.keyPoints) ? act.keyPoints : [];
@@ -1236,6 +1265,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             break;
           }
           case 'show_html': {
+            onUserActivity?.('docs');
             if (act.html) {
               setStageContent({
                 id: `stg_html_${Date.now()}`,
@@ -1339,6 +1369,28 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       const docToSend = pendingDoc;
       if (!clean && !docToSend) return;
 
+      // PROTEÇÃO TOTAL (Lealdade, Admin Invisível, Segredo & Privacidade) para não-donos antes de qualquer comando ou IA
+      if (clean) {
+        const guard = evaluateNonOwnerGuard(clean, session);
+        if (guard.intercepted && guard.reply) {
+          const guardTime = new Date().toLocaleTimeString('pt-PT', {
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+          if (source === 'text') setInputText('');
+          setConversation((prev) => [
+            ...prev.slice(-28),
+            { id: `usr_g_${Date.now()}`, sender: 'user', text: clean, timestamp: guardTime },
+            { id: `sara_g_${Date.now()}`, sender: 'sara', text: guard.reply!, timestamp: guardTime },
+          ]);
+          speakAsSara(guard.voiceSummary || guard.reply, voiceEnabled, {
+            level: 'short',
+            forceSpeak: source === 'voice' || !isSaraSilenced,
+          });
+          return;
+        }
+      }
+
       // TIPO A - [SISTEMA]: Verifica comandos determinísticos antes da IA
       if (clean && !docToSend && onExecuteSystemCommand) {
         const localCmd = parseVoiceCommand(clean, {
@@ -1349,6 +1401,17 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           hasActiveReading: readingStatus.active,
           isReadingPaused: readingStatus.paused,
         });
+        if (localCmd.type === 'open_admin') {
+          if (session.isOwner && onRequestAdmin) {
+            if (source === 'text') setInputText('');
+            onRequestAdmin();
+            speakAsSara('Painel Admin aberto, chefe.', voiceEnabled, {
+              level: 'short',
+              forceSpeak: true,
+            });
+            return;
+          }
+        }
         if (localCmd.type !== 'prompt') {
           const handled = await onExecuteSystemCommand(localCmd, clean);
           if (handled) {
@@ -1360,6 +1423,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
       // CONEXÃO ASSISTENTE -> BUILDER EM 2.º PLANO: pedidos de site/app completo constroem no Builder sem sair do Assistente
       if (clean && !docToSend && onTriggerBackgroundBuild && isFullBuilderAppRequest(clean)) {
+        onUserActivity?.('builder');
         const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
         const ackSpeech = getBackgroundBuildAckSpeech(clean);
         if (source === 'text') {
@@ -1393,6 +1457,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         return;
       }
 
+      onUserActivity?.('chat');
+
       const userLabel = clean || `Analisar documento: ${docToSend?.name}`;
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
       const wantsFullTextInChat =
@@ -1414,6 +1480,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
       if (source === 'text') setInputText('');
       if (docToSend) {
+        onUserActivity?.('docs');
         setDocuments((prev) => [docToSend, ...prev]);
         setActiveDoc(docToSend);
         setPendingDoc(null);
@@ -1436,6 +1503,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           weather,
           telemetry,
           mediaState: currentMediaState,
+          userIdentity,
           builderContext: {
             activeProjectName: activeBuilderProjectName,
             activeProjectFiles: activeBuilderFiles,
@@ -1524,6 +1592,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       }
     },
     [
+      session,
+      userIdentity,
+      onUserActivity,
+      onRequestAdmin,
       pendingDoc,
       onExecuteSystemCommand,
       stageContent,
@@ -1634,6 +1706,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         ]);
 
         let spokenDocStream = false;
+        onUserActivity?.('docs');
         const res = await askJarvisAssistantStream(
           {
             prompt: `Analisa o documento "${doc.name}" em detalhe: faz um resumo executivo, lista 4-6 pontos principais e extrai os dados importantes em formato estruturado usando a ação show_document.`,
@@ -1644,6 +1717,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             alarms,
             weather,
             telemetry,
+            userIdentity,
             documentAttachment: doc,
           },
           {
@@ -1878,8 +1952,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               </button>
             </div>
 
-            {/* Navegação de Sistema: Assistente / Builder / Configurações */}
-            <div className="p-2.5 grid grid-cols-3 gap-1.5 border-b border-cyan-500/20 bg-[#030815] shrink-0">
+            {/* Navegação de Sistema: Assistente / Builder (+ Config só para o Dono) */}
+            <div
+              className={`p-2.5 grid gap-1.5 border-b border-cyan-500/20 bg-[#030815] shrink-0 ${
+                session.isOwner ? 'grid-cols-3' : 'grid-cols-2'
+              }`}
+            >
               <button
                 type="button"
                 onClick={() => {
@@ -1902,17 +1980,19 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 <Hammer className="w-3.5 h-3.5 text-rose-400" />
                 <span>Builder</span>
               </button>
-              <button
-                type="button"
-                onClick={() => {
-                  updatePanelOpen(false);
-                  onOpenSettings?.();
-                }}
-                className="py-2 px-2 rounded-xl bg-[#071126] border border-cyan-500/25 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:border-cyan-400"
-              >
-                <Settings className="w-3.5 h-3.5 text-cyan-300" />
-                <span>Config</span>
-              </button>
+              {session.isOwner && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    updatePanelOpen(false);
+                    onOpenSettings?.();
+                  }}
+                  className="py-2 px-2 rounded-xl bg-[#071126] border border-cyan-500/25 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:border-cyan-400"
+                >
+                  <Settings className="w-3.5 h-3.5 text-cyan-300" />
+                  <span>Config</span>
+                </button>
+              )}
             </div>
 
             {/* Abas dos 6 módulos dentro da gaveta */}

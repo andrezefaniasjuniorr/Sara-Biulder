@@ -10,6 +10,8 @@ import {
   SARA_STREAM_PROTOCOL,
   buildJarvisEnvelopeParts,
   buildStreamParts,
+  getSaraJarvisStreamPrompt,
+  getSaraStreamPrompt,
   enrichJarvisActionsNode,
   fetchHudLiveFeedNode,
   formatFriendlyAiError,
@@ -60,7 +62,7 @@ async function startServer() {
               model,
               contents: { parts },
               config: {
-                systemInstruction: SARA_STREAM_PROTOCOL,
+                systemInstruction: getSaraStreamPrompt(req.body?.userIdentity) || SARA_STREAM_PROTOCOL,
                 ...(model.startsWith('gemini-4')
                   ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
                   : {}),
@@ -213,7 +215,7 @@ async function startServer() {
               model,
               contents,
               config: {
-                systemInstruction: SARA_JARVIS_STREAM_PROTOCOL,
+                systemInstruction: getSaraJarvisStreamPrompt(req.body?.userIdentity) || SARA_JARVIS_STREAM_PROTOCOL,
                 ...(model.startsWith('gemini-4')
                   ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
                   : model.startsWith('gemini-3.1')

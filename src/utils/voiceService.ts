@@ -71,6 +71,8 @@ export type VoiceCommandAction =
   | { type: 'stop_reading'; raw: string }
   | { type: 'focus_mode_on'; raw: string }
   | { type: 'focus_mode_off'; raw: string }
+  | { type: 'open_admin'; raw: string }
+  | { type: 'logout_session'; raw: string }
   | { type: 'prompt'; text: string };
 
 export interface VoiceParseContext {
@@ -112,14 +114,73 @@ function pickNonRepeating(options: string[]): string {
   return chosen;
 }
 
-export function getInstantSmallTalkReply(normalizedLower: string): string | null {
+export function getLoginGreetingSpeech(
+  callName: string,
+  isOwner: boolean,
+  unreadAlertsCount = 0,
+  isGuest = false,
+  isNewAccount = false
+): string {
+  if (isOwner) {
+    if (unreadAlertsCount > 0) {
+      return `Bem-vindo de volta, chefe. Tens ${unreadAlertsCount} alerta${unreadAlertsCount > 1 ? 's' : ''} de segurança para ver no Admin.`;
+    }
+    return 'Bem-vindo de volta, chefe. Todos os sistemas estão prontos.';
+  }
+  if (isGuest) {
+    return 'Modo convidado ativo por cinco minutos. Podes conversar ou explorar à vontade.';
+  }
+  const cleanName = callName.trim() || 'visitante';
+  if (isNewAccount) {
+    return `Olá, ${cleanName}! Conta criada. O que vamos fazer hoje?`;
+  }
+  const welcomeWord = cleanName.toLowerCase().endsWith('a') ? 'bem-vinda' : 'bem-vindo';
+  return pickNonRepeating([
+    `Olá, ${cleanName}, ${welcomeWord} de volta!`,
+    `Olá, ${cleanName}, o que vamos fazer hoje?`,
+  ]);
+}
+
+export function getInactivityLogoutSpeech(): string {
+  return 'Sessão encerrada por inatividade.';
+}
+
+export function getGuestExpirySpeech(): string {
+  return 'O tempo do modo convidado terminou. Até à próxima.';
+}
+
+export function getInstantSmallTalkReply(
+  normalizedLower: string,
+  callName?: string,
+  isOwner = false
+): string | null {
   const period = getTimePeriod();
   const clean = normalizedLower.replace(/[!?,.;:]/g, '').trim();
+  const safeName = callName?.trim();
 
   if (
     /^(ola|oi|hey|ei)(\s+sara)?(\s+(tudo bem|como estas|como vai|esta tudo bem))?$/i.test(clean) ||
     /^(bom dia|boa tarde|boa noite)(\s+sara)?(\s+(tudo bem|como estas))?$/i.test(clean)
   ) {
+    if (!isOwner) {
+      const nameChunk = safeName ? `, ${safeName}` : '';
+      if (period === 'night') {
+        return pickNonRepeating([
+          `Olá${nameChunk}! Estou por aqui. O que vamos fazer esta noite?`,
+          `Boa noite${nameChunk}! Diz-me o que precisas agora.`,
+        ]);
+      }
+      if (period === 'morning') {
+        return pickNonRepeating([
+          `Bom dia${nameChunk}! O que vamos fazer hoje?`,
+          `Olá${nameChunk}! Pronta para te ajudar — por onde começamos?`,
+        ]);
+      }
+      return pickNonRepeating([
+        `Olá${nameChunk}! O que vamos fazer hoje?`,
+        `Oi${nameChunk}! Em que posso ajudar agora?`,
+      ]);
+    }
     if (period === 'night') {
       return pickNonRepeating([
         'Estou acordada e ligada. O que vamos criar hoje à noite?',
@@ -152,24 +213,35 @@ export function getInstantSmallTalkReply(normalizedLower: string): string | null
     /^(sara\s+)?(estas ai|tas ai|ouves me|esta me a ouvir|sara)$/i.test(clean) ||
     /^(sara\s+)?(como estas|tudo bem|como vai|esta tudo bem)(\s+sara)?$/i.test(clean)
   ) {
-    return pickNonRepeating([
-      'Por aqui está tudo a mil! E desse lado, tudo fixe?',
-      'Estou impecável e cheia de ideias. O que trazes hoje?',
-      'A funcionar sem nenhum erro! Conta-me lá o que precisas.',
-      'Tudo ótimo, chefe! Manda voz ou texto que eu respondo já.',
-    ]);
+    return isOwner
+      ? pickNonRepeating([
+          'Por aqui está tudo a mil! E desse lado, tudo fixe?',
+          'Estou impecável e cheia de ideias. O que trazes hoje?',
+          'A funcionar sem nenhum erro! Conta-me lá o que precisas.',
+          'Tudo ótimo, chefe! Manda voz ou texto que eu respondo já.',
+        ])
+      : pickNonRepeating([
+          `Estou aqui${safeName ? `, ${safeName}` : ''}! O que precisas agora?`,
+          'Tudo ótimo por aqui! Conta-me o que queres fazer.',
+        ]);
   }
 
   if (/^(obrigado|obrigada|valeu|muito obrigado)(\s+sara)?$/i.test(clean)) {
     return pickNonRepeating([
       'Sempre às ordens!',
-      'Tamo junto! Precisando de mais alguma coisa, chama.',
+      'De nada! Precisando de mais alguma coisa, chama.',
       'Não tens de quê. Bora para a próxima!',
       'É para isso que estou cá!',
     ]);
   }
 
   if (/^(tchau|ate logo|ate ja|ate amanha|adeus)(\s+sara)?$/i.test(clean)) {
+    if (!isOwner) {
+      return pickNonRepeating([
+        `Até já${safeName ? `, ${safeName}` : ''}! Quando precisares, é só chamar.`,
+        'Fica bem! Estou por aqui.',
+      ]);
+    }
     return period === 'night'
       ? pickNonRepeating([
           'Vai descansar tranquilo! Amanhã continuamos.',
@@ -184,7 +256,11 @@ export function getInstantSmallTalkReply(normalizedLower: string): string | null
   return null;
 }
 
-export function getBuildAcceptanceSpeech(prompt: string, agentMode: 'manual' | 'automatic'): string {
+export function getBuildAcceptanceSpeech(
+  prompt: string,
+  agentMode: 'manual' | 'automatic',
+  isOwner = false
+): string {
   const lower = prompt
     .toLowerCase()
     .normalize('NFD')
@@ -198,13 +274,13 @@ export function getBuildAcceptanceSpeech(prompt: string, agentMode: 'manual' | '
     suggestion = 'sugiro adicionarmos filtros rápidos por categoria, carrinho persistente e resumo de encomenda por WhatsApp';
   } else if (/(escola|aluno|turma|professor|nota|academi)/i.test(lower)) {
     coreIdea = 'um sistema escolar estruturado por alunos, notas, presenças e relatórios';
-    suggestion = 'vale muito a pena colocar gráficos de desempenho com ApexCharts e fichas pesquisáveis em tempo real';
+    suggestion = 'vale muito a pena colocar gráficos de desempenho e fichas pesquisáveis em tempo real';
   } else if (/(jogo|game|arcade|corrida|tiro|puzzle|carro|nave)/i.test(lower)) {
-    coreIdea = 'um jogo modular com engine de física, áudio Web Audio, cenas e sistema de recordes';
+    coreIdea = 'um jogo modular com engine de física, áudio, cenas e sistema de recordes';
     suggestion = 'posso colocar efeitos sonoros sintetizados, partículas no impacto e ranking local de pontuação máxima';
   } else if (/(dashboard|painel|financeir|analytics|grafico|kpi|relatorio)/i.test(lower)) {
     coreIdea = 'um painel analítico profissional com módulos de dados, KPIs e gráficos interativos';
-    suggestion = 'recomendo gráficos interativos em ApexCharts ou ECharts com alternância de tema e exportação rápida';
+    suggestion = 'recomendo gráficos interativos com alternância de tema e exportação rápida';
   } else if (/(filme|serie|stream|video|cinema|musica)/i.test(lower)) {
     coreIdea = 'uma plataforma de streaming organizada com catálogo, pesquisa e player dinâmico';
     suggestion = 'podemos destacar um banner principal dinâmico, filtros instantâneos e lista de favoritos';
@@ -217,23 +293,34 @@ export function getBuildAcceptanceSpeech(prompt: string, agentMode: 'manual' | '
   }
 
   if (agentMode === 'automatic') {
-    return pickNonRepeating([
+    const opts = [
       `Aceitei o desafio! Vou montar ${coreIdea}, e ${suggestion}. Assumo tudo sozinha agora e testo no preview.`,
-      `Boa ideia, chefe! Estou a estruturar ${coreIdea}, onde ${suggestion}. Fica tranquilo que construo e valido etapa por etapa.`,
       `Bora lá! Para esse projeto vamos usar ${coreIdea}, e ${suggestion}. Já entro em ação no modo automático.`,
-    ]);
+    ];
+    if (isOwner) {
+      opts.push(
+        `Boa ideia, chefe! Estou a estruturar ${coreIdea}, onde ${suggestion}. Fica tranquilo que construo e valido etapa por etapa.`
+      );
+    }
+    return pickNonRepeating(opts);
   }
 
-  return pickNonRepeating([
+  const manualOpts = [
     `Curti muito essa proposta! Pensei em ${coreIdea}, e ${suggestion}. Concordas em avançarmos com a primeira etapa ou queres ajustar algo antes?`,
-    `Excelente pedido, Senhor Júnior! A minha sugestão é estruturar ${coreIdea}, além disso ${suggestion}. Posso começar pela Etapa 1 ou preferes mudar algum detalhe?`,
     `Vamos construir isto juntos! Proponho ${coreIdea}, e ${suggestion}. Aprovas o plano para eu codar a primeira parte?`,
-  ]);
+  ];
+  if (isOwner) {
+    manualOpts.push(
+      `Excelente pedido, Senhor Júnior! A minha sugestão é estruturar ${coreIdea}, além disso ${suggestion}. Posso começar pela Etapa 1 ou preferes mudar algum detalhe?`
+    );
+  }
+  return pickNonRepeating(manualOpts);
 }
 
 export function getContinuationSpeech(
   projectName: string,
-  agentMode: 'manual' | 'automatic' = 'automatic'
+  agentMode: 'manual' | 'automatic' = 'automatic',
+  isOwner = false
 ): string {
   if (agentMode === 'manual') {
     return pickNonRepeating([
@@ -241,19 +328,27 @@ export function getContinuationSpeech(
       `Estou por dentro da estrutura de ${projectName}! Vou integrar esta melhoria sem estragar o código existente. Aprovas avançar já?`,
     ]);
   }
-  return pickNonRepeating([
+  const opts = [
     `Já li os ficheiros atuais de ${projectName} e vou integrar isto mantendo toda a base intacta e responsiva. Começo já a atualizar e testar no preview!`,
-    `Entendido, chefe! Analisei a estrutura de ${projectName} para encaixar esta novidade de forma limpa. Vou aplicar as mudanças e validar tudo agora.`,
     `Mãos à obra em ${projectName}! Vou preservar o que já está bom, reforçar o visual e testar no console.`,
-  ]);
+  ];
+  if (isOwner) {
+    opts.push(
+      `Entendido, chefe! Analisei a estrutura de ${projectName} para encaixar esta novidade de forma limpa. Vou aplicar as mudanças e validar tudo agora.`
+    );
+  }
+  return pickNonRepeating(opts);
 }
 
-export function getManualStepApprovalSpeech(stepTitle: string): string {
-  return pickNonRepeating([
+export function getManualStepApprovalSpeech(stepTitle: string, isOwner = false): string {
+  const opts = [
     `Combinado! A construir agora a etapa ${stepTitle} no editor e preview.`,
     `Vamos a isso! Estou a implementar ${stepTitle} passo a passo.`,
-    `Aprovado, chefe! Já estou a gerar o código completo de ${stepTitle}.`,
-  ]);
+  ];
+  if (isOwner) {
+    opts.push(`Aprovado, chefe! Já estou a gerar o código completo de ${stepTitle}.`);
+  }
+  return pickNonRepeating(opts);
 }
 
 export function getPlatformCommandSpeech(action: string, detail?: string): string {
@@ -319,12 +414,17 @@ export function getBackgroundBuildAckSpeech(goal: string): string {
   ]);
 }
 
-export function getBackgroundBuildDoneSpeech(projectName: string): string {
-  return pickNonRepeating([
+export function getBackgroundBuildDoneSpeech(projectName: string, isOwner = false): string {
+  const opts = [
     `Terminei! O projeto ${projectName} já está pronto no Builder — queres ver?`,
-    `Chefe, o trabalho no Builder ficou pronto (${projectName}). Queres abrir para ver como ficou?`,
     `Missão cumprida em segundo plano: ${projectName} está concluído e testado. Queres dar uma olhadela?`,
-  ]);
+  ];
+  if (isOwner) {
+    opts.push(
+      `Chefe, o trabalho no Builder ficou pronto (${projectName}). Queres abrir para ver como ficou?`
+    );
+  }
+  return pickNonRepeating(opts);
 }
 
 export function getHumanChoice(options: string[]): string {
@@ -514,6 +614,20 @@ export function parseVoiceCommand(
     ) {
       return { type: 'cancel_pending', raw: clean };
     }
+  }
+
+  // Comandos de Admin e Logout (validados estritamente contra isOwner na camada de aplicação)
+  if (
+    /^(sara[,\s]+)?(abre|abrir|mostra|mostrar|entra|entrar\s+no)\s+(o\s+|no\s+)?(painel\s+)?admin$/i.test(
+      lower
+    ) ||
+    lower === 'painel admin' ||
+    lower === 'admin'
+  ) {
+    return { type: 'open_admin', raw: clean };
+  }
+  if (/^(sara[,\s]+)?(terminar\s+sessao|encerrar\s+sessao|faz\s+logout|logout|sair\s+da\s+conta)$/i.test(lower)) {
+    return { type: 'logout_session', raw: clean };
   }
 
   // Calar / Reativar a voz da Sara imediatamente

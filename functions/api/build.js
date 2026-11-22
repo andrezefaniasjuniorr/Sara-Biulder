@@ -2,6 +2,7 @@ import {
   SARA_CORE_SYSTEM_PROMPT,
   callGeminiRestWithFailover,
   formatFriendlyEdgeError,
+  getSaraCorePrompt,
   handleOptions,
   jsonResponse,
   resolveEdgeApiKey,
@@ -29,7 +30,13 @@ export async function onRequestPost(context) {
       forceBuilderMode,
       projectState,
       screenContext,
+      userIdentity,
     } = body || {};
+
+    const callerLabel =
+      userIdentity?.isOwner === true
+        ? 'Eletro-Jr'
+        : String(userIdentity?.callName || '').trim() || 'Utilizador';
 
     const recentErrors = (consoleLogs || [])
       .filter((l) => l.level === 'error' || l.level === 'warn')
@@ -39,7 +46,7 @@ export async function onRequestPost(context) {
 
     const recentHistory = (history || [])
       .slice(-10)
-      .map((m) => `${m.sender === 'user' ? 'Eletro-Jr' : 'Sara'}: ${m.text}`)
+      .map((m) => `${m.sender === 'user' ? callerLabel : 'Sara'}: ${m.text}`)
       .join('\n');
 
     const filesText = Object.entries(files || {})
@@ -74,7 +81,7 @@ ${recentErrors || 'Nenhum erro no console.'}
 
 ${forceBuilderMode !== false ? 'MODO ETAPA COMPLETA: Lê todos os ficheiros existentes, preserva o que já funciona e executa este pedido criando ficheiros organizados por pastas especializadas com código 100% completo, real e sem stubs. PROIBIDO criar só index.html + src/app.js.' : ''}
 
-PEDIDO ATUAL DE ELETRO-JR:
+PEDIDO ATUAL DE ${callerLabel}:
 ${prompt || 'Constrói o sistema pedido.'}`;
 
     const parts = [];
@@ -136,7 +143,7 @@ ${prompt || 'Constrói o sistema pedido.'}`;
     const { text, modelUsed } = await callGeminiRestWithFailover(
       apiKey,
       (model) => ({
-        system_instruction: { parts: [{ text: SARA_CORE_SYSTEM_PROMPT }] },
+        system_instruction: { parts: [{ text: getSaraCorePrompt(userIdentity) || SARA_CORE_SYSTEM_PROMPT }] },
         contents: [{ role: 'user', parts }],
         generationConfig: {
           ...(model.startsWith('gemini-4') ? { thinkingConfig: { thinkingLevel: 'LOW' } } : {}),

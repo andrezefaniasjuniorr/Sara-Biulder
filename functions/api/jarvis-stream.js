@@ -5,6 +5,7 @@ import {
   buildJarvisEdgeContents,
   enrichJarvisActionsEdge,
   formatFriendlyEdgeError,
+  getSaraJarvisStreamPrompt,
   handleOptions,
   isRetryableHttpStatus,
   prepareJarvisContextEdge,
@@ -80,7 +81,7 @@ export async function onRequestPost(context) {
               'User-Agent': 'aistudio-build',
             },
             body: JSON.stringify({
-              system_instruction: { parts: [{ text: SARA_JARVIS_STREAM_PROTOCOL }] },
+              system_instruction: { parts: [{ text: getSaraJarvisStreamPrompt(body?.userIdentity) || SARA_JARVIS_STREAM_PROTOCOL }] },
               contents,
               generationConfig,
             }),

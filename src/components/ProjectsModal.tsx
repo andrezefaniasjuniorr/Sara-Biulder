@@ -28,6 +28,8 @@ interface ProjectsModalProps {
   onImportProject: (name: string, files: ProjectRecord['files']) => void;
   onSaveCurrentToFirebase: () => void;
   onLoadFromFirebase: () => void;
+  isOwner?: boolean;
+  callName?: string;
 }
 
 export const ProjectsModal: React.FC<ProjectsModalProps> = ({
@@ -44,6 +46,8 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
   onImportProject,
   onSaveCurrentToFirebase,
   onLoadFromFirebase,
+  isOwner = false,
+  callName = 'Utilizador',
 }) => {
   const [newName, setNewName] = useState('');
   const [newType, setNewType] = useState<ProjectType>('Site');
@@ -89,8 +93,14 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
       <div className="w-full max-w-3xl max-h-[88vh] bg-[#12121A] border border-[#1F1F2E] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         <div className="px-5 py-4 border-b border-[#1F1F2E] flex items-center justify-between gap-4 shrink-0">
           <div>
-            <h2 className="text-base font-bold text-white">Projetos de Eletro-Jr</h2>
-            <p className="text-xs text-[#A1A1AA]">Guardados no navegador e sincronizados com sara_projetos (Firestore)</p>
+            <h2 className="text-base font-bold text-white">
+              {isOwner ? 'Projetos de Eletro-Jr' : `Projetos de ${callName}`}
+            </h2>
+            <p className="text-xs text-[#A1A1AA]">
+              {isOwner
+                ? 'Guardados no navegador e sincronizados com sara_projetos (Firestore)'
+                : 'Espaço pessoal guardado com sincronização segura'}
+            </p>
           </div>
           <button
             type="button"
@@ -138,7 +148,9 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
             </form>
 
             <div className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] flex flex-col justify-between gap-3">
-              <div className="text-xs font-semibold text-white">Importação e Nuvem Firebase</div>
+              <div className="text-xs font-semibold text-white">
+                {isOwner ? 'Importação e Nuvem Firebase' : 'Importação e Backup'}
+              </div>
               <div className="flex flex-wrap gap-2">
                 <input
                   ref={zipInputRef}
@@ -166,7 +178,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                   ) : (
                     <CloudUpload className="w-3.5 h-3.5 text-[#8B5CF6]" />
                   )}
-                  <span>Salvar no Firebase</span>
+                  <span>{isOwner ? 'Salvar no Firebase' : 'Guardar na Nuvem'}</span>
                 </button>
               </div>
               <button
@@ -175,7 +187,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                 disabled={isSyncingFirebase}
                 className="w-full py-2 px-3 rounded-lg bg-[#12121A] border border-[#1F1F2E] hover:border-emerald-500/40 text-xs text-[#A1A1AA] hover:text-white transition cursor-pointer"
               >
-                Sincronizar lista de sara_projetos
+                {isOwner ? 'Sincronizar lista de sara_projetos' : 'Sincronizar projetos guardados'}
               </button>
               {importError && <p className="text-[11px] text-rose-400">{importError}</p>}
             </div>
@@ -238,7 +250,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                       {proj.syncedToFirebase && (
                         <>
                           <span>·</span>
-                          <span className="text-emerald-400">Firebase</span>
+                          <span className="text-emerald-400">{isOwner ? 'Firebase' : 'Sincronizado'}</span>
                         </>
                       )}
                     </div>

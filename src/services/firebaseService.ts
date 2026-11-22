@@ -1,5 +1,17 @@
 import type { ChatMessage, FirebaseUserProfile, ProjectRecord } from '../types/builder';
 import type { SaraProjectState } from '../utils/projectMemory';
+import type {
+  AdminAlert,
+  SaraUserAccount,
+  SessionAccessLog,
+  UserActivityStats,
+} from '../types/auth';
+import type {
+  AdminAlert,
+  SaraUserAccount,
+  SessionAccessLog,
+  UserActivityStats,
+} from '../types/auth';
 
 // Configuração REAL e exclusiva do projeto Firebase sara-biulder
 export const firebaseConfig = {
@@ -61,8 +73,10 @@ async function loadFirebaseRuntime(): Promise<FirebaseRuntime> {
   return runtimePromise;
 }
 
-function resolveUid(userId?: string, auth?: any): string {
-  return userId || auth?.currentUser?.uid || 'eletro-jr-local';
+function resolveUid(userId?: string, auth?: any): string | null {
+  const candidate = userId || auth?.currentUser?.uid || null;
+  if (!candidate || candidate.startsWith('guest_')) return null;
+  return candidate;
 }
 
 export async function loginGoogle(): Promise<FirebaseUserProfile> {
@@ -216,14 +230,16 @@ export async function testarConexaoFirebase(): Promise<{ ok: boolean; label: str
 
 export async function salvarProjetoNoFirebase(
   project: ProjectRecord,
-  userId?: string
+  userId?: string,
+  ownerName = 'Utilizador'
 ): Promise<void> {
   const { firestoreMod, db, auth } = await loadFirebaseRuntime();
   const uid = resolveUid(userId, auth);
+  if (!uid) return;
   // Limita snapshots de versões enviados ao Firestore para manter o documento ágil e leve (< 1MB)
   const compactVersions = Array.isArray(project.versions) ? project.versions.slice(0, 6) : [];
   await firestoreMod.setDoc(
-    firestoreMod.doc(db, 'sara_projetos', project.id),
+    firestoreMod.doc(db, 'sara_projetos', `${uid}_${project.id}`),
     {
       id: project.id,
       name: project.name,
@@ -233,7 +249,7 @@ export async function salvarProjetoNoFirebase(
       createdAt: project.createdAt || new Date().toISOString(),
       updatedAt: project.updatedAt || new Date().toISOString(),
       ownerUid: uid,
-      ownerName: 'Eletro-Jr',
+      ownerName,
       syncedToFirebase: true,
     },
     { merge: true }
@@ -243,6 +259,7 @@ export async function salvarProjetoNoFirebase(
 export async function buscarProjetosNoFirebase(userId?: string): Promise<ProjectRecord[]> {
   const { firestoreMod, db, auth } = await loadFirebaseRuntime();
   const uid = resolveUid(userId, auth);
+  if (!uid) return [];
   const q = firestoreMod.query(
     firestoreMod.collection(db, 'sara_projetos'),
     firestoreMod.where('ownerUid', '==', uid)
@@ -253,7 +270,7 @@ export async function buscarProjetosNoFirebase(userId?: string): Promise<Project
     const data = docSnap.data();
     if (data && data.files) {
       items.push({
-        id: docSnap.id,
+        id: data.id || docSnap.id,
         name: data.name || 'Projeto sem nome',
         type: data.type || 'Site',
         files: data.files,
@@ -269,12 +286,20 @@ export async function buscarProjetosNoFirebase(userId?: string): Promise<Project
   );
 }
 
-export async function apagarProjetoNoFirebase(projectId: string): Promise<void> {
-  const { firestoreMod, db } = await loadFirebaseRuntime();
-  await Promise.allSettled([
+export async function apagarProjetoNoFirebase(projectId: string, userId?: string): Promise<void> {
+  const { firestoreMod, db, auth } = await loadFirebaseRuntime();
+  const uid = resolveUid(userId, auth);
+  const ops = [
     firestoreMod.deleteDoc(firestoreMod.doc(db, 'sara_projetos', projectId)),
     firestoreMod.deleteDoc(firestoreMod.doc(db, 'sara_estados', projectId)),
-  ]);
+  ];
+  if (uid) {
+    ops.push(
+      firestoreMod.deleteDoc(firestoreMod.doc(db, 'sara_projetos', `${uid}_${projectId}`)),
+      firestoreMod.deleteDoc(firestoreMod.doc(db, 'sara_estados', `${uid}_${projectId}`))
+    );
+  }
+  await Promise.allSettled(ops);
 }
 
 export async function salvarEstadoProjetoFirebase(
@@ -284,8 +309,9 @@ export async function salvarEstadoProjetoFirebase(
   try {
     const { firestoreMod, db, auth } = await loadFirebaseRuntime();
     const uid = resolveUid(userId, auth);
+    if (!uid) return;
     await firestoreMod.setDoc(
-      firestoreMod.doc(db, 'sara_estados', state.projectId),
+      firestoreMod.doc(db, 'sara_estados', `${uid}_${state.projectId}`),
       {
         ...state,
         ownerUid: uid,
@@ -304,6 +330,7 @@ export async function buscarEstadosProjetosFirebase(
   try {
     const { firestoreMod, db, auth } = await loadFirebaseRuntime();
     const uid = resolveUid(userId, auth);
+    if (!uid) return {};
     const q = firestoreMod.query(
       firestoreMod.collection(db, 'sara_estados'),
       firestoreMod.where('ownerUid', '==', uid)
@@ -330,6 +357,7 @@ export async function salvarMensagemChatFirebase(
   try {
     const { firestoreMod, db, auth } = await loadFirebaseRuntime();
     const uid = resolveUid(userId, auth);
+    if (!uid) return;
     // Evita enviar strings base64 pesadas de imagens se excederem tamanho seguro
     const safeImageUrl =
       message.imageUrl && message.imageUrl.length < 180000 ? message.imageUrl : undefined;
@@ -355,7 +383,7 @@ export async function salvarMensagemChatFirebase(
       { merge: true }
     );
   } catch {
-    // Não bloqueia o chat se o utilizador ainda não fez login ou está offline
+    // Não bloqueia o chat se offline
   }
 }
 
@@ -366,6 +394,7 @@ export async function buscarMensagensChatFirebase(
   try {
     const { firestoreMod, db, auth } = await loadFirebaseRuntime();
     const uid = resolveUid(userId, auth);
+    if (!uid) return [];
     const q = firestoreMod.query(
       firestoreMod.collection(db, 'sara_chats'),
       firestoreMod.where('ownerUid', '==', uid),
@@ -414,6 +443,7 @@ export async function salvarPreferenciasUsuarioFirebase(
   try {
     const { firestoreMod, db, auth } = await loadFirebaseRuntime();
     const uid = resolveUid(userId, auth);
+    if (!uid) return;
     await firestoreMod.setDoc(
       firestoreMod.doc(db, 'sara_usuarios', uid),
       {
@@ -439,6 +469,7 @@ export async function buscarPreferenciasUsuarioFirebase(
   try {
     const { firestoreMod, db, auth } = await loadFirebaseRuntime();
     const uid = resolveUid(userId, auth);
+    if (!uid) return null;
     const snap = await firestoreMod.getDoc(firestoreMod.doc(db, 'sara_usuarios', uid));
     if (!snap.exists()) return null;
     const data = snap.data();
@@ -463,6 +494,7 @@ export async function salvarJarvisStateFirebase(
   try {
     const { firestoreMod, db, auth } = await loadFirebaseRuntime();
     const uid = resolveUid(userId, auth);
+    if (!uid) return;
     await firestoreMod.setDoc(
       firestoreMod.doc(db, 'sara_jarvis_memory', uid),
       {
@@ -486,11 +518,152 @@ export async function buscarJarvisStateFirebase(
   try {
     const { firestoreMod, db, auth } = await loadFirebaseRuntime();
     const uid = resolveUid(userId, auth);
+    if (!uid) return null;
     const snap = await firestoreMod.getDoc(firestoreMod.doc(db, 'sara_jarvis_memory', uid));
     if (!snap.exists()) return null;
     return snap.data() as JarvisCloudPayload;
   } catch {
     return null;
+  }
+}
+
+// =========================================================================
+// PARTE 3 — Contas, Sessões, Estatísticas Agregadas e Alertas Admin (Cloud Sync)
+// =========================================================================
+
+function emailDocId(email: string): string {
+  return email.trim().toLowerCase().replace(/[^a-z0-9@._-]/g, '_');
+}
+
+export async function saveAccountCloud(account: SaraUserAccount): Promise<void> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_accounts', emailDocId(account.email)),
+      account,
+      { merge: true }
+    );
+  } catch {
+    // fallback local silencioso
+  }
+}
+
+export async function fetchAccountByEmailCloud(email: string): Promise<SaraUserAccount | null> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const snap = await firestoreMod.getDoc(firestoreMod.doc(db, 'sara_accounts', emailDocId(email)));
+    if (!snap.exists()) return null;
+    return snap.data() as SaraUserAccount;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchAllAccountsCloud(): Promise<SaraUserAccount[]> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const snap = await firestoreMod.getDocs(firestoreMod.collection(db, 'sara_accounts'));
+    const list: SaraUserAccount[] = [];
+    snap.forEach((d: any) => {
+      const data = d.data();
+      if (data?.uid && data?.email) list.push(data as SaraUserAccount);
+    });
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+export async function deleteAccountCloud(email: string): Promise<void> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    await firestoreMod.deleteDoc(firestoreMod.doc(db, 'sara_accounts', emailDocId(email)));
+  } catch {
+    // ignore
+  }
+}
+
+export async function saveSessionLogCloud(sessionLog: SessionAccessLog): Promise<void> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_sessions', sessionLog.sessionId),
+      sessionLog,
+      { merge: true }
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export async function fetchAllSessionLogsCloud(): Promise<SessionAccessLog[]> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const snap = await firestoreMod.getDocs(firestoreMod.collection(db, 'sara_sessions'));
+    const list: SessionAccessLog[] = [];
+    snap.forEach((d: any) => {
+      const data = d.data();
+      if (data?.sessionId) list.push(data as SessionAccessLog);
+    });
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+export async function saveUserActivityStatsCloud(stats: UserActivityStats): Promise<void> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_activity_stats', stats.userId),
+      stats,
+      { merge: true }
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export async function fetchAllActivityStatsCloud(): Promise<UserActivityStats[]> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const snap = await firestoreMod.getDocs(firestoreMod.collection(db, 'sara_activity_stats'));
+    const list: UserActivityStats[] = [];
+    snap.forEach((d: any) => {
+      const data = d.data();
+      if (data?.userId) list.push(data as UserActivityStats);
+    });
+    return list;
+  } catch {
+    return [];
+  }
+}
+
+export async function saveAdminAlertCloud(alert: AdminAlert): Promise<void> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_admin_alerts', alert.id),
+      alert,
+      { merge: true }
+    );
+  } catch {
+    // ignore
+  }
+}
+
+export async function fetchAllAdminAlertsCloud(): Promise<AdminAlert[]> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const snap = await firestoreMod.getDocs(firestoreMod.collection(db, 'sara_admin_alerts'));
+    const list: AdminAlert[] = [];
+    snap.forEach((d: any) => {
+      const data = d.data();
+      if (data?.id) list.push(data as AdminAlert);
+    });
+    return list;
+  } catch {
+    return [];
   }
 }
 

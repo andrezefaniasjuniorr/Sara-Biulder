@@ -5,6 +5,7 @@ import {
   buildStreamParts,
   formatFriendlyAiError,
   getGeminiClient,
+  getSaraStreamPrompt,
   isRetryableModelError,
   readJsonBody,
   setCorsHeaders,
@@ -52,7 +53,7 @@ export default async function handler(req, res) {
             model,
             contents: { parts },
             config: {
-              systemInstruction: SARA_STREAM_PROTOCOL,
+              systemInstruction: getSaraStreamPrompt(body?.userIdentity) || SARA_STREAM_PROTOCOL,
               ...(model.startsWith('gemini-4')
                 ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
                 : {}),

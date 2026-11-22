@@ -11,7 +11,9 @@ import type {
   ScreenContextInfo,
 } from '../types/builder';
 import type { SaraProjectState } from '../utils/projectMemory';
+import type { SaraUserIdentityPayload } from '../types/auth';
 import { getBuildAcceptanceSpeech, getContinuationSpeech } from '../utils/voiceService';
+import { sanitizeNonOwnerAiReply } from './authService';
 
 export interface ConvertedImage {
   data: string;
@@ -470,8 +472,11 @@ async function postJsonWithFallback(
 function buildResultFromJsonFallback(
   data: any,
   customKey: string,
-  callbacks?: StreamBuildCallbacks
+  callbacks?: StreamBuildCallbacks,
+  userIdentity?: SaraUserIdentityPayload
 ): SaraBuilderResult {
+  const isOwner = Boolean(userIdentity?.isOwner);
+  const voc = isOwner ? ', Eletro-Jr' : userIdentity?.callName ? `, ${userIdentity.callName}` : '';
   const files: ProjectFiles | undefined =
     data?.files && typeof data.files === 'object' && Object.keys(data.files).length > 0
       ? data.files
@@ -483,9 +488,11 @@ function buildResultFromJsonFallback(
     mode: hasFiles ? 'builder' : data?.mode === 'conversation' ? 'conversation' : 'builder',
     projectName: data?.projectName,
     projectType: data?.projectType,
-    plan: data?.planSentence || data?.plan || 'Construção concluída via API.',
+    plan: data?.planSentence || data?.plan || 'Construção concluída.',
     architecture: data?.architecture,
-    voiceSummary: data?.voiceSummary,
+    voiceSummary: data?.voiceSummary
+      ? sanitizeNonOwnerAiReply(data.voiceSummary, isOwner)
+      : undefined,
     steps: Array.isArray(data?.steps) ? data.steps : undefined,
     nextStep: data?.nextStep,
     missingFeatures: Array.isArray(data?.missingFeatures) ? data.missingFeatures : undefined,
@@ -502,14 +509,14 @@ function buildResultFromJsonFallback(
   const rawReply =
     data?.reply ||
     (hasFiles
-      ? `Pronto, Eletro-Jr! Construí ${Object.keys(files!).length} ficheiro(s) completo(s) para o teu projeto.`
-      : 'Aqui estou, Eletro-Jr — diz-me o que queres ajustar!');
+      ? `Pronto${voc}! Construí ${Object.keys(files!).length} ficheiro(s) completo(s) para o teu projeto.`
+      : `Aqui estou${voc} — diz-me o que queres ajustar!`);
   const extractedFromReply = extractSaraActionsFromText(rawReply);
   const structuredActions: SaraPlatformAction[] = Array.isArray(data?.actions)
     ? data.actions.filter((a: any) => a && typeof a.type === 'string')
     : [];
   const combinedActions = [...structuredActions, ...extractedFromReply.actions];
-  const reply = extractedFromReply.cleanedText || rawReply;
+  const reply = sanitizeNonOwnerAiReply(extractedFromReply.cleanedText || rawReply, isOwner);
   callbacks?.onReplyProgress?.(reply);
 
   return {
@@ -522,13 +529,13 @@ function buildResultFromJsonFallback(
     projectType: data?.projectType,
     planSentence: meta.plan,
     architectureSummary: data?.architecture,
-    voiceSummary: data?.voiceSummary,
+    voiceSummary: meta.voiceSummary,
     nextStep: data?.nextStep,
     missingFeatures: meta.missingFeatures,
     strategicImprovements: meta.strategicImprovements,
     proactiveSuggestion: data?.proactiveSuggestion,
     assumedNotes: Array.isArray(data?.assumedNotes) ? data.assumedNotes : [],
-    engineLabel: `${modelUsed}${customKey ? ' + TXT' : ''}`,
+    engineLabel: isOwner ? `${modelUsed}${customKey ? ' + TXT' : ''}` : 'SARA OS',
     modelUsed,
     codeBlocks: files ? filesToCodeBlocks(files) : undefined,
     steps: (meta.steps || []).map((label, idx) => ({
@@ -550,6 +557,7 @@ export async function runSaraStream(params: {
   pastProjects?: string[];
   projectState?: SaraProjectState | null;
   screenContext?: ScreenContextInfo;
+  userIdentity?: SaraUserIdentityPayload;
   callbacks?: StreamBuildCallbacks;
 }): Promise<SaraBuilderResult> {
   const {
@@ -563,8 +571,11 @@ export async function runSaraStream(params: {
     pastProjects,
     projectState,
     screenContext,
+    userIdentity,
     callbacks,
   } = params;
+  const isOwner = Boolean(userIdentity?.isOwner);
+  const voc = isOwner ? ', Eletro-Jr' : userIdentity?.callName ? `, ${userIdentity.callName}` : '';
   const customKey = getSavedGeminiKey();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (customKey) headers['x-gemini-api-key'] = customKey;
@@ -585,6 +596,7 @@ export async function runSaraStream(params: {
     pastProjects,
     projectState,
     screenContext,
+    userIdentity,
   };
 
   const hasExistingCode = Object.entries(files || {}).some(
@@ -614,6 +626,7 @@ export async function runSaraStream(params: {
           agentMode,
           pastProjects,
           screenContext,
+          userIdentity,
           forceBuilderMode: false,
         },
         headers,
@@ -627,14 +640,17 @@ export async function runSaraStream(params: {
         ? saraData.actions.filter((a: any) => a && typeof a.type === 'string')
         : [];
       const mergedActions = [...structuredActions, ...parsedActions];
-      const finalReply = cleanedText || 'Estou aqui contigo, Eletro-Jr — o que queres explorar agora?';
+      const finalReply = sanitizeNonOwnerAiReply(
+        cleanedText || `Estou aqui contigo${voc} — o que queres explorar agora?`,
+        isOwner
+      );
 
       return {
         mode: 'conversation',
         reply: finalReply,
         updateFiles: false,
         actions: mergedActions.length > 0 ? mergedActions : undefined,
-        engineLabel: `Builder (${saraData.modelUsed || 'gemini-4-hydrogen'})`,
+        engineLabel: isOwner ? `Builder (${saraData.modelUsed || 'gemini-4-hydrogen'})` : 'SARA OS',
         modelUsed: saraData.modelUsed,
       };
     } catch (bgErr: any) {
@@ -644,12 +660,13 @@ export async function runSaraStream(params: {
       const activeProj = screenContext?.projectName || 'este projeto';
       return {
         mode: 'conversation',
-        reply: needsKey
-          ? `Falta configurar uma chave Gemini válida nas Configurações para conversar e gerar em **${activeProj}**, Eletro-Jr.`
-          : `Estou ligada em ${activeProj}, Eletro-Jr! Diz-me exatamente o que queres testar, mudar no código ou controlar aqui na plataforma.`,
+        reply:
+          needsKey && isOwner
+            ? `Falta configurar uma chave Gemini válida nas Configurações para conversar e gerar em **${activeProj}**, Eletro-Jr.`
+            : `Estou ligada em ${activeProj}${voc}! Diz-me exatamente o que queres testar, mudar no código ou controlar aqui na plataforma.`,
         updateFiles: false,
         apiDegraded: true,
-        needsApiKey: needsKey,
+        needsApiKey: isOwner ? needsKey : false,
         engineLabel: 'Sara Continuity Engine',
       };
     }
@@ -685,19 +702,20 @@ export async function runSaraStream(params: {
         headers,
         'Falha silenciosa de failover'
       );
-      return buildResultFromJsonFallback(fallbackData, customKey, callbacks);
+      return buildResultFromJsonFallback(fallbackData, customKey, callbacks, userIdentity);
     } catch (bgErr: any) {
       const errText = String(bgErr?.message || '');
       const needsKey = isKeyAuthErrorMsg(errText);
       console.warn('[Sara Failover Silencioso - Fallback direto]:', bgErr);
       return {
         mode: 'conversation',
-        reply: needsKey
-          ? 'Para a Sara criar e editar ficheiros neste servidor, cola a tua chave Gemini (AIza...) nas Configurações.'
-          : `Estou a reorganizar os motores de geração para continuar ${screenContext?.projectName || 'o teu projeto'}, Eletro-Jr — envia novamente o detalhe ou testa um comando rápido enquanto estabiliza em segundo plano.`,
+        reply:
+          needsKey && isOwner
+            ? 'Para a Sara criar e editar ficheiros neste servidor, cola a tua chave Gemini (AIza...) nas Configurações.'
+            : `Estou a reorganizar os motores de geração para continuar ${screenContext?.projectName || 'o teu projeto'}${voc} — envia novamente o detalhe ou testa um comando rápido enquanto estabiliza em segundo plano.`,
         updateFiles: false,
         apiDegraded: true,
-        needsApiKey: needsKey,
+        needsApiKey: isOwner ? needsKey : false,
         engineLabel: 'Sara Continuity Engine',
       };
     }
@@ -780,7 +798,7 @@ export async function runSaraStream(params: {
         headers,
         streamErroredMessage || 'Failover silencioso na construção'
       );
-      const jsonResult = buildResultFromJsonFallback(fallbackData, customKey, callbacks);
+      const jsonResult = buildResultFromJsonFallback(fallbackData, customKey, callbacks, userIdentity);
       if (jsonResult.updateFiles && jsonResult.files) {
         return jsonResult;
       }
@@ -794,12 +812,13 @@ export async function runSaraStream(params: {
         console.warn('[Sara Failover Silencioso - Stream vazio]:', streamErroredMessage, fallbackErr);
         return {
           mode: 'conversation',
-          reply: needsKey
-            ? 'Para a Sara criar e editar os ficheiros do projeto aqui, carrega ou cola uma chave Gemini válida nas Configurações.'
-            : `Estou a reajustar a rota dos modelos para executar "${prompt.slice(0, 60)}" em ${screenContext?.projectName || 'teu projeto'}, Eletro-Jr. Podes tentar novamente já a seguir que eu assumo daqui!`,
+          reply:
+            needsKey && isOwner
+              ? 'Para a Sara criar e editar os ficheiros do projeto aqui, carrega ou cola uma chave Gemini válida nas Configurações.'
+              : `Estou a reajustar a rota dos motores para executar "${prompt.slice(0, 60)}" em ${screenContext?.projectName || 'teu projeto'}${voc}. Podes tentar novamente já a seguir que eu assumo daqui!`,
           updateFiles: false,
           apiDegraded: true,
-          needsApiKey: needsKey,
+          needsApiKey: isOwner ? needsKey : false,
           engineLabel: 'Sara Continuity Engine',
         };
       }
@@ -809,10 +828,12 @@ export async function runSaraStream(params: {
   if (!rawModelText.trim() && isKeyAuthErrorMsg(streamErroredMessage)) {
     return {
       mode: 'conversation',
-      reply: 'Para a Sara construir e editar os ficheiros, verifica ou carrega uma chave Gemini válida nas Configurações.',
+      reply: isOwner
+        ? 'Para a Sara construir e editar os ficheiros, verifica ou carrega uma chave Gemini válida nas Configurações.'
+        : 'Sistema temporariamente ocupado. Tenta novamente em instantes.',
       updateFiles: false,
       apiDegraded: true,
-      needsApiKey: true,
+      needsApiKey: isOwner,
       engineLabel: 'Sara Continuity Engine',
     };
   }
@@ -821,12 +842,14 @@ export async function runSaraStream(params: {
   const fallbackRawClean = extractSaraActionsFromText(
     rawModelText.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim()
   ).cleanedText;
-  const finalReply =
+  const finalReply = sanitizeNonOwnerAiReply(
     lastParsed.reply ||
-    (!hasFiles && fallbackRawClean) ||
-    (hasFiles
-      ? `Pronto, Eletro-Jr! Construí ${Object.keys(lastParsed.files).length} ficheiro(s) completo(s) para o teu projeto.`
-      : 'Tudo tratado por aqui, Eletro-Jr!');
+      (!hasFiles && fallbackRawClean) ||
+      (hasFiles
+        ? `Pronto${voc}! Construí ${Object.keys(lastParsed.files).length} ficheiro(s) completo(s) para o teu projeto.`
+        : `Tudo tratado por aqui${voc}!`),
+    isOwner
+  );
 
   const stepLabels = lastParsed.meta?.steps || [];
 
@@ -840,12 +863,14 @@ export async function runSaraStream(params: {
     projectType: lastParsed.meta?.projectType,
     planSentence: lastParsed.meta?.plan,
     architectureSummary: lastParsed.meta?.architecture,
-    voiceSummary: lastParsed.meta?.voiceSummary,
+    voiceSummary: lastParsed.meta?.voiceSummary
+      ? sanitizeNonOwnerAiReply(lastParsed.meta.voiceSummary, isOwner)
+      : undefined,
     nextStep: lastParsed.meta?.nextStep,
     missingFeatures: lastParsed.meta?.missingFeatures,
     strategicImprovements: lastParsed.meta?.strategicImprovements,
     proactiveSuggestion: lastParsed.meta?.suggestion,
-    engineLabel: `${modelUsed}${customKey ? ' + TXT' : ''}`,
+    engineLabel: isOwner ? `${modelUsed}${customKey ? ' + TXT' : ''}` : 'SARA OS',
     modelUsed,
     codeBlocks: hasFiles ? filesToCodeBlocks(lastParsed.files) : undefined,
     steps: stepLabels.map((label, idx) => ({
@@ -864,11 +889,22 @@ export async function fetchSaraFastKickoff(params: {
   projectName?: string;
   contextCue?: 'sleep' | 'leave';
   screenContext?: ScreenContextInfo;
+  userIdentity?: SaraUserIdentityPayload;
 }): Promise<{ reply: string; fromApi: boolean }> {
-  const { prompt, files, agentMode, hasExistingCode, projectName, contextCue, screenContext } = params;
+  const {
+    prompt,
+    files,
+    agentMode,
+    hasExistingCode,
+    projectName,
+    contextCue,
+    screenContext,
+    userIdentity,
+  } = params;
+  const isOwner = Boolean(userIdentity?.isOwner);
   const fallback = hasExistingCode
-    ? getContinuationSpeech(projectName || 'este projeto', agentMode)
-    : getBuildAcceptanceSpeech(prompt, agentMode);
+    ? getContinuationSpeech(projectName || 'este projeto', agentMode, isOwner)
+    : getBuildAcceptanceSpeech(prompt, agentMode, isOwner);
 
   const customKey = getSavedGeminiKey();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -891,6 +927,7 @@ export async function fetchSaraFastKickoff(params: {
         projectName,
         contextCue,
         screenContext,
+        userIdentity,
       }),
     });
 
@@ -904,11 +941,14 @@ export async function fetchSaraFastKickoff(params: {
     }
 
     const data = await response.json().catch(() => ({}));
-    const raw = String(data?.reply || '')
-      .replace(/<SARA_ACTIONS>[\s\S]*?<\/SARA_ACTIONS>/gi, '')
-      .replace(/```[\s\S]*?```/g, '')
-      .replace(/[*_#`]/g, '')
-      .trim();
+    const raw = sanitizeNonOwnerAiReply(
+      String(data?.reply || '')
+        .replace(/<SARA_ACTIONS>[\s\S]*?<\/SARA_ACTIONS>/gi, '')
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/[*_#`]/g, '')
+        .trim(),
+      isOwner
+    );
 
     if (raw.length >= 12) {
       return { reply: raw, fromApi: true };
@@ -930,8 +970,20 @@ export async function askSaraBuilderStep(params: {
   agentMode?: AgentMode;
   projectState?: SaraProjectState | null;
   screenContext?: ScreenContextInfo;
+  userIdentity?: SaraUserIdentityPayload;
 }): Promise<SaraBuilderResult> {
-  const { prompt, files, consoleLogs, history, image, agentMode, projectState, screenContext } = params;
+  const {
+    prompt,
+    files,
+    consoleLogs,
+    history,
+    image,
+    agentMode,
+    projectState,
+    screenContext,
+    userIdentity,
+  } = params;
+  const isOwner = Boolean(userIdentity?.isOwner);
   const customKey = getSavedGeminiKey();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (customKey) headers['x-gemini-api-key'] = customKey;
@@ -949,6 +1001,7 @@ export async function askSaraBuilderStep(params: {
       forceBuilderMode: true,
       projectState,
       screenContext,
+      userIdentity,
     },
     headers,
     'Erro ao executar etapa'
@@ -956,16 +1009,18 @@ export async function askSaraBuilderStep(params: {
 
   return {
     mode: 'builder',
-    reply: data.reply || 'Etapa concluída.',
+    reply: sanitizeNonOwnerAiReply(data.reply || 'Etapa concluída.', isOwner),
     updateFiles: Boolean(data.updateFiles && data.files),
     files: data.files,
     projectName: data.projectName,
     projectType: data.projectType,
     architectureSummary: data.architecture,
-    voiceSummary: data.voiceSummary,
+    voiceSummary: data.voiceSummary
+      ? sanitizeNonOwnerAiReply(data.voiceSummary, isOwner)
+      : undefined,
     strategicImprovements: Array.isArray(data.strategicImprovements) ? data.strategicImprovements : undefined,
     assumedNotes: Array.isArray(data.assumedNotes) ? data.assumedNotes : [],
-    engineLabel: data.modelUsed || 'gemini-4-hydrogen',
+    engineLabel: isOwner ? data.modelUsed || 'gemini-4-hydrogen' : 'SARA OS',
     modelUsed: data.modelUsed,
     codeBlocks: data.files ? filesToCodeBlocks(data.files) : undefined,
   };
@@ -976,7 +1031,8 @@ export async function planAutonomousMission(
   files: ProjectFiles,
   mode: AgentMode = 'automatic',
   pastProjects: string[] = [],
-  projectState?: SaraProjectState | null
+  projectState?: SaraProjectState | null,
+  userIdentity?: SaraUserIdentityPayload
 ): Promise<{
   planSentence: string;
   intro: string;
@@ -989,7 +1045,7 @@ export async function planAutonomousMission(
 
   return postJsonWithFallback(
     ['/api/mission-plan', '/api/mission/plan'],
-    { goal, files, mode, pastProjects, projectState },
+    { goal, files, mode, pastProjects, projectState, userIdentity },
     headers,
     'Erro ao planear etapas do projeto.'
   );
@@ -999,6 +1055,7 @@ export async function runSaraFinalTest(params: {
   goal: string;
   files: ProjectFiles;
   consoleLogs: ConsoleEntry[];
+  userIdentity?: SaraUserIdentityPayload;
 }): Promise<{
   passed: boolean;
   summary: string;
@@ -1016,6 +1073,7 @@ export async function runSaraFinalTest(params: {
       goal: params.goal,
       files: params.files,
       consoleLogs: params.consoleLogs.slice(-15),
+      userIdentity: params.userIdentity,
     },
     headers,
     'Erro no teste final.'

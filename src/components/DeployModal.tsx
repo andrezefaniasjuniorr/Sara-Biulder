@@ -24,6 +24,7 @@ interface DeployModalProps {
   onClose: () => void;
   onOpenSettings: () => void;
   onNotify: (msg: string) => void;
+  isOwner?: boolean;
 }
 
 export const DeployModal: React.FC<DeployModalProps> = ({
@@ -33,6 +34,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({
   onClose,
   onOpenSettings,
   onNotify,
+  isOwner = false,
 }) => {
   const [repoName, setRepoName] = useState(() => formatRepoSlug(projectName));
   const [isPrivate, setIsPrivate] = useState(false);
@@ -141,81 +143,83 @@ export const DeployModal: React.FC<DeployModalProps> = ({
             </button>
           </div>
 
-          <form onSubmit={handlePushGitHub} className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Github className="w-4 h-4 text-white" />
-                <span className="text-sm font-bold text-white">Push Direto para GitHub</span>
-              </div>
-              {!hasToken && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onOpenSettings();
-                  }}
-                  className="text-xs text-[#3B82F6] hover:underline cursor-pointer"
-                >
-                  Configurar Token
-                </button>
-              )}
-            </div>
-
-            {!hasToken && (
-              <div className="p-3 rounded-lg bg-[#12121A] border border-amber-500/30 text-xs text-amber-200 space-y-1">
-                <div className="font-semibold">Como gerar o teu GitHub Token:</div>
-                <ol className="list-decimal pl-4 space-y-0.5 text-[11px] text-[#A1A1AA]">
-                  <li>Entra em GitHub → Settings → Developer settings → Personal access tokens (Tokens classic).</li>
-                  <li>Clica em "Generate new token (classic)", marca a permissão <strong>repo</strong> e gera o token.</li>
-                  <li>Cola em <strong>Configurações → GitHub Token</strong> (fica salvo apenas no teu navegador).</li>
-                </ol>
-              </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row gap-2">
-              <input
-                type="text"
-                value={repoName}
-                onChange={(e) => setRepoName(e.target.value)}
-                placeholder="Nome do repositório (ex: minha-app)"
-                className="flex-1 bg-[#12121A] border border-[#1F1F2E] focus:border-[#3B82F6] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
-              />
-              <label className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#12121A] border border-[#1F1F2E] text-xs text-[#A1A1AA] cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isPrivate}
-                  onChange={(e) => setIsPrivate(e.target.checked)}
-                />
-                <span>Privado</span>
-              </label>
-              <button
-                type="submit"
-                disabled={pushing}
-                className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
-              >
-                {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Github className="w-3.5 h-3.5" />}
-                <span>Push GitHub</span>
-              </button>
-            </div>
-
-            {pushResult && (
-              <div
-                className={`p-3 rounded-lg border text-xs ${
-                  pushResult.ok
-                    ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-300'
-                    : 'bg-rose-950/30 border-rose-500/40 text-rose-300'
-                }`}
-              >
-                <div>{pushResult.text}</div>
-                {pushResult.url && (
-                  <div className="mt-1 flex items-center gap-1 font-mono text-[11px] text-white">
-                    <ExternalLink className="w-3 h-3" />
-                    <span>{pushResult.url}</span>
-                  </div>
+          {isOwner && (
+            <form onSubmit={handlePushGitHub} className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Github className="w-4 h-4 text-white" />
+                  <span className="text-sm font-bold text-white">Push Direto para GitHub</span>
+                </div>
+                {!hasToken && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenSettings();
+                    }}
+                    className="text-xs text-[#3B82F6] hover:underline cursor-pointer"
+                  >
+                    Configurar Token
+                  </button>
                 )}
               </div>
-            )}
-          </form>
+
+              {!hasToken && (
+                <div className="p-3 rounded-lg bg-[#12121A] border border-amber-500/30 text-xs text-amber-200 space-y-1">
+                  <div className="font-semibold">Como gerar o teu GitHub Token:</div>
+                  <ol className="list-decimal pl-4 space-y-0.5 text-[11px] text-[#A1A1AA]">
+                    <li>Entra em GitHub → Settings → Developer settings → Personal access tokens (Tokens classic).</li>
+                    <li>Clica em "Generate new token (classic)", marca a permissão <strong>repo</strong> e gera o token.</li>
+                    <li>Cola em <strong>Configurações → GitHub Token</strong> (fica salvo apenas no teu navegador).</li>
+                  </ol>
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={repoName}
+                  onChange={(e) => setRepoName(e.target.value)}
+                  placeholder="Nome do repositório (ex: minha-app)"
+                  className="flex-1 bg-[#12121A] border border-[#1F1F2E] focus:border-[#3B82F6] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
+                />
+                <label className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#12121A] border border-[#1F1F2E] text-xs text-[#A1A1AA] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isPrivate}
+                    onChange={(e) => setIsPrivate(e.target.checked)}
+                  />
+                  <span>Privado</span>
+                </label>
+                <button
+                  type="submit"
+                  disabled={pushing}
+                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                >
+                  {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Github className="w-3.5 h-3.5" />}
+                  <span>Push GitHub</span>
+                </button>
+              </div>
+
+              {pushResult && (
+                <div
+                  className={`p-3 rounded-lg border text-xs ${
+                    pushResult.ok
+                      ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-300'
+                      : 'bg-rose-950/30 border-rose-500/40 text-rose-300'
+                  }`}
+                >
+                  <div>{pushResult.text}</div>
+                  {pushResult.url && (
+                    <div className="mt-1 flex items-center gap-1 font-mono text-[11px] text-white">
+                      <ExternalLink className="w-3 h-3" />
+                      <span>{pushResult.url}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </form>
+          )}
 
           <div className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] space-y-2.5">
             <button

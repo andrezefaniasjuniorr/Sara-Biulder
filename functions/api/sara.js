@@ -1,8 +1,10 @@
 import {
   FAST_VOICE_MODEL_CHAIN,
   SARA_CORE_SYSTEM_PROMPT,
+  buildIdentityAndSecrecyInstruction,
   callGeminiRestWithFailover,
   formatFriendlyEdgeError,
+  getSaraCorePrompt,
   handleOptions,
   jsonResponse,
   resolveEdgeApiKey,
@@ -33,20 +35,26 @@ export async function onRequestPost(context) {
       hasExistingCode,
       projectName,
       contextCue,
+      userIdentity,
     } = body || {};
+
+    const isOwnerUser = userIdentity?.isOwner === true;
+    const callerLabel = isOwnerUser
+      ? 'Eletro-Jr'
+      : String(userIdentity?.callName || '').trim() || 'Utilizador';
 
     if (kickoff === true) {
       const existingList = Object.keys(files || {}).slice(0, 12).join(', ');
       const isManual = agentMode === 'manual';
-      const kickoffPrompt = `Eletro-Jr acabou de pedir: "${prompt || 'Construir projeto'}".
+      const kickoffPrompt = `${callerLabel} acabou de pedir: "${prompt || 'Construir projeto'}".
 Projeto ativo: "${projectName || screenContext?.projectName || 'Novo Projeto'}" (${hasExistingCode ? `já tem código: ${existingList}` : 'projeto novo do zero'}).
 Modo atual: ${isManual ? 'MANUAL (colaborativo passo a passo: tens de sugerir ideias e PERGUNTAR se aprova começar ou quer ajustar algo antes de codar)' : 'AUTOMÁTICO (autónomo: aceitas com energia, dás 1-2 sugestões práticas de arquitetura/UI e confirmas que vais construir, testar e corrigir tudo sozinha já a seguir)'}.
-${contextCue === 'sleep' ? 'Nota: Eletro-Jr disse que vai dormir.' : contextCue === 'leave' ? 'Nota: Eletro-Jr disse que vai sair.' : ''}
+${contextCue === 'sleep' ? `Nota: ${callerLabel} disse que vai dormir.` : contextCue === 'leave' ? `Nota: ${callerLabel} disse que vai sair.` : ''}
 
-Responde como Sara (cofundadora viva, próxima, criativa e profissional de Eletro-Jr) em APENAS 2 a 3 frases diretas, naturais e prontas para VOZ ALTA (ZERO markdown, ZERO asteriscos, ZERO blocos de código, ZERO listas, PROIBIDO começar com "Boa", "Perfeito" ou "Claro"):
+Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwnerUser ? 'cofundadora de Eletro-Jr' : `assistente de ${callerLabel}, PROIBIDO chamar de Eletro-Jr/chefe`}) em APENAS 2 a 3 frases diretas, naturais e prontas para VOZ ALTA (ZERO markdown, ZERO asteriscos, ZERO blocos de código, ZERO listas, PROIBIDO começar com "Boa", "Perfeito" ou "Claro"):
 1. Aceita o pedido específico citando o que vais atacar.
 2. Dá 1 ou 2 contribuições/sugestões técnicas ou visuais inteligentes para deixar o projeto de nível profissional.
-3. ${isManual ? 'Termina com uma pergunta curta convidando Eletro-Jr a aprovar o início ou sugerir ajustes antes de mexeres no código.' : 'Termina confirmando que assumes a construção completa e os testes automáticos a partir de agora.'}`;
+3. ${isManual ? `Termina com uma pergunta curta convidando ${callerLabel} a aprovar o início ou sugerir ajustes antes de mexeres no código.` : 'Termina confirmando que assumes a construção completa e os testes automáticos a partir de agora.'}`;
 
       const { text, modelUsed } = await callGeminiRestWithFailover(
         apiKey,
@@ -54,7 +62,7 @@ Responde como Sara (cofundadora viva, próxima, criativa e profissional de Eletr
           system_instruction: {
             parts: [
               {
-                text: 'És a Sara Biulder a falar por voz diretamente com Eletro-Jr. Sê rápida, humana, profissional e objetiva (máximo 3 frases faladas sem formatação markdown).',
+                text: `És a Sara a falar por voz diretamente com ${callerLabel}. Sê rápida, humana, profissional e objetiva (máximo 3 frases faladas sem formatação markdown).${buildIdentityAndSecrecyInstruction(userIdentity)}`,
               },
             ],
           },
@@ -120,7 +128,10 @@ Responde como Sara (cofundadora viva, próxima, criativa e profissional de Eletr
       finalContents = turns;
     }
 
-    const systemText = system_instruction?.parts?.[0]?.text || SARA_CORE_SYSTEM_PROMPT;
+    const systemText =
+      system_instruction?.parts?.[0]?.text ||
+      getSaraCorePrompt(userIdentity) ||
+      SARA_CORE_SYSTEM_PROMPT;
 
     const { text, modelUsed } = await callGeminiRestWithFailover(
       apiKey,
