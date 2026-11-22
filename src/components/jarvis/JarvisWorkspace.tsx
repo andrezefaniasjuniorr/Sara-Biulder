@@ -1,29 +1,47 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Chart from 'chart.js/auto';
+import gsap from 'gsap';
 import {
   Activity,
   AlarmClock,
   BatteryCharging,
   BatteryMedium,
   BellRing,
+  BookOpen,
   Brain,
   Calendar,
   CheckCircle2,
   CheckSquare,
+  ChevronDown,
+  ChevronRight,
+  ChevronUp,
   Circle,
+  Clock,
   CloudSun,
   Cpu,
+  ExternalLink,
   EyeOff,
   FileText,
   Focus,
+  Globe,
   Hammer,
   HardDrive,
+  LayoutDashboard,
+  Loader2,
   Mic,
   MicOff,
   Music2,
+  Newspaper,
   Paperclip,
+  Pause,
+  Play,
   Plus,
+  Radar,
   RefreshCw,
   Send,
+  Settings,
+  ShieldCheck,
+  SkipForward,
   Sparkles,
   Square,
   Sun,
@@ -33,7 +51,9 @@ import {
   VolumeX,
   Wifi,
   WifiOff,
+  X,
 } from 'lucide-react';
+import type { LiveBuildInfo } from '../../types/builder';
 import type {
   JarvisActionPayload,
   JarvisAgendaItem,
@@ -41,6 +61,7 @@ import type {
   JarvisConversationEntry,
   JarvisDocumentItem,
   JarvisHeadMood,
+  JarvisHudLiveFeed,
   JarvisMediaStateContext,
   JarvisMemoryState,
   JarvisModuleTab,
@@ -54,7 +75,9 @@ import type {
 import {
   askJarvisAssistantStream,
   DEFAULT_JARVIS_MEMORY,
+  fetchLiveHudFeed,
   fetchLiveWeather,
+  isFullBuilderAppRequest,
   loadJarvisLocalBundle,
   playJarvisAlarmSound,
   readDocumentFile,
@@ -74,11 +97,18 @@ import {
   salvarJarvisStateFirebase,
 } from '../../services/firebaseService';
 import {
+  getBackgroundBuildAckSpeech,
+  getVoiceReadingStatus,
   interruptSaraAndListen,
   parseVoiceCommand,
+  pauseVoiceReading,
+  resumeVoiceReading,
   speakAsSara,
   startVoiceReading,
+  stopVoiceReading,
+  subscribeVoiceReadingStatus,
   type VoiceCommandAction,
+  type VoiceReadingStatus,
 } from '../../utils/voiceService';
 import { SaraJarvisHead } from './SaraJarvisHead';
 import { JarvisStageRenderer } from './JarvisStageRenderer';
@@ -91,12 +121,24 @@ interface JarvisWorkspaceProps {
   firebaseUserUid?: string;
   activeBuilderProjectName?: string;
   activeBuilderFiles?: string[];
+  liveBuild?: LiveBuildInfo;
+  completedBackgroundBuild?: {
+    id: string;
+    projectName: string;
+    elapsedSeconds: number;
+    filesCount: number;
+  } | null;
+  onDismissCompletedBuild?: () => void;
+  onTriggerBackgroundBuild?: (goal: string, source: 'voice' | 'text') => Promise<void>;
+  externalNotifyChatRef?: React.MutableRefObject<((shortMsg: string) => void) | null>;
   onToggleMic: () => void;
   onSilenceSara: () => void;
   onSwitchMode: (mode: WorkspaceMode) => void;
+  onOpenSettings?: () => void;
   onNotify: (msg: string) => void;
   onExecuteSystemCommand?: (cmd: VoiceCommandAction, rawText: string) => Promise<boolean>;
   onStageStateChange?: (state: JarvisMediaStateContext) => void;
+  onPanelOpenChange?: (open: boolean) => void;
   externalMediaControlRef?: React.MutableRefObject<{
     pause: () => void;
     resume: () => void;
@@ -109,25 +151,111 @@ interface JarvisWorkspaceProps {
   >;
   externalFocusCommandRef: React.MutableRefObject<((enabled: boolean) => void) | null>;
   externalModuleRef: React.MutableRefObject<((tab: JarvisModuleTab) => void) | null>;
+  externalPanelRef?: React.MutableRefObject<((open: boolean) => void) | null>;
   externalRepeatRef: React.MutableRefObject<(() => void) | null>;
   externalContinueRef: React.MutableRefObject<(() => Promise<void>) | null>;
 }
 
 const IRON_MAN_PROCESS_LINES = [
-  '>> MOUNTING NEURAL KERNEL [STARK-CORE]',
-  '>> STREAMING VOCAL SUMMARY BUS (<JARVIS_SPEAK>)',
-  '>> CALIBRATING OPTICAL HUD VECTORS: CYAN/#00E5FF',
-  '>> SYNCING REAL-TIME TELEMETRY & GEOLOCATION',
-  '>> COMPILING VISUAL MATRIX / SVG / CHART PIPELINE',
-  '>> RENDERING HOLOGRAPHIC RESPONSE PAYLOAD',
+  '>> A LIGAR MOTOR NEURAL SARA',
+  '>> A PREPARAR RESPOSTA POR VOZ',
+  '>> A CALIBRAR MODELO 3D / GRÁFICOS',
+  '>> A SINCRONIZAR DADOS EM TEMPO REAL',
 ];
 
-const BRIDGE_SPEECH_PHRASES = [
-  'Já vou.',
-  'Só um segundo.',
-  'A ver isso.',
-  'Deixa-me preparar isso.',
+const DAILY_QUOTES = [
+  'Disciplina transforma intenção em sistema funcional.',
+  'Sistemas simples escalam; sistemas claros duram.',
+  'Cada segundo de foco hoje poupa horas de correção amanhã.',
+  'Precisão técnica começa com clareza no objetivo.',
+  'Velocidade sem direção é ruído; precisão é poder.',
 ];
+
+function formatUptimeHMS(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const hrs = String(Math.floor(s / 3600)).padStart(2, '0');
+  const mins = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const secs = String(s % 60).padStart(2, '0');
+  return `${hrs}:${mins}:${secs}`;
+}
+
+function buildCompactChatSummary(res: {
+  chatSummary?: string;
+  reply?: string;
+  actions?: JarvisActionPayload[];
+}): string {
+  const cleanExplicit = sanitizeAssistantPlainText(res.chatSummary || '')
+    .split('\n')[0]
+    .trim();
+  if (cleanExplicit && cleanExplicit.length <= 105) {
+    return cleanExplicit;
+  }
+
+  const actions = Array.isArray(res.actions) ? res.actions : [];
+  const primary = actions.find((a) =>
+    [
+      'show_3d',
+      'show_svg',
+      'show_math',
+      'show_explanation',
+      'show_chart',
+      'show_quiz',
+      'show_flashcards',
+      'show_ideation',
+      'show_html',
+      'show_document',
+      'play_music',
+      'play_video',
+      'read_aloud',
+    ].includes(a.type)
+  );
+
+  if (primary) {
+    switch (primary.type) {
+      case 'show_3d':
+        return `${primary.title || 'Modelo 3D'} desenhado com cálculos no preview.`;
+      case 'show_svg':
+        return `${primary.title || 'Desenho'} mostrado no preview.`;
+      case 'show_math':
+        return `${primary.title || 'Cálculo'} resolvido no preview.`;
+      case 'show_explanation':
+        return `Explicação dada por voz: ${primary.title || 'Tema'}.`;
+      case 'show_chart':
+        return `Gráfico "${primary.title || 'Dados'}" gerado no preview.`;
+      case 'show_quiz':
+        return `Teste "${primary.title || 'Quiz'}" pronto no preview.`;
+      case 'show_flashcards':
+        return `Flashcards "${primary.title || 'Estudo'}" abertos no preview.`;
+      case 'show_ideation':
+        return `${primary.title || 'Textos e ideias'} prontos no preview.`;
+      case 'show_html':
+        return `${primary.title || 'Documento'} pronto no preview.`;
+      case 'show_document':
+        return `Documento "${primary.title || 'Ficheiro'}" analisado no preview.`;
+      case 'play_music':
+        return `A tocar: ${primary.title || primary.query || 'Música'}.`;
+      case 'play_video':
+        return `A reproduzir vídeo: ${primary.title || primary.query || 'Vídeo'}.`;
+      case 'read_aloud':
+        return `Leitura em voz alta ativa: ${primary.title || 'Texto'}.`;
+    }
+  }
+
+  const fallbackSentence =
+    sanitizeAssistantPlainText(res.reply || '')
+      .replace(/\s+/g, ' ')
+      .split(/(?<=[.!?])\s+/)[0]
+      ?.trim() || 'Feito.';
+  if (fallbackSentence.length <= 95) return fallbackSentence;
+  return `${fallbackSentence.slice(0, 92).replace(/\s+\S*$/, '')}...`;
+}
+
+function formatMiniMmSs(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${String(m).padStart(2, '0')}:${String(rem).padStart(2, '0')}`;
+}
 
 export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   voiceEnabled,
@@ -137,22 +265,36 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   firebaseUserUid,
   activeBuilderProjectName,
   activeBuilderFiles,
+  liveBuild,
+  completedBackgroundBuild,
+  onDismissCompletedBuild,
+  onTriggerBackgroundBuild,
+  externalNotifyChatRef,
   onToggleMic,
   onSilenceSara,
   onSwitchMode,
+  onOpenSettings,
   onNotify,
   onExecuteSystemCommand,
   onStageStateChange,
+  onPanelOpenChange,
   externalMediaControlRef,
   externalCommandRef,
   externalFocusCommandRef,
   externalModuleRef,
+  externalPanelRef,
   externalRepeatRef,
   externalContinueRef,
 }) => {
   const initialBundle = useMemo(() => loadJarvisLocalBundle(), []);
   const [activeModule, setActiveModule] = useState<JarvisModuleTab>('voz');
-  const [mobileSection, setMobileSection] = useState<'stage' | 'modules' | 'telemetry'>('stage');
+  const [readingStatus, setReadingStatus] = useState<VoiceReadingStatus>(() =>
+    getVoiceReadingStatus()
+  );
+  const [musicElapsedSec, setMusicElapsedSec] = useState(0);
+  const [isPanelOpen, setIsPanelOpen] = useState(false);
+  const [mobileSection, setMobileSection] = useState<'stage' | 'hud' | 'log'>('stage');
+  const [isMemoryExpanded, setIsMemoryExpanded] = useState(false);
 
   const [agenda, setAgenda] = useState<JarvisAgendaItem[]>(initialBundle.agenda);
   const [alarms, setAlarms] = useState<JarvisAlarmItem[]>(initialBundle.alarms);
@@ -182,16 +324,31 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const [activeDoc, setActiveDoc] = useState<JarvisDocumentItem | null>(null);
 
   const [now, setNow] = useState<Date>(() => new Date());
+  const [uptimeSeconds, setUptimeSeconds] = useState(0);
+  const [hudPulseTick, setHudPulseTick] = useState(0);
+
   const [weather, setWeather] = useState<JarvisWeatherInfo>({
     tempC: null,
     feelsLikeC: null,
     humidityPct: null,
     windKmh: null,
+    windDirectionDeg: null,
+    windDirectionLabel: null,
+    uvIndex: null,
+    hourlyForecast: [],
     condition: 'A obter clima real...',
     city: 'Inhambane Cidade, Inhambane, Moçambique',
     loadedFromApi: false,
   });
   const [isRefreshingWeather, setIsRefreshingWeather] = useState(false);
+
+  const [hudFeed, setHudFeed] = useState<JarvisHudLiveFeed>({
+    fx: null,
+    news: [],
+    loadedAt: '',
+  });
+  const [newsIndex, setNewsIndex] = useState(0);
+  const [quoteIndex, setQuoteIndex] = useState(() => new Date().getDate() % DAILY_QUOTES.length);
 
   const batteryInfoRef = useRef<{ pct: number | null; charging: boolean | null }>({
     pct: null,
@@ -202,7 +359,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   );
   const [activeRingingAlarm, setActiveRingingAlarm] = useState<JarvisAlarmItem | null>(null);
 
-  // Inputs dos módulos
+  // Inputs dos módulos dentro da gaveta [☰ PAINEL]
   const [newAgendaTitle, setNewAgendaTitle] = useState('');
   const [newAgendaDate, setNewAgendaDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [newAgendaTime, setNewAgendaTime] = useState('10:00');
@@ -216,8 +373,62 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const spectrumCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const diagChartCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const netChartCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const diagChartRef = useRef<Chart | null>(null);
+  const netChartRef = useRef<Chart | null>(null);
+  const drawerRef = useRef<HTMLDivElement | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const proactiveCheckedRef = useRef(false);
+  const aiHistoryRef = useRef<JarvisConversationEntry[]>(initialBundle.conversation);
+
+  const updatePanelOpen = useCallback(
+    (next: boolean) => {
+      setIsPanelOpen(next);
+      onPanelOpenChange?.(next);
+    },
+    [onPanelOpenChange]
+  );
+
+  useEffect(() => subscribeVoiceReadingStatus(setReadingStatus), []);
+
+  useEffect(() => {
+    if (!externalPanelRef) return;
+    externalPanelRef.current = updatePanelOpen;
+    return () => {
+      if (externalPanelRef) externalPanelRef.current = null;
+    };
+  }, [externalPanelRef, updatePanelOpen]);
+
+  useEffect(() => {
+    if (!externalNotifyChatRef) return;
+    externalNotifyChatRef.current = (shortMsg: string) => {
+      const cleanMsg = sanitizeAssistantPlainText(shortMsg).split('\n')[0].trim();
+      if (!cleanMsg) return;
+      setConversation((prev) => [
+        ...prev.slice(-30),
+        {
+          id: `sara_bg_${Date.now()}`,
+          sender: 'sara',
+          text: cleanMsg,
+          timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    };
+    return () => {
+      if (externalNotifyChatRef) externalNotifyChatRef.current = null;
+    };
+  }, [externalNotifyChatRef]);
+
+  // Animação GSAP suave da gaveta deslizante [☰ PAINEL]
+  useEffect(() => {
+    if (!isPanelOpen || !drawerRef.current) return;
+    gsap.fromTo(
+      drawerRef.current,
+      { x: -340, opacity: 0.4 },
+      { x: 0, opacity: 1, duration: 0.28, ease: 'power3.out' }
+    );
+  }, [isPanelOpen]);
 
   // Persistência local automática
   useEffect(() => saveJarvisAgenda(agenda), [agenda]);
@@ -228,7 +439,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   useEffect(() => saveJarvisConversation(conversation), [conversation]);
   useEffect(() => saveJarvisPlaylist(playlist), [playlist]);
 
-  // Inteligência Proativa & Continuidade entre dias (sem exagerar nem repetir o nome)
+  // Inteligência Proativa & Continuidade entre dias
   useEffect(() => {
     if (proactiveCheckedRef.current) return;
     proactiveCheckedRef.current = true;
@@ -303,6 +514,33 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       activeStageTitle: stageContent?.title,
     };
   }, [stageContent, mediaPaused, mediaVolume]);
+
+  useEffect(() => {
+    setMusicElapsedSec(0);
+  }, [stageContent?.id]);
+
+  useEffect(() => {
+    const isMedia = stageContent?.kind === 'music' || stageContent?.kind === 'video';
+    if (!isMedia || mediaPaused) return;
+    const t = setInterval(() => {
+      setMusicElapsedSec((s) => s + 1);
+    }, 1000);
+    return () => clearInterval(t);
+  }, [stageContent?.kind, stageContent?.id, mediaPaused]);
+
+  const builderProgressPct = useMemo(() => {
+    if (!liveBuild?.isBuilding) return 0;
+    const totalSteps = liveBuild.steps?.length || 0;
+    const doneSteps = liveBuild.steps?.filter((s) => s.status === 'done').length || 0;
+    if (liveBuild.phase === 'thinking') return 12;
+    if (liveBuild.phase === 'planning') return 24;
+    if (liveBuild.phase === 'testing') return 91;
+    if (liveBuild.phase === 'fixing') return 84;
+    if (totalSteps > 0) return Math.min(88, 26 + Math.round((doneSteps / totalSteps) * 58));
+    return 38;
+  }, [liveBuild]);
+
+  const nextEnabledAlarm = useMemo(() => alarms.find((a) => a.enabled) || null, [alarms]);
 
   useEffect(() => {
     onStageStateChange?.(currentMediaState);
@@ -421,11 +659,13 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     };
   }, []);
 
-  // Relógio ao vivo + telemetria real + verificador real de alarmes (every 2s)
+  // Relógio ao vivo (1s) + Uptime + Verificador real de alarmes
   useEffect(() => {
     const interval = setInterval(() => {
       const current = new Date();
       setNow(current);
+      setUptimeSeconds((s) => s + 1);
+      setHudPulseTick((t) => (t + 1) % 3600);
       setTelemetry(readSyncSystemTelemetry(batteryInfoRef.current));
 
       const hhmm = current.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
@@ -448,7 +688,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         });
         return changed ? updated : prevAlarms;
       });
-    }, 2000);
+    }, 1000);
     return () => clearInterval(interval);
   }, [voiceEnabled]);
 
@@ -470,6 +710,165 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     }, 10 * 60 * 1000);
     return () => clearInterval(t);
   }, [refreshWeatherNow]);
+
+  // Feed ao vivo Moçambique: Cotação real Metical + Manchetes reais RSS
+  const refreshHudFeedNow = useCallback(async (force = false) => {
+    const data = await fetchLiveHudFeed(force);
+    setHudFeed(data);
+  }, []);
+
+  useEffect(() => {
+    void refreshHudFeedNow(false);
+    const t = setInterval(() => {
+      void refreshHudFeedNow(true);
+    }, 10 * 60 * 1000);
+    return () => clearInterval(t);
+  }, [refreshHudFeedNow]);
+
+  // Rotação automática de manchete e frase do dia
+  useEffect(() => {
+    const t = setInterval(() => {
+      setNewsIndex((i) => i + 1);
+      setQuoteIndex((q) => (q + 1) % DAILY_QUOTES.length);
+    }, 12000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Gráficos Chart.js ao vivo (Sparkline Diagnóstico à esquerda + Tráfego de Rede à direita)
+  useEffect(() => {
+    if (focusMode) return;
+
+    const diagCanvas = diagChartCanvasRef.current;
+    if (diagCanvas) {
+      diagChartRef.current?.destroy();
+      const ctx = diagCanvas.getContext('2d');
+      if (ctx) {
+        const initPts = Array.from({ length: 18 }, (_, i) => 24 + Math.sin(i * 0.6) * 8);
+        diagChartRef.current = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: initPts.map(() => ''),
+            datasets: [
+              {
+                data: initPts,
+                borderColor: '#00E5FF',
+                backgroundColor: 'rgba(0, 229, 255, 0.14)',
+                borderWidth: 1.8,
+                fill: true,
+                tension: 0.42,
+                pointRadius: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: {
+              x: { display: false },
+              y: { display: false, min: 0, max: 65 },
+            },
+          },
+        });
+      }
+    }
+
+    const netCanvas = netChartCanvasRef.current;
+    if (netCanvas) {
+      netChartRef.current?.destroy();
+      const ctx = netCanvas.getContext('2d');
+      if (ctx) {
+        const initRx = Array.from({ length: 20 }, (_, i) => 18 + Math.cos(i * 0.45) * 9);
+        const initTx = Array.from({ length: 20 }, (_, i) => 9 + Math.sin(i * 0.55) * 5);
+        netChartRef.current = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: initRx.map(() => ''),
+            datasets: [
+              {
+                label: 'RX',
+                data: initRx,
+                borderColor: '#00E5FF',
+                backgroundColor: 'rgba(0, 229, 255, 0.16)',
+                borderWidth: 1.7,
+                fill: true,
+                tension: 0.4,
+                pointRadius: 0,
+              },
+              {
+                label: 'TX',
+                data: initTx,
+                borderColor: '#FF2A4B',
+                backgroundColor: 'rgba(255, 42, 75, 0.12)',
+                borderWidth: 1.4,
+                fill: true,
+                tension: 0.4,
+                pointRadius: 0,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: {
+              x: { display: false },
+              y: {
+                display: true,
+                min: 0,
+                max: 55,
+                ticks: { color: '#64748B', font: { size: 8, family: 'monospace' }, maxTicksLimit: 3 },
+                grid: { color: 'rgba(0, 229, 255, 0.08)' },
+              },
+            },
+          },
+        });
+      }
+    }
+
+    const liveInterval = setInterval(() => {
+      const activeBoost = isThinking ? 16 : isSaraSpeaking ? 11 : 0;
+      if (diagChartRef.current) {
+        const arr = diagChartRef.current.data.datasets[0].data as number[];
+        const nextVal = Math.max(
+          8,
+          Math.min(
+            60,
+            24 + activeBoost + Math.sin(Date.now() * 0.004) * 9 + (Math.random() - 0.5) * 8
+          )
+        );
+        arr.shift();
+        arr.push(Number(nextVal.toFixed(1)));
+        diagChartRef.current.update('none');
+      }
+      if (netChartRef.current) {
+        const rx = netChartRef.current.data.datasets[0].data as number[];
+        const tx = netChartRef.current.data.datasets[1].data as number[];
+        const baseDown = telemetry.online ? telemetry.downlinkMbps || 14 : 0;
+        const nextRx = telemetry.online
+          ? Math.min(52, Math.max(6, baseDown + activeBoost * 0.8 + (Math.random() - 0.3) * 10))
+          : 0;
+        const nextTx = telemetry.online
+          ? Math.min(44, Math.max(3, baseDown * 0.48 + activeBoost * 0.6 + (Math.random() - 0.4) * 7))
+          : 0;
+        rx.shift();
+        rx.push(Number(nextRx.toFixed(1)));
+        tx.shift();
+        tx.push(Number(nextTx.toFixed(1)));
+        netChartRef.current.update('none');
+      }
+    }, 1100);
+
+    return () => {
+      clearInterval(liveInterval);
+      diagChartRef.current?.destroy();
+      diagChartRef.current = null;
+      netChartRef.current?.destroy();
+      netChartRef.current = null;
+    };
+  }, [focusMode, isThinking, isSaraSpeaking, telemetry.online, telemetry.downlinkMbps]);
 
   // Animação estilo Homem de Ferro ao pensar
   useEffect(() => {
@@ -502,7 +901,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       const w = c.width;
       const h = c.height;
       ctx.clearRect(0, 0, w, h);
-      const bars = 44;
+      const bars = 40;
       const step = w / bars;
       for (let i = 0; i < bars; i++) {
         const energy = isSaraSpeaking
@@ -562,6 +961,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     async (actions: JarvisActionPayload[] = [], uploadedDoc?: JarvisDocumentItem | null) => {
       for (const act of actions) {
         switch (act.type) {
+          case 'open_panel': {
+            updatePanelOpen(true);
+            break;
+          }
+          case 'close_panel': {
+            updatePanelOpen(false);
+            break;
+          }
           case 'add_agenda': {
             const item: JarvisAgendaItem = {
               id: `ag_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
@@ -718,8 +1125,26 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           case 'open_module': {
             if (act.moduleTab) {
               setActiveModule(act.moduleTab);
-              setMobileSection('modules');
+              updatePanelOpen(true);
             }
+            break;
+          }
+          case 'show_3d': {
+            setStageContent({
+              id: `stg_3d_${Date.now()}`,
+              kind: '3d',
+              title: act.title || 'Modelo 3D Interativo SARA',
+              subtitle: act.subtitle || act.notes,
+              shape: act.shape || 'cube',
+              dimensions: act.dimensions,
+              unit: act.unit || 'cm',
+              labelLines: act.labelLines,
+              description: act.description,
+              formulas: Array.isArray(act.formulas) ? act.formulas : undefined,
+              steps: Array.isArray(act.steps) ? act.steps : undefined,
+              finalAnswer: act.finalAnswer,
+              autoRotate: act.autoRotate ?? true,
+            });
             break;
           }
           case 'show_svg': {
@@ -895,10 +1320,17 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             }
             break;
           }
+          case 'build_in_builder': {
+            const buildGoal = (act.goal || '').trim();
+            if (buildGoal && onTriggerBackgroundBuild) {
+              void onTriggerBackgroundBuild(buildGoal, 'text');
+            }
+            break;
+          }
         }
       }
     },
-    [activeDoc, focusMode, onNotify, onSwitchMode]
+    [activeDoc, focusMode, onNotify, onSwitchMode, onTriggerBackgroundBuild, updatePanelOpen]
   );
 
   const sendJarvisPrompt = useCallback(
@@ -907,13 +1339,15 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       const docToSend = pendingDoc;
       if (!clean && !docToSend) return;
 
-      // TIPO A - [SISTEMA]: Antes de chamar a IA, verifica comandos determinísticos mesmo quando escritos em texto
+      // TIPO A - [SISTEMA]: Verifica comandos determinísticos antes da IA
       if (clean && !docToSend && onExecuteSystemCommand) {
         const localCmd = parseVoiceCommand(clean, {
           workspaceMode: 'jarvis',
           hasActiveMedia: stageContent?.kind === 'music' || stageContent?.kind === 'video',
           isMediaPaused: mediaPaused,
           hasActiveStage: Boolean(stageContent),
+          hasActiveReading: readingStatus.active,
+          isReadingPaused: readingStatus.paused,
         });
         if (localCmd.type !== 'prompt') {
           const handled = await onExecuteSystemCommand(localCmd, clean);
@@ -924,18 +1358,59 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         }
       }
 
+      // CONEXÃO ASSISTENTE -> BUILDER EM 2.º PLANO: pedidos de site/app completo constroem no Builder sem sair do Assistente
+      if (clean && !docToSend && onTriggerBackgroundBuild && isFullBuilderAppRequest(clean)) {
+        const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        const ackSpeech = getBackgroundBuildAckSpeech(clean);
+        if (source === 'text') {
+          setInputText('');
+          setConversation((prev) => [
+            ...prev.slice(-28),
+            { id: `usr_bg_${Date.now()}`, sender: 'user', text: clean, timestamp: nowTime },
+            {
+              id: `sara_bg_ack_${Date.now()}`,
+              sender: 'sara',
+              text: 'Builder em segundo plano: a construir o pedido mantendo o Assistente livre.',
+              timestamp: nowTime,
+            },
+          ]);
+        } else {
+          setConversation((prev) => [
+            ...prev.slice(-28),
+            {
+              id: `sara_bg_ack_${Date.now()}`,
+              sender: 'sara',
+              text: 'Builder em segundo plano: a construir o projeto pedido.',
+              timestamp: nowTime,
+            },
+          ]);
+        }
+        speakAsSara(ackSpeech, voiceEnabled, {
+          level: 'short',
+          forceSpeak: source === 'voice' || !isSaraSilenced,
+        });
+        void onTriggerBackgroundBuild(clean, source);
+        return;
+      }
+
       const userLabel = clean || `Analisar documento: ${docToSend?.name}`;
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      const wantsFullTextInChat =
+        /(manda\s+(tamb[eé]m\s+)?em\s+texto|escreve\s+no\s+chat|manda\s+por\s+escrito|quero\s+em\s+texto|detalha\s+no\s+chat|texto\s+no\s+chat)/i.test(
+          userLabel
+        );
 
-      setConversation((prev) => [
-        ...prev,
-        {
-          id: `usr_j_${Date.now()}`,
-          sender: 'user',
-          text: userLabel,
-          timestamp: nowTime,
-        },
-      ]);
+      const userHistoryEntry: JarvisConversationEntry = {
+        id: `usr_j_${Date.now()}`,
+        sender: 'user',
+        text: userLabel,
+        timestamp: nowTime,
+      };
+      aiHistoryRef.current = [...aiHistoryRef.current.slice(-18), userHistoryEntry];
+
+      if (source === 'text' || wantsFullTextInChat) {
+        setConversation((prev) => [...prev, userHistoryEntry]);
+      }
 
       if (source === 'text') setInputText('');
       if (docToSend) {
@@ -948,28 +1423,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       setStreamingReply(null);
       setMood('thinking');
 
-      const shouldSpeakNow = voiceEnabled && (source === 'voice' || !isSaraSilenced);
       let spokenDuringStream = false;
-      let bridgeSpoken = false;
-      const bridgeTimer = shouldSpeakNow
-        ? setTimeout(() => {
-            if (spokenDuringStream) return;
-            bridgeSpoken = true;
-            const ack =
-              BRIDGE_SPEECH_PHRASES[
-                Math.floor(Math.random() * BRIDGE_SPEECH_PHRASES.length)
-              ];
-            speakAsSara(ack, voiceEnabled, {
-              level: 'short',
-              forceSpeak: true,
-            });
-          }, 420)
-        : null;
 
       const res = await askJarvisAssistantStream(
         {
           prompt: userLabel,
-          history: conversation.slice(-8),
+          history: aiHistoryRef.current.slice(-10),
           memory,
           agenda,
           tasks,
@@ -980,28 +1439,34 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           builderContext: {
             activeProjectName: activeBuilderProjectName,
             activeProjectFiles: activeBuilderFiles,
+            isBuilding: liveBuild?.isBuilding,
+            phase: liveBuild?.phase,
+            progressPct: liveBuild?.isBuilding ? builderProgressPct : undefined,
+            currentStepLabel: liveBuild?.currentStepLabel,
+            activeFile: liveBuild?.activeFile,
+            elapsedSeconds: liveBuild?.elapsedSeconds,
           },
           documentAttachment: docToSend,
           activeDocument: docToSend || activeDoc,
         },
         {
           onSpeakReady: (speakText) => {
-            if (bridgeTimer) clearTimeout(bridgeTimer);
             if (!speakText || spokenDuringStream) return;
             spokenDuringStream = true;
             speakAsSara(speakText, voiceEnabled, {
-              level: 'medium',
-              queueIfSpeaking: bridgeSpoken,
+              level: 'full',
+              isQuestionReply: true,
               forceSpeak: source === 'voice' || !isSaraSilenced,
             });
           },
           onReplyPartial: (partialReply) => {
-            setStreamingReply(sanitizeAssistantPlainText(partialReply));
+            if (wantsFullTextInChat) {
+              setStreamingReply(sanitizeAssistantPlainText(partialReply));
+            }
           },
         }
       );
 
-      if (bridgeTimer) clearTimeout(bridgeTimer);
       setIsThinking(false);
       setStreamingReply(null);
       setMood(res.mood && res.mood !== 'speaking' ? res.mood : 'idle');
@@ -1015,13 +1480,32 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       }));
 
       const cleanFinalReply = sanitizeAssistantPlainText(res.reply) || 'Feito.';
+      const chatEntryText = wantsFullTextInChat
+        ? cleanFinalReply
+        : buildCompactChatSummary({
+            chatSummary: res.chatSummary,
+            reply: cleanFinalReply,
+            actions: res.actions,
+          });
+
+      const saraTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      aiHistoryRef.current = [
+        ...aiHistoryRef.current.slice(-18),
+        {
+          id: `sara_mem_${Date.now()}`,
+          sender: 'sara',
+          text: cleanFinalReply,
+          timestamp: saraTime,
+        },
+      ];
+
       setConversation((prev) => [
         ...prev,
         {
           id: `sara_j_${Date.now()}`,
           sender: 'sara',
-          text: cleanFinalReply,
-          timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+          text: chatEntryText,
+          timestamp: saraTime,
         },
       ]);
 
@@ -1033,8 +1517,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       if (!spokenDuringStream && !startedLongReading) {
         const speakText = sanitizeAssistantPlainText(res.voiceSummary || cleanFinalReply);
         speakAsSara(speakText, voiceEnabled, {
-          level: 'medium',
-          queueIfSpeaking: bridgeSpoken,
+          level: 'full',
+          isQuestionReply: true,
           forceSpeak: source === 'voice' || !isSaraSilenced,
         });
       }
@@ -1044,7 +1528,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       onExecuteSystemCommand,
       stageContent,
       mediaPaused,
-      conversation,
       memory,
       agenda,
       tasks,
@@ -1054,6 +1537,11 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       currentMediaState,
       activeBuilderProjectName,
       activeBuilderFiles,
+      liveBuild,
+      builderProgressPct,
+      readingStatus.active,
+      readingStatus.paused,
+      onTriggerBackgroundBuild,
       activeDoc,
       applyJarvisActions,
       voiceEnabled,
@@ -1081,12 +1569,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   useEffect(() => {
     externalModuleRef.current = (tab: JarvisModuleTab) => {
       setActiveModule(tab);
-      setMobileSection('modules');
+      updatePanelOpen(true);
     };
     return () => {
       externalModuleRef.current = null;
     };
-  }, [externalModuleRef]);
+  }, [externalModuleRef, updatePanelOpen]);
 
   useEffect(() => {
     externalRepeatRef.current = () => {
@@ -1229,8 +1717,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const moduleTabs: Array<{ id: JarvisModuleTab; label: string; icon: React.ReactNode }> = [
     { id: 'voz', label: 'Voz', icon: <Mic className="w-3.5 h-3.5" /> },
     { id: 'sistema', label: 'Sistema', icon: <Cpu className="w-3.5 h-3.5" /> },
-    { id: 'agenda', label: 'Agenda', icon: <Calendar className="w-3.5 h-3.5" /> },
     { id: 'musica', label: 'Música', icon: <Music2 className="w-3.5 h-3.5" /> },
+    { id: 'agenda', label: 'Agenda', icon: <Calendar className="w-3.5 h-3.5" /> },
     { id: 'documentos', label: 'Docs', icon: <FileText className="w-3.5 h-3.5" /> },
     { id: 'tarefas', label: 'Tarefas', icon: <CheckSquare className="w-3.5 h-3.5" /> },
   ];
@@ -1252,11 +1740,99 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       ? Math.min(100, Math.round((telemetry.jsHeapUsedMb / telemetry.jsHeapLimitMb) * 100))
       : null;
 
+  // Métricas visuais animadas dos anéis de NÚCLEO SISTEMA baseadas em estado real
+  const cpuPct = useMemo(() => {
+    const base = isThinking ? 76 : isSaraSpeaking ? 52 : isListening ? 38 : 26;
+    const wave = Math.round(Math.sin(hudPulseTick * 0.85) * 6 + Math.cos(hudPulseTick * 0.4) * 3);
+    return Math.max(12, Math.min(98, base + wave));
+  }, [hudPulseTick, isThinking, isSaraSpeaking, isListening]);
+
+  const memPct = useMemo(() => {
+    if (jsHeapPct !== null) return Math.max(18, Math.min(95, jsHeapPct));
+    return 48 + Math.round(Math.sin(hudPulseTick * 0.35) * 3);
+  }, [jsHeapPct, hudPulseTick]);
+
+  const coreTempC = useMemo(() => {
+    const base = isThinking ? 58 : isSaraSpeaking ? 51 : 44;
+    return base + (hudPulseTick % 3);
+  }, [hudPulseTick, isThinking, isSaraSpeaking]);
+
+  const neuralPct = isThinking ? thinkingPercent || 78 : isSaraSpeaking ? 94 : 64 + (hudPulseTick % 7);
+
+  // Calendário mensal real
+  const calendarCells = useMemo(() => {
+    const yr = now.getFullYear();
+    const mo = now.getMonth();
+    const firstWeekday = new Date(yr, mo, 1).getDay();
+    const daysInMonth = new Date(yr, mo + 1, 0).getDate();
+    const cells: Array<number | null> = [];
+    for (let i = 0; i < firstWeekday; i++) cells.push(null);
+    for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+    return cells;
+  }, [now]);
+
+  const todayIso = now.toISOString().slice(0, 10);
+  const todayAgendaItems = useMemo(
+    () => agenda.filter((a) => a.date === todayIso).slice(0, 3),
+    [agenda, todayIso]
+  );
+
+  const activeHeadline =
+    hudFeed.news.length > 0
+      ? hudFeed.news[newsIndex % hudFeed.news.length]
+      : null;
+
+  const renderRingGauge = (
+    valueText: string,
+    pct: number,
+    label: string,
+    colorHex: string
+  ) => {
+    const r = 21;
+    const circ = 2 * Math.PI * r;
+    const clamped = Math.max(4, Math.min(100, pct));
+    const offset = circ - (clamped / 100) * circ;
+    return (
+      <div className="flex flex-col items-center">
+        <div className="relative w-14 h-14 flex items-center justify-center">
+          <svg className="w-14 h-14 -rotate-90" viewBox="0 0 54 54">
+            <circle
+              cx="27"
+              cy="27"
+              r={r}
+              fill="none"
+              stroke="rgba(0, 229, 255, 0.14)"
+              strokeWidth="4"
+            />
+            <circle
+              cx="27"
+              cy="27"
+              r={r}
+              fill="none"
+              stroke={colorHex}
+              strokeWidth="4"
+              strokeLinecap="round"
+              strokeDasharray={circ}
+              strokeDashoffset={offset}
+              className="transition-all duration-700"
+            />
+          </svg>
+          <span className="absolute text-[10px] font-mono font-bold text-white tabular-nums">
+            {valueText}
+          </span>
+        </div>
+        <span className="text-[9px] font-mono tracking-widest text-slate-400 mt-0.5 uppercase">
+          {label}
+        </span>
+      </div>
+    );
+  };
+
   return (
-    <div className="flex-1 min-h-0 flex flex-col bg-[#030712] text-white overflow-hidden relative">
+    <div className="flex-1 min-h-0 flex flex-col bg-[#020612] text-white overflow-hidden relative">
       {/* Alarme a tocar no topo */}
       {activeRingingAlarm && (
-        <div className="z-40 px-4 py-2.5 bg-gradient-to-r from-[#FF2A4B]/30 via-[#081529] to-[#00E5FF]/25 border-b border-[#FF2A4B] flex items-center justify-between gap-3">
+        <div className="z-50 px-4 py-2 bg-gradient-to-r from-[#FF2A4B]/30 via-[#081529] to-[#00E5FF]/25 border-b border-[#FF2A4B] flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-white">
             <BellRing className="w-4 h-4 text-[#FF2A4B] animate-bounce" />
             <span>
@@ -1273,60 +1849,74 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         </div>
       )}
 
-      {/* Abas em Telemóvel (< lg) */}
-      {!focusMode && (
-        <nav className="lg:hidden grid grid-cols-3 bg-[#050C1D] border-b border-cyan-500/25 shrink-0">
-          <button
-            type="button"
-            onClick={() => setMobileSection('stage')}
-            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
-              mobileSection === 'stage'
-                ? 'border-[#00E5FF] text-cyan-300 bg-[#08152E]'
-                : 'border-transparent text-slate-400'
-            }`}
+      {/* GAVETA DESLIZANTE ÚNICA [☰ PAINEL] — Módulos & Navegação fora da vista principal */}
+      {isPanelOpen && (
+        <div className="fixed inset-0 z-50 flex">
+          <div
+            className="flex-1 bg-black/65"
+            onClick={() => updatePanelOpen(false)}
+          />
+          <div
+            ref={drawerRef}
+            className="order-first w-[330px] sm:w-[365px] max-w-[92vw] h-full bg-[#040B1A] border-r border-cyan-500/35 shadow-[0_0_40px_rgba(0,229,255,0.22)] flex flex-col overflow-hidden"
           >
-            SARA Palco
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileSection('modules')}
-            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
-              mobileSection === 'modules'
-                ? 'border-[#FF2A4B] text-rose-300 bg-[#08152E]'
-                : 'border-transparent text-slate-400'
-            }`}
-          >
-            Módulos ({tasks.filter((t) => !t.done).length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileSection('telemetry')}
-            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
-              mobileSection === 'telemetry'
-                ? 'border-[#00E5FF] text-cyan-300 bg-[#08152E]'
-                : 'border-transparent text-slate-400'
-            }`}
-          >
-            Conversa & Memória
-          </button>
-        </nav>
-      )}
+            {/* Cabeçalho da gaveta */}
+            <div className="px-4 py-3 border-b border-cyan-500/25 bg-[#030814] flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2">
+                <LayoutDashboard className="w-4 h-4 text-[#00E5FF]" />
+                <span className="text-xs font-mono font-bold tracking-widest uppercase text-cyan-200">
+                  PAINEL DE CONTROLO SARA
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => updatePanelOpen(false)}
+                className="p-1.5 rounded-lg bg-[#08152B] border border-cyan-500/25 text-slate-300 hover:text-white cursor-pointer"
+                title="Fechar painel"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-      {/* Grade principal HUD: 3 colunas (ou Centro puro no Modo Foco) */}
-      <div
-        className={`flex-1 min-h-0 flex flex-col ${
-          focusMode ? 'lg:flex' : 'lg:grid lg:grid-cols-[26fr_48fr_26fr]'
-        } overflow-hidden`}
-      >
-        {/* PAINEL ESQUERDO: MÓDULOS JARVIS */}
-        {!focusMode && (
-          <aside
-            className={`h-full min-h-0 bg-[#050B18] border-r border-cyan-500/25 flex-col overflow-hidden ${
-              mobileSection === 'modules' ? 'flex flex-1' : 'hidden lg:flex'
-            }`}
-          >
-            {/* Navegação dos 6 módulos */}
-            <div className="p-2 grid grid-cols-3 gap-1.5 border-b border-cyan-500/20 bg-[#040915]">
+            {/* Navegação de Sistema: Assistente / Builder / Configurações */}
+            <div className="p-2.5 grid grid-cols-3 gap-1.5 border-b border-cyan-500/20 bg-[#030815] shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setFocusMode(false);
+                  updatePanelOpen(false);
+                }}
+                className="py-2 px-2 rounded-xl bg-cyan-500/15 border border-cyan-400/50 text-cyan-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:bg-cyan-500/25"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Assistente</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  updatePanelOpen(false);
+                  onSwitchMode('builder');
+                }}
+                className="py-2 px-2 rounded-xl bg-[#071126] border border-cyan-500/25 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:border-cyan-400"
+              >
+                <Hammer className="w-3.5 h-3.5 text-rose-400" />
+                <span>Builder</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  updatePanelOpen(false);
+                  onOpenSettings?.();
+                }}
+                className="py-2 px-2 rounded-xl bg-[#071126] border border-cyan-500/25 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:border-cyan-400"
+              >
+                <Settings className="w-3.5 h-3.5 text-cyan-300" />
+                <span>Config</span>
+              </button>
+            </div>
+
+            {/* Abas dos 6 módulos dentro da gaveta */}
+            <div className="p-2 grid grid-cols-3 gap-1.5 border-b border-cyan-500/20 bg-[#040915] shrink-0">
               {moduleTabs.map((tab) => (
                 <button
                   key={tab.id}
@@ -1344,7 +1934,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               ))}
             </div>
 
-            {/* Conteúdo do módulo ativo */}
+            {/* Conteúdo interativo do módulo ativo */}
             <div className="flex-1 min-h-0 overflow-y-auto sara-scroll p-3 space-y-3">
               {activeModule === 'voz' && (
                 <div className="space-y-3">
@@ -1376,11 +1966,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                             : 'bg-cyan-500/20 border-cyan-400/60 text-cyan-200 hover:bg-cyan-500/30'
                         }`}
                       >
-                        {isListening ? (
-                          <Mic className="w-4 h-4 animate-pulse" />
-                        ) : (
-                          <MicOff className="w-4 h-4" />
-                        )}
+                        {isListening ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
                         <span>{isListening ? 'Desligar Mic' : 'Ativar Mãos-Livres'}</span>
                       </button>
                       <button
@@ -1404,14 +1990,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                         className="w-full py-2 rounded-xl bg-rose-500/20 border border-rose-400/60 text-rose-200 text-xs font-bold flex items-center justify-center gap-2 hover:bg-rose-500/30 cursor-pointer"
                       >
                         <Square className="w-3.5 h-3.5 fill-current" />
-                        <span>Interromper SARA e Falar (Esc / Espaço)</span>
+                        <span>Interromper SARA e Falar</span>
                       </button>
                     )}
                   </div>
 
                   <div className="space-y-1.5">
                     <div className="text-[10px] font-mono uppercase tracking-widest text-rose-300">
-                      Sugestões para Testar
+                      Comandos Rápidos
                     </div>
                     {[
                       'Explica física quântica de forma simples e depois profunda',
@@ -1420,13 +2006,15 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       'Notícias de Moçambique e do mundo resumidas em 1 minuto',
                       'Quanto vale 1500 Meticais em ZAR, Dólar e Euro hoje?',
                       'Cria uma planilha de controlo de vendas e lucro em HTML',
-                      'Conta uma piada curta e dá uma frase top de status',
                       'Toca música de Alan Walker no YouTube',
                     ].map((cmd) => (
                       <button
                         key={cmd}
                         type="button"
-                        onClick={() => void sendJarvisPrompt(cmd, 'text')}
+                        onClick={() => {
+                          updatePanelOpen(false);
+                          void sendJarvisPrompt(cmd, 'text');
+                        }}
                         className="w-full text-left px-3 py-2 rounded-xl bg-[#071126] border border-cyan-500/20 hover:border-cyan-400/60 text-xs text-slate-200 hover:text-cyan-200 transition cursor-pointer"
                       >
                         {cmd}
@@ -1438,11 +2026,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
               {activeModule === 'sistema' && (
                 <div className="space-y-3">
-                  {/* Telemetria REAL do PC / Browser */}
                   <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/30 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
-                        Telemetria Real do Sistema
+                        Telemetria do Dispositivo
                       </span>
                       <Activity className="w-4 h-4 text-rose-400" />
                     </div>
@@ -1457,133 +2044,34 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           {telemetry.cpuCores ? `${telemetry.cpuCores} núcleos` : 'N/D'}
                         </div>
                       </div>
-
                       <div className="p-2 rounded-xl bg-[#040916] border border-cyan-500/20">
                         <div className="text-[10px] text-slate-400 flex items-center gap-1">
                           <HardDrive className="w-3 h-3 text-rose-300" />
                           <span>RAM Dispositivo</span>
                         </div>
                         <div className="font-mono font-bold text-rose-200 mt-0.5">
-                          {telemetry.deviceMemoryGb ? `~${telemetry.deviceMemoryGb} GB` : 'N/D navegador'}
+                          {telemetry.deviceMemoryGb ? `~${telemetry.deviceMemoryGb} GB` : 'N/D'}
                         </div>
                       </div>
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between text-[11px] mb-1">
-                        <span className="text-slate-400">Heap JS da Aba</span>
-                        <span className="font-mono text-cyan-300">
-                          {telemetry.jsHeapUsedMb !== null && telemetry.jsHeapLimitMb !== null
-                            ? `${telemetry.jsHeapUsedMb} / ${telemetry.jsHeapLimitMb} MB (${jsHeapPct}%)`
-                            : 'Indisponível neste navegador'}
-                        </span>
-                      </div>
-                      {jsHeapPct !== null && (
-                        <div className="h-1.5 rounded-full bg-[#030712] overflow-hidden border border-cyan-500/20">
-                          <div
-                            className="h-full bg-gradient-to-r from-[#00E5FF] to-[#FF2A4B] transition-all duration-500"
-                            style={{ width: `${jsHeapPct}%` }}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between text-[11px] mb-1">
-                        <span className="text-slate-400 flex items-center gap-1">
-                          {telemetry.batteryCharging ? (
-                            <BatteryCharging className="w-3.5 h-3.5 text-emerald-400" />
-                          ) : (
-                            <BatteryMedium className="w-3.5 h-3.5 text-cyan-300" />
-                          )}
-                          <span>Bateria</span>
-                        </span>
-                        <span className="font-mono text-emerald-300">
-                          {telemetry.batteryPct !== null
-                            ? `${telemetry.batteryPct}% (${
-                                telemetry.batteryCharging ? 'A carregar' : 'Em uso'
-                              })`
-                            : 'Indisponível'}
-                        </span>
-                      </div>
-                      {telemetry.batteryPct !== null && (
-                        <div className="h-1.5 rounded-full bg-[#030712] overflow-hidden border border-emerald-500/20">
-                          <div
-                            className="h-full bg-gradient-to-r from-emerald-400 to-cyan-400 transition-all duration-500"
-                            style={{ width: `${telemetry.batteryPct}%` }}
-                          />
-                        </div>
-                      )}
                     </div>
 
                     <div className="p-2 rounded-xl bg-[#040916] border border-cyan-500/20 flex items-center justify-between text-[11px]">
-                      <span className="flex items-center gap-1.5 text-slate-300">
-                        {telemetry.online ? (
-                          <Wifi className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <WifiOff className="w-3.5 h-3.5 text-rose-400" />
-                        )}
-                        <span>{telemetry.online ? 'Internet Online' : 'Sem Ligação'}</span>
-                      </span>
+                      <span className="text-slate-300">Heap JS da Aba</span>
                       <span className="font-mono text-cyan-300">
-                        {[
-                          telemetry.networkType,
-                          telemetry.downlinkMbps !== null ? `${telemetry.downlinkMbps} Mbps` : null,
-                          telemetry.rttMs !== null ? `${telemetry.rttMs} ms` : null,
-                        ]
-                          .filter(Boolean)
-                          .join(' • ') || telemetry.timezone}
+                        {telemetry.jsHeapUsedMb !== null && telemetry.jsHeapLimitMb !== null
+                          ? `${telemetry.jsHeapUsedMb} / ${telemetry.jsHeapLimitMb} MB (${jsHeapPct}%)`
+                          : 'N/D neste navegador'}
                       </span>
                     </div>
-                  </div>
-
-                  {/* Clima Real via Open-Meteo */}
-                  <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/25 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="text-[10px] font-mono uppercase text-cyan-300">
-                          Clima Ao Vivo (Open-Meteo)
-                        </div>
-                        <div className="text-xs font-bold text-white mt-0.5">{weather.city}</div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => void refreshWeatherNow(true)}
-                        disabled={isRefreshingWeather}
-                        className="p-1.5 rounded-lg bg-[#040916] border border-cyan-500/30 text-cyan-300 hover:text-white cursor-pointer disabled:opacity-50"
-                        title="Atualizar clima real agora"
-                      >
-                        <RefreshCw
-                          className={`w-3.5 h-3.5 ${isRefreshingWeather ? 'animate-spin' : ''}`}
-                        />
-                      </button>
-                    </div>
-
-                    {weather.loadedFromApi && weather.tempC !== null ? (
-                      <div className="flex items-center justify-between">
-                        <div>
-                          <div className="text-xl font-black text-cyan-200">{weather.tempC}°C</div>
-                          <div className="text-[11px] text-slate-300">
-                            {weather.condition} • Sensação {weather.feelsLikeC ?? weather.tempC}°C
-                          </div>
-                          <div className="text-[10px] text-slate-400 mt-0.5">
-                            Humidade {weather.humidityPct ?? '--'}% • Vento {weather.windKmh ?? '--'}{' '}
-                            km/h
-                          </div>
-                        </div>
-                        <CloudSun className="w-8 h-8 text-cyan-300 shrink-0" />
-                      </div>
-                    ) : (
-                      <div className="text-xs text-amber-300">
-                        {weather.errorMsg || 'Não consegui buscar o clima real agora.'}
-                      </div>
-                    )}
                   </div>
 
                   <div className="grid grid-cols-1 gap-2">
                     <button
                       type="button"
-                      onClick={handleTriggerDailyRoutine}
+                      onClick={() => {
+                        updatePanelOpen(false);
+                        handleTriggerDailyRoutine();
+                      }}
                       className="w-full py-2.5 px-3 rounded-xl bg-cyan-500/15 border border-cyan-400/50 text-cyan-200 text-xs font-bold flex items-center justify-center gap-2 hover:bg-cyan-500/25 cursor-pointer"
                     >
                       <Sun className="w-4 h-4" />
@@ -1593,22 +2081,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setFocusMode(true);
-                        setMood('focus');
+                        setFocusMode(!focusMode);
+                        setMood(!focusMode ? 'focus' : 'idle');
+                        updatePanelOpen(false);
                       }}
                       className="w-full py-2.5 px-3 rounded-xl bg-rose-500/15 border border-rose-400/50 text-rose-200 text-xs font-bold flex items-center justify-center gap-2 hover:bg-rose-500/25 cursor-pointer"
                     >
                       <Focus className="w-4 h-4" />
-                      <span>Ativar Modo Foco</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => onSwitchMode('builder')}
-                      className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-[#00E5FF]/20 to-[#FF2A4B]/20 border border-cyan-400/50 text-white text-xs font-bold flex items-center justify-center gap-2 hover:opacity-90 cursor-pointer"
-                    >
-                      <Hammer className="w-4 h-4 text-cyan-300" />
-                      <span>Abrir Modo Builder (Criar Apps/Sites)</span>
+                      <span>{focusMode ? 'Sair do Modo Foco' : 'Ativar Modo Foco'}</span>
                     </button>
                   </div>
                 </div>
@@ -1616,7 +2096,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
               {activeModule === 'agenda' && (
                 <div className="space-y-4">
-                  {/* Novo Compromisso */}
                   <div className="p-3 rounded-2xl bg-[#071126] border border-cyan-500/25 space-y-2">
                     <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
                       Novo Compromisso
@@ -1667,14 +2146,13 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     </button>
                   </div>
 
-                  {/* Lista Agenda */}
                   <div className="space-y-1.5">
                     <div className="text-[10px] font-mono uppercase tracking-widest text-slate-400">
                       Agenda ({agenda.length})
                     </div>
                     {agenda.length === 0 ? (
                       <p className="text-xs text-slate-400 py-3 text-center">
-                        Agenda vazia. Pede por voz para marcar algo ou adiciona acima.
+                        Agenda vazia. Pede por voz ou adiciona acima.
                       </p>
                     ) : (
                       agenda.map((ag) => (
@@ -1694,7 +2172,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                             type="button"
                             onClick={() => setAgenda((prev) => prev.filter((x) => x.id !== ag.id))}
                             className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer"
-                            title="Remover"
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
@@ -1703,7 +2180,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     )}
                   </div>
 
-                  {/* Alarmes / Despertador */}
                   <div className="p-3 rounded-2xl bg-[#071126] border border-rose-500/30 space-y-2">
                     <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-rose-300">
                       <AlarmClock className="w-3.5 h-3.5" />
@@ -1800,6 +2276,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                         title: tr.title,
                         track: tr,
                       });
+                      updatePanelOpen(false);
                     }}
                     className="flex gap-1.5"
                   >
@@ -1822,14 +2299,17 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   <div className="space-y-1.5">
                     {playlist.length === 0 ? (
                       <p className="text-xs text-slate-400 text-center py-6">
-                        Sem músicas na fila. Pede qualquer música por voz ou pesquisa acima no YouTube.
+                        Sem músicas na fila. Pede qualquer música por voz ou pesquisa acima.
                       </p>
                     ) : (
                       playlist.map((tr, idx) => (
                         <button
                           key={tr.id}
                           type="button"
-                          onClick={() => handlePlayTrack(tr, idx)}
+                          onClick={() => {
+                            handlePlayTrack(tr, idx);
+                            updatePanelOpen(false);
+                          }}
                           className={`w-full p-2.5 rounded-xl border text-left flex items-center gap-2.5 transition cursor-pointer ${
                             stageContent?.kind === 'music' && stageContent.track.id === tr.id
                               ? 'bg-cyan-500/20 border-cyan-400 text-white'
@@ -1855,7 +2335,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 <div className="space-y-3">
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => {
+                      updatePanelOpen(false);
+                      fileInputRef.current?.click();
+                    }}
                     className="w-full py-3 rounded-2xl bg-gradient-to-r from-cyan-500/20 to-rose-500/20 border border-dashed border-cyan-400/60 text-xs font-bold text-cyan-200 flex items-center justify-center gap-2 hover:bg-cyan-500/25 cursor-pointer"
                   >
                     <Upload className="w-4 h-4" />
@@ -1864,7 +2347,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
                   {documents.length === 0 ? (
                     <p className="text-xs text-slate-400 text-center py-6">
-                      Carrega qualquer PDF, contrato, fatura, foto ou apontamento para eu resumir e extrair os dados.
+                      Carrega qualquer PDF, contrato, fatura ou imagem para análise instantânea.
                     </p>
                   ) : (
                     <div className="space-y-2">
@@ -1888,6 +2371,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                               previewUrl: doc.previewBlobUrl,
                               rawText: doc.textContent,
                             });
+                            updatePanelOpen(false);
                           }}
                           className="w-full p-2.5 rounded-xl bg-[#071126] border border-cyan-500/25 hover:border-cyan-400 text-left transition cursor-pointer"
                         >
@@ -2003,111 +2487,876 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Abas em Telemóvel (< lg) */}
+      {!focusMode && (
+        <nav className="lg:hidden grid grid-cols-3 bg-[#050C1D] border-b border-cyan-500/25 shrink-0">
+          <button
+            type="button"
+            onClick={() => setMobileSection('stage')}
+            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
+              mobileSection === 'stage'
+                ? 'border-[#00E5FF] text-cyan-300 bg-[#08152E]'
+                : 'border-transparent text-slate-400'
+            }`}
+          >
+            Holograma 3D
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileSection('hud')}
+            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
+              mobileSection === 'hud'
+                ? 'border-[#FF2A4B] text-rose-300 bg-[#08152E]'
+                : 'border-transparent text-slate-400'
+            }`}
+          >
+            Telemetria & Clima
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileSection('log')}
+            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
+              mobileSection === 'log'
+                ? 'border-[#00E5FF] text-cyan-300 bg-[#08152E]'
+                : 'border-transparent text-slate-400'
+            }`}
+          >
+            Log & Rede
+          </button>
+        </nav>
+      )}
+
+      {/* GRADE PRINCIPAL STARK HUD: 3 COLUNAS DENSAS E VIVAS (SEM ABAS DE MÓDULOS EXPOSTAS) */}
+      <div
+        className={`flex-1 min-h-0 flex flex-col ${
+          focusMode
+            ? 'lg:flex'
+            : 'lg:grid lg:grid-cols-[305px_1fr_315px] xl:grid-cols-[325px_1fr_335px]'
+        } overflow-hidden`}
+      >
+        {/* =======================================================
+            COLUNA ESQUERDA: NÚCLEO + DIAGNÓSTICO + CLIMA + TAREFAS + CALENDÁRIO + MOÇAMBIQUE AO VIVO
+           ======================================================= */}
+        {!focusMode && (
+          <aside
+            className={`h-full min-h-0 bg-[#040916] border-r border-cyan-500/25 flex-col overflow-y-auto sara-scroll p-2.5 space-y-2.5 ${
+              mobileSection === 'hud' ? 'flex flex-1' : 'hidden lg:flex'
+            }`}
+          >
+            {/* 1. NÚCLEO SISTEMA (3 anéis circulares SVG) */}
+            <div className="p-2.5 rounded-2xl bg-[#071125]/90 border border-cyan-500/25 space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
+                <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                  <Cpu className="w-3.5 h-3.5 text-[#00E5FF]" />
+                  NÚCLEO SISTEMA
+                </span>
+                <span className="text-emerald-300 font-bold">ATIVO</span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 pt-0.5">
+                {renderRingGauge(`${cpuPct}%`, cpuPct, 'CPU', '#00E5FF')}
+                {renderRingGauge(`${memPct}%`, memPct, 'MEM', '#38BDF8')}
+                {renderRingGauge(`${coreTempC}°C`, coreTempC + 10, 'NÚCLEO', '#FF2A4B')}
+              </div>
+            </div>
+
+            {/* 2. DIAGNÓSTICO + GRÁFICO SPARKLINE CHART.JS AO VIVO */}
+            <div className="p-2.5 rounded-2xl bg-[#071125]/90 border border-cyan-500/25 space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
+                <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-[#FF2A4B]" />
+                  DIAGNÓSTICO
+                </span>
+                <span className={telemetry.online ? 'text-emerald-300' : 'text-rose-400'}>
+                  {telemetry.online ? 'Rede ESTÁVEL' : 'OFFLINE'}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
+                <div className="px-2 py-1 rounded-lg bg-[#030814] border border-cyan-500/15">
+                  <div className="text-[9px] text-slate-400">DOWNLINK</div>
+                  <div className="text-cyan-200 font-bold tabular-nums">
+                    {telemetry.downlinkMbps !== null ? `${telemetry.downlinkMbps} Mbps` : '10+ Mbps'}
+                  </div>
+                </div>
+                <div className="px-2 py-1 rounded-lg bg-[#030814] border border-cyan-500/15">
+                  <div className="text-[9px] text-slate-400">SEGURANÇA</div>
+                  <div className="text-emerald-300 font-bold flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3" />
+                    <span>ATIVO</span>
+                  </div>
+                </div>
+                <div className="px-2 py-1 rounded-lg bg-[#030814] border border-cyan-500/15">
+                  <div className="text-[9px] text-slate-400">LATÊNCIA</div>
+                  <div className="text-rose-300 font-bold tabular-nums">
+                    {telemetry.rttMs !== null ? `${telemetry.rttMs} ms` : '24 ms'}
+                  </div>
+                </div>
+              </div>
+              <div className="h-12 w-full pt-0.5">
+                <canvas ref={diagChartCanvasRef} className="w-full h-full" />
+              </div>
+            </div>
+
+            {/* 3. CLIMA AO VIVO REAL (INHAMBANE OPEN-METEO + UV + PREVISÃO 3H) */}
+            <div className="p-2.5 rounded-2xl bg-[#071125]/90 border border-cyan-500/25 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300 flex items-center gap-1">
+                    <CloudSun className="w-3.5 h-3.5" />
+                    <span>CLIMA AO VIVO</span>
+                  </div>
+                  <div className="text-[11px] font-bold text-white truncate max-w-[220px]">
+                    {weather.city}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refreshWeatherNow(true)}
+                  disabled={isRefreshingWeather}
+                  className="p-1 rounded-lg bg-[#030814] border border-cyan-500/25 text-cyan-300 hover:text-white cursor-pointer disabled:opacity-50"
+                  title="Atualizar clima real"
+                >
+                  <RefreshCw className={`w-3 h-3 ${isRefreshingWeather ? 'animate-spin' : ''}`} />
+                </button>
+              </div>
+
+              {weather.loadedFromApi && weather.tempC !== null ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-black text-cyan-200 tabular-nums">
+                          {weather.tempC}°C
+                        </span>
+                        <span className="text-[10px] text-slate-400">
+                          Sens. {weather.feelsLikeC ?? weather.tempC}°C
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-slate-200">{weather.condition}</div>
+                    </div>
+                    <div className="text-right text-[10px] font-mono text-slate-300 space-y-0.5">
+                      <div>
+                        HUM <span className="text-cyan-300">{weather.humidityPct ?? '--'}%</span>
+                      </div>
+                      <div>
+                        VENTO{' '}
+                        <span className="text-cyan-300">
+                          {weather.windKmh ?? '--'}km/h {weather.windDirectionLabel || ''}
+                        </span>
+                      </div>
+                      <div>
+                        UV{' '}
+                        <span className="text-rose-300 font-bold">
+                          {weather.uvIndex !== null ? weather.uvIndex : '--'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {weather.hourlyForecast && weather.hourlyForecast.length > 0 && (
+                    <div className="grid grid-cols-3 gap-1.5 pt-1 border-t border-cyan-500/15">
+                      {weather.hourlyForecast.map((hf) => (
+                        <div
+                          key={hf.time}
+                          className="px-1.5 py-1 rounded-lg bg-[#030814] border border-cyan-500/15 text-center"
+                        >
+                          <div className="text-[9px] font-mono text-slate-400">{hf.time}</div>
+                          <div className="text-[11px] font-bold text-cyan-200 tabular-nums">
+                            {hf.tempC}°C
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="text-[11px] text-amber-300">
+                  {weather.errorMsg || 'A obter dados reais de Inhambane...'}
+                </div>
+              )}
+            </div>
+
+            {/* 4. BARRA COMPACTA: BATERIA • INTERNET • HORA • DATA */}
+            <div className="px-2.5 py-2 rounded-xl bg-[#071125]/90 border border-cyan-500/20 grid grid-cols-2 gap-1.5 text-[10px] font-mono">
+              <div className="flex items-center gap-1.5 text-emerald-300">
+                {telemetry.batteryCharging ? (
+                  <BatteryCharging className="w-3.5 h-3.5" />
+                ) : (
+                  <BatteryMedium className="w-3.5 h-3.5 text-cyan-300" />
+                )}
+                <span>
+                  BAT {telemetry.batteryPct !== null ? `${telemetry.batteryPct}%` : 'AC/LINE'}
+                </span>
+              </div>
+              <div className="flex items-center justify-end gap-1.5 text-cyan-200">
+                {telemetry.online ? (
+                  <Wifi className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <WifiOff className="w-3.5 h-3.5 text-rose-400" />
+                )}
+                <span>{telemetry.online ? telemetry.networkType || 'ONLINE' : 'OFFLINE'}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-slate-300">
+                <Clock className="w-3.5 h-3.5 text-cyan-400" />
+                <span className="tabular-nums">{timeFormatted}</span>
+              </div>
+              <div className="flex items-center justify-end gap-1.5 text-slate-400">
+                <Calendar className="w-3 h-3 text-rose-400" />
+                <span className="truncate">{todayFormatted}</span>
+              </div>
+            </div>
+
+            {/* 5. TAREFAS PRIORITÁRIAS (REAIS) */}
+            <div className="p-2.5 rounded-2xl bg-[#071125]/90 border border-cyan-500/25 space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
+                <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                  <CheckSquare className="w-3.5 h-3.5" />
+                  TAREFAS PRIORITÁRIAS
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveModule('tarefas');
+                    updatePanelOpen(true);
+                  }}
+                  className="text-[10px] text-rose-300 hover:text-white cursor-pointer"
+                >
+                  + Gerir
+                </button>
+              </div>
+              {tasks.length === 0 ? (
+                <div className="text-[11px] text-slate-400 py-1">
+                  Sem tarefas ativas. Pede por voz ou abre{' '}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveModule('tarefas');
+                      updatePanelOpen(true);
+                    }}
+                    className="text-cyan-300 underline cursor-pointer"
+                  >
+                    Tarefas
+                  </button>
+                  .
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  {tasks.slice(0, 4).map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() =>
+                        setTasks((prev) =>
+                          prev.map((x) => (x.id === t.id ? { ...x, done: !x.done } : x))
+                        )
+                      }
+                      className="w-full px-2 py-1 rounded-lg bg-[#030814] border border-cyan-500/15 hover:border-cyan-400/50 flex items-center gap-2 text-left text-[11px] cursor-pointer"
+                    >
+                      {t.done ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      ) : (
+                        <Circle className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+                      )}
+                      <span
+                        className={`truncate flex-1 ${
+                          t.done ? 'line-through text-slate-500' : 'text-slate-200'
+                        }`}
+                      >
+                        {t.title}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 6. CALENDÁRIO DO MÊS + AGENDA DE HOJE */}
+            <div className="p-2.5 rounded-2xl bg-[#071125]/90 border border-cyan-500/25 space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
+                <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5" />
+                  {now.toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveModule('agenda');
+                    updatePanelOpen(true);
+                  }}
+                  className="text-[10px] text-cyan-300 hover:text-white cursor-pointer"
+                >
+                  Agenda ({agenda.length})
+                </button>
+              </div>
+              <div className="grid grid-cols-7 gap-0.5 text-center text-[9px] font-mono">
+                {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((d, i) => (
+                  <div key={i} className="text-slate-500 pb-0.5">
+                    {d}
+                  </div>
+                ))}
+                {calendarCells.map((day, idx) => {
+                  const isToday = day === now.getDate();
+                  return (
+                    <div
+                      key={idx}
+                      className={`py-0.5 rounded ${
+                        day === null
+                          ? ''
+                          : isToday
+                          ? 'bg-[#00E5FF] text-[#020612] font-black shadow-[0_0_8px_rgba(0,229,255,0.6)]'
+                          : 'text-slate-300'
+                      }`}
+                    >
+                      {day ?? ''}
+                    </div>
+                  );
+                })}
+              </div>
+              {todayAgendaItems.length > 0 && (
+                <div className="pt-1 border-t border-cyan-500/15 space-y-1">
+                  {todayAgendaItems.map((ag) => (
+                    <div
+                      key={ag.id}
+                      className="text-[10px] flex items-center justify-between gap-2 text-cyan-200 bg-[#030814] px-2 py-1 rounded"
+                    >
+                      <span className="truncate">{ag.title}</span>
+                      <span className="font-mono text-rose-300 shrink-0">{ag.time}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 7. NOTÍCIAS RÁPIDAS + COTAÇÃO MZN REAL + FRASE DO DIA */}
+            <div className="p-2.5 rounded-2xl bg-[#071125]/90 border border-cyan-500/25 space-y-2">
+              <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
+                <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                  <Globe className="w-3.5 h-3.5 text-[#00E5FF]" />
+                  MOÇAMBIQUE AO VIVO
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void refreshHudFeedNow(true)}
+                  className="text-slate-400 hover:text-cyan-300 cursor-pointer"
+                  title="Atualizar cotação e notícias"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                </button>
+              </div>
+
+              {/* Cotação Metical (MZN) */}
+              <div className="grid grid-cols-3 gap-1 text-center font-mono text-[10px]">
+                <div className="px-1.5 py-1 rounded-lg bg-[#030814] border border-cyan-500/15">
+                  <div className="text-[8px] text-slate-400">1 USD</div>
+                  <div className="text-cyan-200 font-bold tabular-nums">
+                    {hudFeed.fx?.mznPerUsd ? `${hudFeed.fx.mznPerUsd} MT` : '--'}
+                  </div>
+                </div>
+                <div className="px-1.5 py-1 rounded-lg bg-[#030814] border border-cyan-500/15">
+                  <div className="text-[8px] text-slate-400">1 EUR</div>
+                  <div className="text-cyan-200 font-bold tabular-nums">
+                    {hudFeed.fx?.mznPerEur ? `${hudFeed.fx.mznPerEur} MT` : '--'}
+                  </div>
+                </div>
+                <div className="px-1.5 py-1 rounded-lg bg-[#030814] border border-cyan-500/15">
+                  <div className="text-[8px] text-slate-400">1 ZAR</div>
+                  <div className="text-rose-300 font-bold tabular-nums">
+                    {hudFeed.fx?.mznPerZar ? `${hudFeed.fx.mznPerZar} MT` : '--'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Notícia 1 linha RSS real */}
+              <div className="px-2 py-1.5 rounded-lg bg-[#030814] border border-cyan-500/15 flex items-center gap-1.5 text-[10px]">
+                <Newspaper className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                {activeHeadline ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void sendJarvisPrompt(`Resume esta notícia: ${activeHeadline}`, 'text')
+                    }
+                    className="truncate text-left text-slate-200 hover:text-cyan-200 flex-1 cursor-pointer"
+                    title={activeHeadline}
+                  >
+                    {activeHeadline}
+                  </button>
+                ) : (
+                  <span className="truncate text-slate-400">
+                    Feed RSS Moçambique pronto quando online.
+                  </span>
+                )}
+                {hudFeed.news.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setNewsIndex((i) => i + 1)}
+                    className="text-cyan-400 hover:text-white shrink-0 cursor-pointer"
+                    title="Próxima manchete"
+                  >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Frase do Dia */}
+              <div className="text-[10px] italic text-cyan-200/80 border-l-2 border-[#FF2A4B]/70 pl-2">
+                “{DAILY_QUOTES[quoteIndex]}”
+              </div>
+            </div>
           </aside>
         )}
 
-        {/* CENTRO DO PALCO: CABEÇA HOLOGRÁFICA STARK + CONTEÚDO VISUAL DINÂMICO */}
+        {/* =======================================================
+            CENTRO DO PALCO: HOLOGRAMA 3D STARK + TELEMETRIA HUD + PREVIEW DINÂMICO
+           ======================================================= */}
         <section
-          className={`h-full min-h-0 flex flex-col relative overflow-hidden bg-[radial-gradient(circle_at_50%_35%,rgba(0,229,255,0.12),rgba(5,11,26,0.98)_65%,#02050D)] ${
+          className={`h-full min-h-0 flex flex-col relative overflow-hidden bg-[radial-gradient(circle_at_50%_38%,rgba(0,229,255,0.12),rgba(4,9,22,0.98)_65%,#02050D)] ${
             focusMode || mobileSection === 'stage' ? 'flex flex-1' : 'hidden lg:flex'
           }`}
         >
-          {/* Cantoneiras neon azul elétrico e vermelho estilo Armadura Stark */}
-          <div className="pointer-events-none absolute top-2 left-2 w-6 h-6 border-t-2 border-l-2 border-[#00E5FF]" />
-          <div className="pointer-events-none absolute top-2 right-2 w-6 h-6 border-t-2 border-r-2 border-[#FF2A4B]" />
-          <div className="pointer-events-none absolute bottom-2 left-2 w-6 h-6 border-b-2 border-l-2 border-[#FF2A4B]" />
-          <div className="pointer-events-none absolute bottom-2 right-2 w-6 h-6 border-b-2 border-r-2 border-[#00E5FF]" />
+          {/* Cantoneiras Stark azul elétrico + vermelho */}
+          <div className="pointer-events-none absolute top-2 left-2 w-6 h-6 border-t-2 border-l-2 border-[#00E5FF] z-20" />
+          <div className="pointer-events-none absolute top-2 right-2 w-6 h-6 border-t-2 border-r-2 border-[#FF2A4B] z-20" />
+          <div className="pointer-events-none absolute bottom-16 left-2 w-5 h-5 border-b-2 border-l-2 border-[#FF2A4B] z-20" />
+          <div className="pointer-events-none absolute bottom-16 right-2 w-5 h-5 border-b-2 border-r-2 border-[#00E5FF] z-20" />
 
-          {/* Barra superior de telemetria REAL ao vivo do Palco */}
-          <div className="px-4 py-2.5 border-b border-cyan-500/20 bg-[#040A17]/80 backdrop-blur-md flex flex-wrap items-center justify-between gap-2 shrink-0 z-10">
-            <div className="flex items-center gap-3 text-xs font-mono">
-              <span className="text-cyan-300 font-bold tracking-wider">{timeFormatted}</span>
-              <span className="text-slate-400 hidden sm:inline">{todayFormatted}</span>
+          {/* Barra superior HUD do Palco Central */}
+          <div className="px-4 py-2 border-b border-cyan-500/20 bg-[#040A17]/90 flex flex-wrap items-center justify-between gap-2 shrink-0 z-10">
+            <div className="flex items-center gap-2.5 text-[10px] sm:text-[11px] font-mono">
+              <span className="text-cyan-300 font-bold tracking-wider">IDENT: SARA v3.7.1</span>
+              <span className="text-slate-600 hidden md:inline">|</span>
+              <span className="text-slate-300 hidden md:inline">CLASSE: ASSISTENTE PESSOAL</span>
+              <span className="text-slate-600 hidden xl:inline">|</span>
+              <span className="text-emerald-300 hidden xl:inline">
+                SINAL {telemetry.online ? '98%' : 'OFF'} • SYNC: ESTÁVEL
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2.5">
               <span
-                className={`flex items-center gap-1 ${
+                className={`flex items-center gap-1 text-[10px] font-mono ${
                   weather.loadedFromApi ? 'text-rose-300' : 'text-amber-300'
                 }`}
-                title={weather.errorMsg || weather.condition}
               >
                 <CloudSun className="w-3.5 h-3.5" />
                 {shortCityName}{' '}
                 {weather.loadedFromApi && weather.tempC !== null ? `${weather.tempC}°C` : '--'}
               </span>
-            </div>
 
-            <div className="flex items-center gap-3">
-              {/* Estado REAL da Rede e Bateria / CPU */}
-              <div className="hidden sm:flex items-center gap-2 text-[10px] font-mono">
-                <span
-                  className={`px-2 py-0.5 rounded border ${
-                    telemetry.online
-                      ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300'
-                      : 'bg-rose-500/15 border-rose-400/40 text-rose-300'
-                  }`}
-                >
-                  {telemetry.online ? telemetry.networkType || 'ONLINE' : 'OFFLINE'}
-                </span>
-                {telemetry.batteryPct !== null ? (
-                  <span className="text-cyan-300">BAT {telemetry.batteryPct}%</span>
-                ) : telemetry.cpuCores ? (
-                  <span className="text-cyan-300">{telemetry.cpuCores} CORES</span>
-                ) : null}
-              </div>
-
-              {/* Espectro de Voz Animado */}
               <canvas
                 ref={spectrumCanvasRef}
-                width={128}
-                height={20}
-                className="w-28 h-5 rounded"
+                width={112}
+                height={18}
+                className="w-24 h-4.5 rounded"
               />
 
-              {focusMode && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFocusMode(false);
-                    setMood('idle');
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-400/60 text-rose-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  <EyeOff className="w-3 h-3" />
-                  <span>Sair Foco</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !focusMode;
+                  setFocusMode(next);
+                  setMood(next ? 'focus' : 'idle');
+                }}
+                className={`px-2 py-1 rounded-lg border text-[10px] font-mono font-bold flex items-center gap-1 cursor-pointer ${
+                  focusMode
+                    ? 'bg-rose-500/20 border-rose-400/60 text-rose-200'
+                    : 'bg-[#071126] border-cyan-500/30 text-cyan-300 hover:border-cyan-400'
+                }`}
+                title={focusMode ? 'Mostrar colunas laterais HUD' : 'Modo Foco no palco central'}
+              >
+                {focusMode ? <EyeOff className="w-3 h-3" /> : <Focus className="w-3 h-3" />}
+                <span className="hidden sm:inline">{focusMode ? 'Sair Foco' : 'Foco'}</span>
+              </button>
             </div>
           </div>
 
           {/* Palco Principal Dinâmico */}
-          <div className="flex-1 min-h-0 p-3 sm:p-4 overflow-hidden relative flex flex-col">
+          <div className="flex-1 min-h-0 p-2.5 sm:p-3 overflow-hidden relative flex flex-col">
             {!stageContent ? (
-              <div className="flex-1 flex flex-col items-center justify-center relative">
-                <SaraJarvisHead
-                  mood={effectiveMood}
-                  isSpeaking={isSaraSpeaking}
-                  isListening={isListening}
-                  isThinking={isThinking}
-                  size="full"
-                />
+              <div className="flex-1 min-h-0 flex flex-col items-center justify-between relative">
+                {/* Colchetes de telemetria flutuantes nas laterais do holograma */}
+                <div className="hidden xl:flex pointer-events-none absolute left-4 top-6 flex-col gap-1 text-[9px] font-mono text-cyan-300/75">
+                  <span>// BIOMETRIA VOCAL: CALIBRADA</span>
+                  <span>// GEOLOC: INHAMBANE (-23.86°, 35.38°)</span>
+                  <span>// MODO: {effectiveMood.toUpperCase()}</span>
+                </div>
+                <div className="hidden xl:flex pointer-events-none absolute right-4 top-6 flex-col items-end gap-1 text-[9px] font-mono text-rose-300/75">
+                  <span>CORE MATRIX :: STARK_OS</span>
+                  <span>ORBITALS: 3 ANÉIS ATIVOS</span>
+                  <span>MEMÓRIA: {memory.facts.length} REGISTOS</span>
+                </div>
 
-                {pendingDoc && (
-                  <div className="mt-3 px-3.5 py-1.5 rounded-xl bg-cyan-500/15 border border-cyan-400/50 text-xs text-cyan-200 flex items-center gap-2">
-                    <FileText className="w-3.5 h-3.5" />
-                    <span>Anexado: {pendingDoc.name}</span>
+                {/* CARDS FLUTUANTES TRANSPARENTES DE 2.º PLANO AO LADO DO HOLOGRAMA (NUNCA SOBRE A CABEÇA) */}
+                {(isListening ||
+                  isThinking ||
+                  liveBuild?.isBuilding ||
+                  completedBackgroundBuild ||
+                  readingStatus.active ||
+                  nextEnabledAlarm) && (
+                  <div className="hidden sm:flex flex-col gap-2 absolute top-14 right-3 z-20 w-[228px] pointer-events-auto">
+                    {isListening && (
+                      <button
+                        type="button"
+                        onClick={onToggleMic}
+                        className="p-2.5 rounded-2xl bg-[#040B1A]/75 backdrop-blur-md border border-emerald-400/45 shadow-[0_0_20px_rgba(16,185,129,0.18)] text-left flex items-center justify-between gap-2 hover:border-emerald-300 transition cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-[10px] font-mono font-bold text-emerald-300 uppercase">
+                              Escuta Ativa
+                            </div>
+                            <div className="text-[10px] text-slate-300 truncate">
+                              Microfone contínuo ligado
+                            </div>
+                          </div>
+                        </div>
+                        <Mic className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                      </button>
+                    )}
+
+                    {liveBuild?.isBuilding && (
+                      <div className="p-2.5 rounded-2xl bg-[#040B1A]/78 backdrop-blur-md border border-cyan-400/45 shadow-[0_0_22px_rgba(0,229,255,0.2)] space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-mono">
+                          <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            BUILDER • 2.º PLANO
+                          </span>
+                          <span className="text-white font-bold tabular-nums">{builderProgressPct}%</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-[#091529] overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-[#00E5FF] to-[#FF2A4B] transition-all duration-500"
+                            style={{ width: `${builderProgressPct}%` }}
+                          />
+                        </div>
+                        <div className="text-[10px] text-slate-200 truncate">
+                          {liveBuild.currentStepLabel ||
+                            liveBuild.activeFile ||
+                            `A construir ${activeBuilderProjectName || 'projeto'}...`}
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pt-0.5">
+                          <span className="text-[9px] font-mono text-slate-400 tabular-nums">
+                            {formatMiniMmSs(liveBuild.elapsedSeconds)} • {liveBuild.createdFiles.length} fich.
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => onSwitchMode('builder')}
+                            className="px-2 py-0.5 rounded-lg bg-cyan-500/20 border border-cyan-400/50 text-[10px] font-bold text-cyan-200 hover:bg-cyan-500/30 cursor-pointer flex items-center gap-1"
+                          >
+                            <span>Abrir</span>
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {!liveBuild?.isBuilding && completedBackgroundBuild && (
+                      <div className="p-2.5 rounded-2xl bg-[#040B1A]/82 backdrop-blur-md border border-emerald-400/55 shadow-[0_0_22px_rgba(16,185,129,0.22)] space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-mono">
+                          <span className="text-emerald-300 font-bold flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            BUILDER CONCLUÍDO
+                          </span>
+                          {onDismissCompletedBuild && (
+                            <button
+                              type="button"
+                              onClick={onDismissCompletedBuild}
+                              className="text-slate-400 hover:text-white cursor-pointer"
+                              title="Fechar aviso"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </div>
+                        <div className="text-[11px] font-semibold text-white truncate">
+                          {completedBackgroundBuild.projectName}
+                        </div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[9px] font-mono text-slate-300">
+                            {completedBackgroundBuild.filesCount} fich. •{' '}
+                            {formatMiniMmSs(completedBackgroundBuild.elapsedSeconds)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onDismissCompletedBuild?.();
+                              onSwitchMode('builder');
+                            }}
+                            className="px-2.5 py-1 rounded-lg bg-emerald-500/25 border border-emerald-400/60 text-[10px] font-bold text-emerald-100 hover:bg-emerald-500/35 cursor-pointer"
+                          >
+                            Ver no Builder
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {readingStatus.active && (
+                      <div className="p-2.5 rounded-2xl bg-[#040B1A]/78 backdrop-blur-md border border-cyan-400/40 space-y-1.5">
+                        <div className="flex items-center justify-between text-[10px] font-mono">
+                          <span className="text-cyan-300 font-bold flex items-center gap-1">
+                            <BookOpen className="w-3 h-3" />
+                            LEITURA • {Math.min(readingStatus.totalChunks, readingStatus.currentIndex + 1)}/{readingStatus.totalChunks}
+                          </span>
+                          <span className="text-[9px] text-rose-300">
+                            {readingStatus.paused ? 'PAUSA' : 'EM CURSO'}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-200 truncate">{readingStatus.title}</div>
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              readingStatus.paused ? resumeVoiceReading() : pauseVoiceReading()
+                            }
+                            className="flex-1 py-1 rounded-lg bg-cyan-500/20 border border-cyan-400/45 text-[10px] font-bold text-cyan-200 flex items-center justify-center gap-1 cursor-pointer"
+                          >
+                            {readingStatus.paused ? (
+                              <>
+                                <Play className="w-2.5 h-2.5" />
+                                <span>Continuar</span>
+                              </>
+                            ) : (
+                              <>
+                                <Pause className="w-2.5 h-2.5" />
+                                <span>Pausar</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => stopVoiceReading()}
+                            className="px-2 py-1 rounded-lg bg-rose-500/20 border border-rose-400/45 text-[10px] font-bold text-rose-200 cursor-pointer"
+                          >
+                            Parar
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {isThinking && (
+                      <div className="p-2.5 rounded-2xl bg-[#040B1A]/78 backdrop-blur-md border border-rose-400/45 space-y-1">
+                        <div className="flex items-center justify-between text-[10px] font-mono">
+                          <span className="text-rose-300 font-bold flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 animate-spin" />
+                            CÁLCULO / ANÁLISE
+                          </span>
+                          <span className="text-cyan-200 font-bold tabular-nums">{thinkingPercent}%</span>
+                        </div>
+                        <div className="h-1 rounded-full bg-[#091529] overflow-hidden">
+                          <div
+                            className="h-full bg-gradient-to-r from-[#00E5FF] to-[#FF2A4B] transition-all duration-300"
+                            style={{ width: `${thinkingPercent}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+
+                    {nextEnabledAlarm && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveModule('agenda');
+                          updatePanelOpen(true);
+                        }}
+                        className="p-2 rounded-2xl bg-[#040B1A]/75 backdrop-blur-md border border-rose-500/35 flex items-center justify-between gap-2 text-left hover:border-rose-400 transition cursor-pointer"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <AlarmClock className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-[10px] font-mono font-bold text-white">
+                              ALARME {nextEnabledAlarm.time}
+                            </div>
+                            <div className="text-[10px] text-slate-300 truncate">
+                              {nextEnabledAlarm.label} • Ativo
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    )}
                   </div>
                 )}
-              </div>
-            ) : stageLayout === 'split' ? (
-              <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-3 items-stretch">
-                <div className="flex items-center justify-center rounded-2xl bg-[#040916]/75 border border-cyan-500/20 p-2">
+
+                {/* Holograma 3D Real Centered */}
+                <div className="flex-1 min-h-0 flex flex-col items-center justify-center w-full">
                   <SaraJarvisHead
                     mood={effectiveMood}
                     isSpeaking={isSaraSpeaking}
                     isListening={isListening}
                     isThinking={isThinking}
-                    size="split"
-                    onClickHead={() => setStageLayout('focus')}
+                    size="full"
                   />
+
+                  {/* Faixa compacta mobile para processos em 2.º plano (sem cobrir o holograma) */}
+                  {(liveBuild?.isBuilding || completedBackgroundBuild || readingStatus.active) && (
+                    <div className="sm:hidden flex flex-wrap items-center justify-center gap-1.5 mt-2 px-2">
+                      {liveBuild?.isBuilding && (
+                        <button
+                          type="button"
+                          onClick={() => onSwitchMode('builder')}
+                          className="px-2.5 py-1 rounded-xl bg-[#040B1A]/85 border border-cyan-400/50 text-[10px] font-mono text-cyan-200 flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          <span>Builder {builderProgressPct}%</span>
+                        </button>
+                      )}
+                      {!liveBuild?.isBuilding && completedBackgroundBuild && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onDismissCompletedBuild?.();
+                            onSwitchMode('builder');
+                          }}
+                          className="px-2.5 py-1 rounded-xl bg-emerald-500/20 border border-emerald-400/60 text-[10px] font-bold text-emerald-100 cursor-pointer"
+                        >
+                          Ver no Builder ({completedBackgroundBuild.projectName})
+                        </button>
+                      )}
+                      {readingStatus.active && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            readingStatus.paused ? resumeVoiceReading() : pauseVoiceReading()
+                          }
+                          className="px-2.5 py-1 rounded-xl bg-cyan-500/20 border border-cyan-400/50 text-[10px] font-bold text-cyan-200 cursor-pointer"
+                        >
+                          {readingStatus.paused ? 'Continuar leitura' : 'Pausar leitura'}
+                        </button>
+                      )}
+                    </div>
+                  )}
+
+                  {pendingDoc && (
+                    <div className="mt-2 px-3.5 py-1.5 rounded-xl bg-cyan-500/15 border border-cyan-400/50 text-xs text-cyan-200 flex items-center gap-2">
+                      <FileText className="w-3.5 h-3.5" />
+                      <span>Anexado: {pendingDoc.name}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Faixa de Telemetria Stark na Base do Palco Holográfico */}
+                <div className="w-full shrink-0 space-y-1.5 z-10">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 text-[10px] font-mono">
+                    <div className="px-2.5 py-1.5 rounded-xl bg-[#040B1A]/90 border border-cyan-500/25 flex items-center gap-1.5">
+                      <Radar className="w-3.5 h-3.5 text-[#00E5FF] shrink-0" />
+                      <div className="min-w-0">
+                        <div className="text-[8px] text-slate-400">RADAR AMBIENTAL</div>
+                        <div className="text-cyan-200 font-bold truncate">VARREDURA 360°</div>
+                      </div>
+                    </div>
+
+                    <div className="px-2.5 py-1.5 rounded-xl bg-[#040B1A]/90 border border-cyan-500/25 flex items-center justify-between">
+                      <div>
+                        <div className="text-[8px] text-slate-400">PROC. NEURAL</div>
+                        <div className="text-cyan-200 font-bold tabular-nums">{neuralPct}%</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-[8px] text-slate-400">APRENDIZADO</div>
+                        <div className="text-emerald-300 font-bold">ATIVO</div>
+                      </div>
+                    </div>
+
+                    <div className="px-2.5 py-1.5 rounded-xl bg-[#040B1A]/90 border border-cyan-500/25">
+                      <div className="text-[8px] text-slate-400">ÁUDIO SINTÉTICO</div>
+                      <div className="text-rose-300 font-bold truncate">
+                        44.1kHz |{' '}
+                        {isSaraSpeaking ? 'VOZ ATIVA' : isListening ? 'ESCUTA' : 'PRONTO'}
+                      </div>
+                    </div>
+
+                    <div className="px-2.5 py-1.5 rounded-xl bg-[#040B1A]/90 border border-cyan-500/25">
+                      <div className="text-[8px] text-slate-400">CLIMA LOCAL ({shortCityName})</div>
+                      <div className="text-cyan-200 font-bold truncate tabular-nums">
+                        {weather.tempC !== null ? `${weather.tempC}°C` : '--'} | UV{' '}
+                        {weather.uvIndex !== null ? weather.uvIndex : '--'} |{' '}
+                        {weather.windKmh !== null ? `${weather.windKmh}km/h` : '--'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="px-3 py-1 rounded-lg bg-[#030815] border border-cyan-500/20 flex items-center justify-between text-[9px] font-mono tracking-widest text-slate-400">
+                    <span className="text-cyan-300">HOLOGRAMA STARK ONLINE</span>
+                    <span className="hidden sm:inline text-emerald-300">NÚCLEO ATIVO</span>
+                    <span className="text-rose-300">ENCRIPTADO AES-256</span>
+                  </div>
+                </div>
+              </div>
+            ) : stageLayout === 'split' ? (
+              <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[260px_1fr] gap-3 items-stretch">
+                <div className="flex flex-col items-center justify-between gap-2 rounded-2xl bg-[#040916]/85 border border-cyan-500/20 p-2 overflow-y-auto sara-scroll">
+                  <div className="flex-1 flex items-center justify-center">
+                    <SaraJarvisHead
+                      mood={effectiveMood}
+                      isSpeaking={isSaraSpeaking}
+                      isListening={isListening}
+                      isThinking={isThinking}
+                      size="split"
+                      onClickHead={() => setStageLayout('focus')}
+                    />
+                  </div>
+                  {(liveBuild?.isBuilding ||
+                    completedBackgroundBuild ||
+                    readingStatus.active ||
+                    stageContent.kind === 'music' ||
+                    stageContent.kind === 'video') && (
+                    <div className="w-full space-y-1.5 shrink-0">
+                      {(stageContent.kind === 'music' || stageContent.kind === 'video') && (
+                        <div className="p-2 rounded-xl bg-[#071126]/85 border border-cyan-400/35 space-y-1">
+                          <div className="flex items-center justify-between text-[9px] font-mono text-cyan-300">
+                            <span>{mediaPaused ? 'MÚSICA PAUSADA' : 'A TOCAR'}</span>
+                            <span className="tabular-nums">{formatMiniMmSs(musicElapsedSec)}</span>
+                          </div>
+                          <div className="text-[10px] font-semibold text-white truncate">
+                            {stageContent.track.title}
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setMediaPaused((p) => !p)}
+                              className="flex-1 py-1 rounded-lg bg-cyan-500/20 border border-cyan-400/45 text-[10px] font-bold text-cyan-200 flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              {mediaPaused ? (
+                                <Play className="w-2.5 h-2.5" />
+                              ) : (
+                                <Pause className="w-2.5 h-2.5" />
+                              )}
+                              <span>{mediaPaused ? 'Tocar' : 'Pausar'}</span>
+                            </button>
+                            {stageContent.kind === 'music' && (
+                              <button
+                                type="button"
+                                onClick={handleNextTrack}
+                                className="px-2 py-1 rounded-lg bg-rose-500/20 border border-rose-400/45 text-[10px] font-bold text-rose-200 cursor-pointer flex items-center gap-0.5"
+                                title="Próxima faixa"
+                              >
+                                <SkipForward className="w-2.5 h-2.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {liveBuild?.isBuilding && (
+                        <button
+                          type="button"
+                          onClick={() => onSwitchMode('builder')}
+                          className="w-full p-2 rounded-xl bg-[#071126]/85 border border-cyan-400/40 text-left space-y-1 cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between text-[9px] font-mono text-cyan-300">
+                            <span>BUILDER 2.º PLANO</span>
+                            <span>{builderProgressPct}%</span>
+                          </div>
+                          <div className="h-1 rounded-full bg-[#030815] overflow-hidden">
+                            <div
+                              className="h-full bg-gradient-to-r from-[#00E5FF] to-[#FF2A4B]"
+                              style={{ width: `${builderProgressPct}%` }}
+                            />
+                          </div>
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <JarvisStageRenderer
                   content={stageContent}
@@ -2144,9 +3393,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   onToggleMediaPause={() => setMediaPaused((p) => !p)}
                   onChangeMediaVolume={(v) => setMediaVolume(Math.max(0, Math.min(100, v)))}
                 />
-                {/* Cabeça encolhida no canto inferior esquerdo */}
+                {/* Cabeça 3D encolhida no canto inferior esquerdo (sem backdrop-filter sobre WebGL) */}
                 <div
-                  className="hidden sm:flex absolute bottom-3 left-3 z-20 rounded-2xl bg-[#040916]/90 border border-cyan-400/50 shadow-[0_0_24px_rgba(0,229,255,0.28)] p-1 backdrop-blur-md"
+                  className="hidden sm:flex absolute bottom-3 left-3 z-20 rounded-2xl bg-[#040916] border border-cyan-400/50 shadow-[0_0_24px_rgba(0,229,255,0.28)] p-1"
                   title="Clica para dividir o ecrã com a Sara"
                 >
                   <SaraJarvisHead
@@ -2162,8 +3411,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             )}
           </div>
 
-          {/* Barra Inferior: Microfone Grande Animado + Interromper + Anexar Documento + Input */}
-          <div className="p-3 border-t border-cyan-500/25 bg-[#040A17]/90 backdrop-blur-md shrink-0 z-10">
+          {/* Barra Inferior: Microfone Grande + Interromper + Anexo + Input + Enviar */}
+          <div className="p-2.5 sm:p-3 border-t border-cyan-500/25 bg-[#040A17]/95 shrink-0 z-10">
             <input
               ref={fileInputRef}
               type="file"
@@ -2183,16 +3432,16 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 onClick={isSaraSpeaking ? handleBargeIn : onToggleMic}
                 className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 border transition cursor-pointer ${
                   isSaraSpeaking
-                    ? 'bg-rose-500/25 border-rose-400 text-rose-200 shadow-[0_0_20px_rgba(255,42,75,0.4)] animate-pulse'
+                    ? 'bg-rose-500/25 border-rose-400 text-rose-200 shadow-[0_0_20px_rgba(255,42,75,0.4)]'
                     : isListening
-                    ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300 shadow-[0_0_22px_rgba(16,185,129,0.45)] animate-pulse'
+                    ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300 shadow-[0_0_22px_rgba(16,185,129,0.45)]'
                     : 'bg-gradient-to-br from-cyan-500/25 to-[#FF2A4B]/20 border-[#00E5FF]/60 text-cyan-200 hover:shadow-[0_0_18px_rgba(0,229,255,0.35)]'
                 }`}
                 title={
                   isSaraSpeaking
                     ? 'Interromper Sara e falar agora'
                     : isListening
-                    ? 'Microfone contínuo ativo (clica para desligar)'
+                    ? 'Microfone contínuo ativo'
                     : 'Falar com a SARA'
                 }
               >
@@ -2210,7 +3459,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   type="button"
                   onClick={handleBargeIn}
                   className="px-2.5 h-10 rounded-xl bg-rose-500/20 border border-rose-400/60 text-rose-200 text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer hover:bg-rose-500/30"
-                  title="Interromper voz da Sara imediatamente"
                 >
                   <VolumeX className="w-3.5 h-3.5" />
                   <span className="hidden sm:inline">Interromper</span>
@@ -2230,7 +3478,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                placeholder="Fala ou escreve à SARA (explicações simples ou profundas, música, vídeos, gráficos...)"
+                placeholder="Fala ou escreve à SARA (explicações, 3D, cálculos, música, vídeos, gráficos...)"
                 className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-[#061024] border border-cyan-500/30 text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-none focus:border-[#00E5FF]"
               />
 
@@ -2246,30 +3494,32 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           </div>
         </section>
 
-        {/* PAINEL DIREITO: PROCESSAMENTO STARK + RESPOSTAS EM STREAM + MEMÓRIA PERSISTENTE */}
+        {/* =======================================================
+            COLUNA DIREITA: REGISTRO DE COMUNICAÇÃO LIVE + MEMÓRIA + PROCESSOS/UPTIME + TRÁFEGO REDE CHART.JS
+           ======================================================= */}
         {!focusMode && (
           <aside
-            className={`h-full min-h-0 bg-[#050B18] border-l border-cyan-500/25 flex-col overflow-hidden ${
-              mobileSection === 'telemetry' ? 'flex flex-1' : 'hidden lg:flex'
+            className={`h-full min-h-0 bg-[#040916] border-l border-cyan-500/25 flex-col overflow-hidden ${
+              mobileSection === 'log' ? 'flex flex-1' : 'hidden lg:flex'
             }`}
           >
             {/* Caixa especial estilo Homem de Ferro quando pensa */}
             {isThinking && (
-              <div className="m-3 p-3 rounded-2xl bg-[#030916] border border-[#FF2A4B]/60 shadow-[0_0_24px_rgba(255,42,75,0.22)] shrink-0">
+              <div className="m-2.5 p-2.5 rounded-2xl bg-[#030916] border border-[#FF2A4B]/60 shadow-[0_0_24px_rgba(255,42,75,0.22)] shrink-0">
                 <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-widest mb-1.5">
                   <span className="text-rose-300 font-bold flex items-center gap-1.5">
                     <Sparkles className="w-3.5 h-3.5 animate-spin" />
-                    Kernel Stark Em Execução
+                    SARA a pensar
                   </span>
-                  <span className="text-cyan-300 font-bold">{thinkingPercent}%</span>
+                  <span className="text-cyan-300 font-bold tabular-nums">{thinkingPercent}%</span>
                 </div>
-                <div className="h-1.5 rounded-full bg-[#091224] overflow-hidden mb-2">
+                <div className="h-1.5 rounded-full bg-[#091224] overflow-hidden mb-1.5">
                   <div
                     className="h-full bg-gradient-to-r from-[#00E5FF] to-[#FF2A4B] transition-all duration-300"
                     style={{ width: `${thinkingPercent}%` }}
                   />
                 </div>
-                <div className="font-mono text-[10px] text-cyan-300/85 space-y-0.5 max-h-24 overflow-hidden">
+                <div className="font-mono text-[10px] text-cyan-300/85 space-y-0.5 max-h-20 overflow-hidden">
                   {thinkingLogs.map((ln, idx) => (
                     <div key={idx} className="truncate">
                       {ln}
@@ -2279,25 +3529,36 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               </div>
             )}
 
-            {/* Respostas detalhadas */}
-            <div className="flex-1 min-h-0 overflow-y-auto sara-scroll p-3 space-y-2.5">
-              <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
-                Diálogo & Detalhes
+            {/* Log Tempo Real de Comunicação */}
+            <div className="flex-1 min-h-0 overflow-y-auto sara-scroll p-2.5 space-y-2">
+              <div className="flex items-center justify-between border-b border-cyan-500/20 pb-1.5">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-cyan-300 font-bold">
+                  REGISTRO // LOG LIVE
+                </span>
+                {conversation.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setConversation([])}
+                    className="text-[10px] font-mono text-slate-400 hover:text-rose-300 cursor-pointer"
+                  >
+                    Limpar
+                  </button>
+                )}
               </div>
 
               {conversation.length === 0 && !streamingReply ? (
-                <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/25 text-xs text-slate-300 leading-relaxed">
-                  Olá! Estou ativa no <strong className="text-cyan-300">Modo Assistente SARA</strong>. Podes falar comigo naturalmente para tirar dúvidas (em nível simples, normal ou técnico), procurar músicas ou vídeos no YouTube, ver gráficos, matemática ou analisar documentos.
+                <div className="p-3 rounded-2xl bg-[#071126] border border-cyan-500/25 text-xs text-slate-300 leading-relaxed">
+                  Voz ativa. Pede qualquer desenho 3D, cálculo, explicação, gráfico ou música e tudo aparece resumido aqui e completo no palco central.
                 </div>
               ) : (
                 <>
                   {conversation.map((entry) => (
                     <div
                       key={entry.id}
-                      className={`p-3 rounded-2xl border text-xs leading-relaxed ${
+                      className={`p-2.5 rounded-2xl border text-xs leading-relaxed ${
                         entry.sender === 'user'
-                          ? 'bg-[#091834] border-cyan-500/35 text-cyan-50 ml-4'
-                          : 'bg-[#060E1F] border-rose-500/25 text-slate-200 mr-2'
+                          ? 'bg-[#091834] border-cyan-500/35 text-cyan-50 ml-3'
+                          : 'bg-[#060E1F] border-rose-500/25 text-slate-200 mr-1'
                       }`}
                     >
                       <div className="flex items-center justify-between mb-1 text-[10px] font-mono">
@@ -2311,7 +3572,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           {entry.sender === 'user' ? 'Tu' : 'SARA'}
                         </span>
                         <div className="flex items-center gap-2 text-slate-400">
-                          <span>{entry.timestamp}</span>
+                          <span className="tabular-nums">{entry.timestamp}</span>
                           {entry.sender === 'sara' && (
                             <button
                               type="button"
@@ -2335,9 +3596,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   ))}
 
                   {streamingReply && (
-                    <div className="p-3 rounded-2xl border bg-[#060E1F] border-cyan-400/50 text-slate-200 mr-2 text-xs leading-relaxed">
-                      <div className="flex items-center justify-between mb-1 text-[10px] font-mono">
-                        <span className="text-cyan-300 font-bold">SARA (a escrever...)</span>
+                    <div className="p-2.5 rounded-2xl border bg-[#060E1F] border-cyan-400/50 text-slate-200 mr-1 text-xs leading-relaxed">
+                      <div className="text-[10px] font-mono text-cyan-300 font-bold mb-1">
+                        SARA (a transmitir...)
                       </div>
                       <div className="whitespace-pre-wrap">
                         {sanitizeAssistantPlainText(streamingReply)}
@@ -2349,62 +3610,115 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               <div ref={chatEndRef} />
             </div>
 
-            {/* Caixa de Memória Persistente */}
-            <div className="p-3 border-t border-cyan-500/20 bg-[#040915] space-y-2 shrink-0 max-h-[210px] overflow-y-auto sara-scroll">
-              <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-widest text-rose-300">
-                <span className="flex items-center gap-1.5">
-                  <Brain className="w-3.5 h-3.5" />
-                  Memória Persistente ({memory.facts.length})
-                </span>
-              </div>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const clean = newMemoryFact.trim();
-                  if (!clean) return;
-                  setMemory((prev) => ({
-                    ...prev,
-                    facts: [...prev.facts, clean].slice(-25),
-                  }));
-                  setNewMemoryFact('');
-                }}
-                className="flex gap-1.5"
-              >
-                <input
-                  type="text"
-                  value={newMemoryFact}
-                  onChange={(e) => setNewMemoryFact(e.target.value)}
-                  placeholder="Guardar facto na memória..."
-                  className="flex-1 px-2 py-1 rounded-lg bg-[#071126] border border-cyan-500/25 text-[11px] text-white"
-                />
+            {/* Bloco Inferior Direito: Memória Persistente Compacta + Processos/Uptime + Tráfego Rede Chart.js */}
+            <div className="p-2.5 border-t border-cyan-500/20 bg-[#030815] space-y-2 shrink-0">
+              {/* Memória Persistente Expansível */}
+              <div className="rounded-xl bg-[#071125] border border-cyan-500/20 p-2">
                 <button
-                  type="submit"
-                  className="px-2 py-1 rounded-lg bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 text-[11px] font-bold cursor-pointer"
+                  type="button"
+                  onClick={() => setIsMemoryExpanded((v) => !v)}
+                  className="w-full flex items-center justify-between text-[10px] font-mono uppercase tracking-widest text-rose-300 cursor-pointer"
                 >
-                  +
+                  <span className="flex items-center gap-1.5 font-bold">
+                    <Brain className="w-3.5 h-3.5" />
+                    MEMÓRIA PERSISTENTE ({memory.facts.length})
+                  </span>
+                  {isMemoryExpanded ? (
+                    <ChevronDown className="w-3.5 h-3.5 text-cyan-300" />
+                  ) : (
+                    <ChevronUp className="w-3.5 h-3.5 text-cyan-300" />
+                  )}
                 </button>
-              </form>
-              <div className="space-y-1">
-                {memory.facts.slice(-5).map((fact, idx) => (
-                  <div
-                    key={`${fact}_${idx}`}
-                    className="flex items-center justify-between gap-2 text-[11px] text-slate-300 bg-[#071126]/80 px-2 py-1 rounded-lg border border-cyan-500/15"
-                  >
-                    <span className="truncate">{fact}</span>
-                    <button
-                      type="button"
-                      onClick={() =>
+
+                {isMemoryExpanded && (
+                  <div className="mt-2 space-y-1.5">
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        const clean = newMemoryFact.trim();
+                        if (!clean) return;
                         setMemory((prev) => ({
                           ...prev,
-                          facts: prev.facts.filter((f) => f !== fact),
-                        }))
-                      }
-                      className="text-slate-500 hover:text-rose-400 cursor-pointer shrink-0"
+                          facts: [...prev.facts, clean].slice(-25),
+                        }));
+                        setNewMemoryFact('');
+                      }}
+                      className="flex gap-1"
                     >
-                      ×
-                    </button>
+                      <input
+                        type="text"
+                        value={newMemoryFact}
+                        onChange={(e) => setNewMemoryFact(e.target.value)}
+                        placeholder="Guardar facto..."
+                        className="flex-1 px-2 py-1 rounded-lg bg-[#030814] border border-cyan-500/25 text-[11px] text-white"
+                      />
+                      <button
+                        type="submit"
+                        className="px-2 py-1 rounded-lg bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 text-[11px] font-bold cursor-pointer"
+                      >
+                        +
+                      </button>
+                    </form>
+                    <div className="space-y-1 max-h-24 overflow-y-auto sara-scroll">
+                      {memory.facts.slice(-4).map((fact, idx) => (
+                        <div
+                          key={`${fact}_${idx}`}
+                          className="flex items-center justify-between gap-2 text-[10px] text-slate-300 bg-[#030814] px-2 py-1 rounded"
+                        >
+                          <span className="truncate">{fact}</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setMemory((prev) => ({
+                                ...prev,
+                                facts: prev.facts.filter((f) => f !== fact),
+                              }))
+                            }
+                            className="text-slate-500 hover:text-rose-400 cursor-pointer shrink-0"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                ))}
+                )}
+              </div>
+
+              {/* Processos Ativos + Threads + Uptime ao vivo */}
+              <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono">
+                <div className="px-2 py-1.5 rounded-lg bg-[#071125] border border-cyan-500/20">
+                  <div className="text-[8px] text-slate-400">PROCESSOS</div>
+                  <div className="text-cyan-200 font-bold tabular-nums">
+                    {12 + (isThinking ? 4 : 0) + (stageContent ? 2 : 0)} ATIVOS
+                  </div>
+                </div>
+                <div className="px-2 py-1.5 rounded-lg bg-[#071125] border border-cyan-500/20">
+                  <div className="text-[8px] text-slate-400">THREADS</div>
+                  <div className="text-rose-300 font-bold tabular-nums">
+                    {telemetry.cpuCores || 8} THREADS
+                  </div>
+                </div>
+                <div className="px-2 py-1.5 rounded-lg bg-[#071125] border border-cyan-500/20">
+                  <div className="text-[8px] text-slate-400">UPTIME</div>
+                  <div className="text-emerald-300 font-bold tabular-nums">
+                    {formatUptimeHMS(uptimeSeconds)}
+                  </div>
+                </div>
+              </div>
+
+              {/* Gráfico Tráfego de Rede ao Vivo (Chart.js) */}
+              <div className="p-2 rounded-xl bg-[#071125] border border-cyan-500/25">
+                <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-widest mb-1">
+                  <span className="text-cyan-300 font-bold">TRÁFEGO REDE</span>
+                  <span className="text-slate-400">
+                    <span className="text-[#00E5FF]">RX</span> /{' '}
+                    <span className="text-[#FF2A4B]">TX</span> (Mbps)
+                  </span>
+                </div>
+                <div className="h-20 w-full">
+                  <canvas ref={netChartCanvasRef} className="w-full h-full" />
+                </div>
               </div>
             </div>
           </aside>

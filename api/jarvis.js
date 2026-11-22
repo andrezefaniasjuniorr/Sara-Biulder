@@ -1,4 +1,5 @@
 import {
+  fetchHudLiveFeedNode,
   formatFriendlyAiError,
   getGeminiClient,
   runJarvisAssistant,
@@ -25,6 +26,10 @@ export default async function handler(req, res) {
     if (req.body?.action === 'youtube_search') {
       const track = await searchYouTubeTrackNode(req.body?.query || '', req.body?.kind || 'music');
       return res.status(200).json({ track });
+    }
+    if (req.body?.action === 'hud_live_feed') {
+      const feed = await fetchHudLiveFeedNode();
+      return res.status(200).json(feed);
     }
 
     const headerKey = req.headers['x-gemini-api-key'];

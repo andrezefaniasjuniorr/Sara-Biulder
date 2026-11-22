@@ -28,9 +28,23 @@ export default defineConfig(() => {
         },
       },
     ],
+    define: {
+      PACKAGE_VERSION: JSON.stringify('3.2.1'),
+    },
+    optimizeDeps: {
+      rolldownOptions: {
+        transform: {
+          define: {
+            PACKAGE_VERSION: JSON.stringify('3.2.1'),
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
+        'mathjax-full/js/components/version.js': path.resolve(__dirname, 'src/utils/mathjaxVersionShim.ts'),
+        'mathjax-full/js/components/version': path.resolve(__dirname, 'src/utils/mathjaxVersionShim.ts'),
       },
     },
     server: {

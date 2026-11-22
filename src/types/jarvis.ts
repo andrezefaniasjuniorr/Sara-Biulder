@@ -66,7 +66,34 @@ export interface JarvisExplanationSection {
   body: string;
 }
 
+export type Jarvis3DShape =
+  | 'cube'
+  | 'cuboid'
+  | 'sphere'
+  | 'cylinder'
+  | 'cone'
+  | 'pyramid'
+  | 'prism'
+  | 'torus'
+  | 'octahedron'
+  | 'atom';
+
 export type JarvisStageContent =
+  | {
+      id: string;
+      kind: '3d';
+      title: string;
+      subtitle?: string;
+      shape: Jarvis3DShape;
+      dimensions?: Record<string, number>;
+      unit?: string;
+      labelLines?: string[];
+      description?: string;
+      formulas?: string[];
+      steps?: JarvisMathStep[];
+      finalAnswer?: string;
+      autoRotate?: boolean;
+    }
   | {
       id: string;
       kind: 'svg';
@@ -204,6 +231,9 @@ export interface JarvisActionPayload {
     | 'set_volume'
     | 'close_stage'
     | 'open_module'
+    | 'open_panel'
+    | 'close_panel'
+    | 'show_3d'
     | 'show_svg'
     | 'show_math'
     | 'show_explanation'
@@ -216,9 +246,16 @@ export interface JarvisActionPayload {
     | 'read_aloud'
     | 'remember_fact'
     | 'toggle_focus'
-    | 'switch_mode';
+    | 'switch_mode'
+    | 'build_in_builder';
+  goal?: string;
   title?: string;
   subtitle?: string;
+  shape?: Jarvis3DShape;
+  dimensions?: Record<string, number>;
+  unit?: string;
+  labelLines?: string[];
+  autoRotate?: boolean;
   date?: string;
   time?: string;
   notes?: string;
@@ -265,8 +302,20 @@ export interface JarvisActionPayload {
   target?: WorkspaceMode;
 }
 
+export interface JarvisBuilderContext {
+  activeProjectName?: string;
+  activeProjectFiles?: string[];
+  isBuilding?: boolean;
+  phase?: string;
+  progressPct?: number;
+  currentStepLabel?: string;
+  activeFile?: string;
+  elapsedSeconds?: number;
+}
+
 export interface JarvisAssistantResponse {
   reply: string;
+  chatSummary?: string;
   voiceSummary: string;
   mood?: JarvisHeadMood;
   actions?: JarvisActionPayload[];
@@ -278,12 +327,32 @@ export interface JarvisWeatherInfo {
   feelsLikeC: number | null;
   humidityPct: number | null;
   windKmh: number | null;
+  windDirectionDeg?: number | null;
+  windDirectionLabel?: string | null;
+  uvIndex?: number | null;
+  hourlyForecast?: Array<{
+    time: string;
+    tempC: number;
+    condition: string;
+    uv?: number | null;
+  }>;
   condition: string;
   city: string;
   isDay?: boolean;
   loadedFromApi: boolean;
   updatedAt?: string;
   errorMsg?: string;
+}
+
+export interface JarvisHudLiveFeed {
+  fx: {
+    mznPerUsd: string | null;
+    mznPerEur: string | null;
+    mznPerZar: string | null;
+    updatedAt?: string;
+  } | null;
+  news: string[];
+  loadedAt: string;
 }
 
 export interface JarvisSystemTelemetry {

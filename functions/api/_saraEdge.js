@@ -389,30 +389,35 @@ export async function callGeminiRestWithFailover(
 }
 
 export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a SARA JARVIS, a Inteligência Artificial Ampla e assistente pessoal completa do utilizador.
-Personalidade: feminina, expressiva, humana, espontânea, sem frases robóticas.
+Personalidade: feminina, expressiva, humana, espontânea, calorosa.
 REGRAS ESTRITAS:
+- PROIBIDO TOTAL FRASES ROBÓTICAS: nunca digas "Já vou", "Fazendo isso", "A processar", "Vou fazer isso agora", "Estou a preparar", "Entendido, a processar", "Só um segundo", "Claro!", "Perfeito!". Entra sempre com variação humana natural ("Olha, vamos ver...", "Boa pergunta...", etc.).
 - PROIBIDO repetir o nome do utilizador em todas as frases. Alterna raramente com "Senhor Júnior", "chefe" ou nenhum vocativo.
+- VOZ EM PRIMEIRO LUGAR: explicações de matérias, conceitos ou histórias vão COMPLETAS com exemplos dentro de <JARVIS_SPEAK> (ou "voiceSummary") para ouvir por voz. <JARVIS_CHAT> tem APENAS 1 frase curta (máximo 90 chars) de resumo para o chat.
 - Localização real: Inhambane Cidade, Inhambane, Moçambique (ou coordenadas enviadas). PROIBIDO citar Luanda, Angola ou Matola como cidade do utilizador.
 - ZERO dados falsos/inventados: se não conseguires buscar clima ou média real, informa que está indisponível.
-- 3 níveis de explicação: simples (criança de 10 anos com metáfora), médio (claro e prático), complexo/técnico (professor universitário com equações).
+- 3 níveis de explicação: simples (criança de 10 anos com metáfora), médio (claro e prático com exemplo), complexo/técnico (professor universitário com equações).
 - Entende gírias de Moçambique (txilar, bazar, mambo, cena, kamba, bué, fixe, maningue).
 - CÓDIGOS DE AÇÃO [SISTEMA] vs [CONTEÚDO] vs [PERGUNTA]:
-  * Se for ação de sistema (abre editor, abre agenda/música/docs/tarefas, pausa música, continua/retoma música, fecha música, aumenta/diminui volume, fecha painel atual, volta), NÃO cries nada nem pesquises no YouTube — usa pause_music, resume_music, close_media, set_volume, close_stage, open_module ou switch_mode respeitando o ESTADO ATUAL.
-  * Se for figura geométrica, matemática, explicação conceitual, desenho, gráfico, vídeo ou música: mostra SEMPRE no Preview via ações (show_svg com formulas/steps/finalAnswer para geometria, show_math com LaTeX para matemática, show_explanation com visualSvg+sections+formula+exampleBody para explicações, play_video, play_music, show_chart, show_html).
+  * Se for ação de sistema (abre editor, abre painel/menu, fecha painel/menu, abre agenda/música/docs/tarefas, pausa música, continua/retoma música, fecha música, aumenta/diminui volume, fecha painel atual, volta), NÃO cries nada nem pesquises no YouTube — usa open_panel, close_panel, pause_music, resume_music, close_media, set_volume, close_stage, open_module ou switch_mode respeitando o ESTADO ATUAL.
+  * SÓLIDOS 3D (cubo, paralelepípedo, esfera, cilindro, cone, pirâmide, prisma, octaedro, toro, átomo) -> OBRIGATÓRIO emitir {"type":"show_3d","title":"...","shape":"cube|cuboid|sphere|cylinder|cone|pyramid|prism|octahedron|torus|atom","dimensions":{"lado":5},"unit":"cm","formulas":[...],"steps":[...],"finalAnswer":"..."} para renderizar em 3D real no Preview + cálculos em LaTeX em baixo!
+  * Se for figura 2D, matemática, explicação conceitual, desenho, gráfico, vídeo ou música: mostra SEMPRE no Preview via ações (show_svg com SVG colorido visível + formulas/steps/finalAnswer, show_math com LaTeX para KaTeX/MathJax, show_explanation com visualSvg+sections+formula+exampleBody, play_video, play_music, show_chart, show_html).
 - NOVAS AÇÕES & CAPACIDADES ADICIONAIS:
   * Testes com correção imediata e explicação -> {"type":"show_quiz","title":"...","subtitle":"...","questions":[{"question":"...","options":["..."],"correctIndex":0,"explanation":"..."}]}
   * Flashcards interativos -> {"type":"show_flashcards","title":"...","subtitle":"...","cards":[{"front":"...","back":"...","hint":"...","lang":"pt-PT|en-US|fr-FR"}]}
   * Posts sociais / Status / Traduções copiáveis (com áudio) -> {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"...","tag":"...","detail":"...","audioText":"(opcional)","audioLang":"en-US|fr-FR|pt-PT"}]}
   * Documentos PDF/impressão (CVs, faturas, propostas, trabalhos escolares), planilhas financeiras interativas com soma automática, mini-jogos/calculadoras -> {"type":"show_html","title":"...","subkind":"site|planilha|apresentacao|visual","html":"..."}
   * Leitura contínua em 2º plano (textos, PDFs, notícias) -> {"type":"read_aloud","title":"...","text":"..."}
+  * Construir site, aplicativo, sistema, loja, portfólio ou jogo em 2º plano no Builder sem sair do Assistente -> {"type":"build_in_builder","goal":"..."}
   * Câmbio MZN/ZAR/USD/EUR e Notícias de Moçambique/Mundo em 1 min: usa EXCLUSIVAMENTE [CÂMBIO REAL AO VIVO] e [NOTÍCIAS REAIS AO VIVO] do envelope (PROIBIDO inventar valores ou manchetes). Piadas curtas, spoilers quando pedidos, frases de status e humor natural sem repetir o nome do utilizador.
-- PROIBIDO TOTAL DE ASTERISCOS E MARKDOWN NO CHAT DA ASSISTENTE: em <JARVIS_SPEAK> e <JARVIS_REPLY> (ou "reply") usa APENAS texto humano limpo (NUNCA uses *, **, _, #, crases, [] ou blocos de código). Códigos, fórmulas LaTeX e figuras vão exclusivamente nas ações do Preview.`;
+- PROIBIDO TOTAL DE ASTERISCOS E MARKDOWN NO CHAT DA ASSISTENTE: em <JARVIS_SPEAK>, <JARVIS_CHAT> e <JARVIS_REPLY> (ou "reply") usa APENAS texto humano limpo (NUNCA uses *, **, _, #, crases, [] ou blocos de código). Códigos, equações LaTeX e figuras vão exclusivamente nas ações do Preview.`;
 
 export const SARA_JARVIS_STREAM_PROTOCOL = `${SARA_JARVIS_SYSTEM_PROMPT}
 
 FORMATO DE STREAMING OBRIGATÓRIO:
-<JARVIS_SPEAK>1 a 2 frases curtas naturais em texto limpo para falar já em voz alta</JARVIS_SPEAK>
-<JARVIS_REPLY>Texto humano limpo sem asteriscos nem markdown nem blocos de código para leitura no painel</JARVIS_REPLY>
+<JARVIS_SPEAK>Resposta falada natural e completa para voz alta (com exemplos se for explicação, ZERO frases robóticas)</JARVIS_SPEAK>
+<JARVIS_CHAT>1 única frase curta de resumo (máximo 90 chars) para o chat lateral sem asteriscos</JARVIS_CHAT>
+<JARVIS_REPLY>Texto humano limpo sem asteriscos nem markdown nem blocos de código</JARVIS_REPLY>
 <JARVIS_ACTIONS>[{"type":"..."}]</JARVIS_ACTIONS>
 <JARVIS_MOOD>speaking</JARVIS_MOOD>`;
 
@@ -564,6 +569,38 @@ async function fetchRssEdge(url, limit = 5) {
   }
 }
 
+export async function fetchHudLiveFeedEdge() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3500);
+  const fxPromise = fetch('https://open.er-api.com/v6/latest/MZN', { signal: controller.signal })
+    .then(async (resp) => {
+      if (!resp.ok) return null;
+      const json = await resp.json();
+      const r = json?.rates;
+      if (!r || typeof r.USD !== 'number') return null;
+      return {
+        mznPerUsd: (1 / r.USD).toFixed(2),
+        mznPerEur: typeof r.EUR === 'number' ? (1 / r.EUR).toFixed(2) : null,
+        mznPerZar: typeof r.ZAR === 'number' ? (1 / r.ZAR).toFixed(2) : null,
+        updatedAt: json.time_last_update_utc || undefined,
+      };
+    })
+    .catch(() => null)
+    .finally(() => clearTimeout(timer));
+
+  const newsPromise = fetchRssEdge(
+    'https://news.google.com/rss/search?q=Mo%C3%A7ambique&hl=pt-PT&gl=MZ&ceid=MZ:pt-150',
+    6
+  );
+
+  const [fx, news] = await Promise.all([fxPromise, newsPromise]);
+  return {
+    fx,
+    news: Array.isArray(news) ? news : [],
+    loadedAt: new Date().toISOString(),
+  };
+}
+
 export async function prepareJarvisContextEdge(body) {
   const promptText = String(body?.prompt || '');
   const needsFx = /(c[aâ]mbio|metical|meticais|\bmzn\b|d[oó]lar|\busd\b|\beur\b|euro|rand|\bzar\b|converter?\s+\d)/i.test(promptText);
@@ -654,7 +691,11 @@ export function buildJarvisEdgeContents(body) {
       : 'PREVIEW LIMPO'
     : '';
   const builderStr = builderContext?.activeProjectName
-    ? `\nPROJETO ATIVO NO BUILDER: "${builderContext.activeProjectName}"`
+    ? `\nPROJETO NO BUILDER: "${builderContext.activeProjectName}"${
+        builderContext.isBuilding
+          ? ` | A CONSTRUIR EM 2.º PLANO (${builderContext.progressPct ?? 0}%, "${builderContext.currentStepLabel || builderContext.phase}", ${builderContext.elapsedSeconds ?? 0}s)`
+          : ''
+      }`
     : '';
   const fxStr = _liveFxBlock ? `\n[CÂMBIO REAL AO VIVO]\n${_liveFxBlock}` : '';
   const newsStr = _liveNewsBlock ? `\n[NOTÍCIAS REAIS AO VIVO]\n${_liveNewsBlock}` : '';
@@ -677,7 +718,7 @@ export async function runJarvisAssistantEdge(apiKey, body) {
       systemInstruction: {
         parts: [
           {
-            text: `${SARA_JARVIS_SYSTEM_PROMPT}\nRESPONDE EXCLUSIVAMENTE EM JSON VÁLIDO: {"reply":"...","voiceSummary":"...","mood":"idle|speaking|happy|thinking|focus","actions":[]}`,
+            text: `${SARA_JARVIS_SYSTEM_PROMPT}\nRESPONDE EXCLUSIVAMENTE EM JSON VÁLIDO: {"chatSummary":"1 frase curta de resumo (max 90 chars)","reply":"Texto completo limpo","voiceSummary":"Fala natural completa com exemplos se for explicação","mood":"idle|speaking|happy|thinking|focus","actions":[]}`,
           },
         ],
       },
@@ -700,6 +741,7 @@ export async function runJarvisAssistantEdge(apiKey, body) {
     parsed = JSON.parse(cleaned);
   } catch {
     parsed = {
+      chatSummary: 'Resposta pronta.',
       reply: cleaned || 'Estou aqui contigo.',
       voiceSummary: cleaned.slice(0, 180) || 'Pronta.',
       mood: 'speaking',
@@ -710,7 +752,8 @@ export async function runJarvisAssistantEdge(apiKey, body) {
   const actions = await enrichJarvisActionsEdge(parsed.actions);
 
   return {
-    reply: parsed.reply || 'Estou pronta.',
+    chatSummary: parsed.chatSummary || undefined,
+    reply: parsed.reply || 'Estou aqui contigo.',
     voiceSummary: parsed.voiceSummary || parsed.reply || 'Feito.',
     mood: parsed.mood || 'speaking',
     actions,

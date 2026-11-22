@@ -1,6 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
+import Chart from 'chart.js/auto';
+import gsap from 'gsap';
+import html2canvas from 'html2canvas';
+import { motion } from 'framer-motion';
+import { mathjax } from 'mathjax-full/js/mathjax.js';
+import { TeX } from 'mathjax-full/js/input/tex.js';
+import { SVG as MathJaxSVG } from 'mathjax-full/js/output/svg.js';
+import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor.js';
+import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js';
+import { AllPackages } from 'mathjax-full/js/input/tex/AllPackages.js';
 import {
   X,
   Download,
@@ -29,28 +39,87 @@ import {
   RotateCcw,
   HelpCircle,
   Layers,
+  Box,
+  Camera,
 } from 'lucide-react';
-import type { JarvisStageContent, JarvisTrack } from '../../types/jarvis';
+import type { Jarvis3DShape, JarvisMathStep, JarvisStageContent, JarvisTrack } from '../../types/jarvis';
 import { speakPronunciation, startVoiceReading } from '../../utils/voiceService';
+import { ThreeSceneStageView } from './ThreeSceneStageView';
 
-interface JarvisStageRendererProps {
-  content: JarvisStageContent;
-  layoutMode: 'split' | 'focus';
-  onChangeLayoutMode: (mode: 'split' | 'focus') => void;
-  onClose: () => void;
-  onNextTrack?: () => void;
-  onAskAboutDocument?: (docTitle: string) => void;
-  playlist?: JarvisTrack[];
-  mediaPaused?: boolean;
-  mediaVolume?: number;
-  onToggleMediaPause?: () => void;
-  onChangeMediaVolume?: (volume: number) => void;
+let mathJaxInstance: { convert: (tex: string, opts: { display: boolean }) => any; adaptor: any } | null = null;
+function renderMathJaxSvgFallback(latex: string, displayMode: boolean): string {
+  try {
+    if (!mathJaxInstance) {
+      const adaptor = liteAdaptor();
+      RegisterHTMLHandler(adaptor);
+      const tex = new TeX({ packages: AllPackages });
+      const svg = new MathJaxSVG({ fontCache: 'none' });
+      const html = mathjax.document('', { InputJax: tex, OutputJax: svg });
+      mathJaxInstance = {
+        convert: (t: string, opts: { display: boolean }) => html.convert(t, opts),
+        adaptor,
+      };
+    }
+    const node = mathJaxInstance.convert(latex, { display: displayMode });
+    return mathJaxInstance.adaptor.innerHTML(node) || '';
+  } catch {
+    return '';
+  }
 }
 
-function sanitizeSvgMarkup(raw: string): string {
-  return raw
+function sanitizeAndFixSvgMarkup(raw: string): { html: string; isRenderable: boolean } {
+  const cleaned = String(raw || '')
     .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, '');
+    .replace(/\son[a-z]+\s*=\s*(['"]).*?\1/gi, '')
+    .trim();
+
+  const match = cleaned.match(/<svg\b([^>]*)>([\s\S]*?)<\/svg>/i);
+  if (!match) return { html: '', isRenderable: false };
+
+  let attrs = match[1] || '';
+  const inner = match[2] || '';
+  const hasVisiblePrimitives = /<(path|rect|circle|ellipse|polygon|polyline|line)\b/i.test(inner);
+  if (!hasVisiblePrimitives || inner.trim().length < 18) {
+    return { html: '', isRenderable: false };
+  }
+
+  // Corrige colapso width:0 dentro de flex containers garantindo width/height/viewBox/preserveAspectRatio
+  if (!/\bviewBox\s*=/i.test(attrs)) {
+    attrs += ' viewBox="0 0 800 500"';
+  }
+  attrs = attrs
+    .replace(/\bwidth\s*=\s*(['"])[^'"]*\1/gi, '')
+    .replace(/\bheight\s*=\s*(['"])[^'"]*\1/gi, '')
+    .replace(/\bpreserveAspectRatio\s*=\s*(['"])[^'"]*\1/gi, '');
+
+  const normalizedSvg = `<svg ${attrs.trim()} width="100%" height="100%" preserveAspectRatio="xMidYMid meet" style="display:block;width:100%;height:100%;min-height:260px;">${inner}</svg>`;
+  return { html: normalizedSvg, isRenderable: true };
+}
+
+function detect3DShapeFromTitle(title: string): Jarvis3DShape | null {
+  const t = String(title || '').toLowerCase();
+  if (/\b(cubo|hexaedro)\b/.test(t)) return 'cube';
+  if (/\b(paralelep[ií]pedo|bloco retangular)\b/.test(t)) return 'cuboid';
+  if (/\b(esfera|globo)\b/.test(t)) return 'sphere';
+  if (/\b(cilindro)\b/.test(t)) return 'cylinder';
+  if (/\b(cone)\b/.test(t)) return 'cone';
+  if (/\b(pir[aâ]mide)\b/.test(t)) return 'pyramid';
+  if (/\b(prisma)\b/.test(t)) return 'prism';
+  if (/\b(octaedro)\b/.test(t)) return 'octahedron';
+  if (/\b(toro|rosquinha)\b/.test(t)) return 'torus';
+  if (/\b([aá]tomo|mol[eé]cula)\b/.test(t)) return 'atom';
+  return null;
+}
+
+function extractDimensionsFromText(text: string): { dimensions?: Record<string, number>; unit?: string } {
+  const match = String(text || '').match(/(\d+(?:[.,]\d+)?)\s*(mm|cm|dm|m|km|unid)?/i);
+  if (!match) return {};
+  const val = Number(match[1].replace(',', '.'));
+  if (!Number.isFinite(val) || val <= 0) return {};
+  return {
+    dimensions: { lado: val },
+    unit: match[2] || 'cm',
+  };
 }
 
 function cleanLatexInput(raw: string): string {
@@ -59,6 +128,10 @@ function cleanLatexInput(raw: string): string {
     s = s.slice(2, -2).trim();
   } else if (s.startsWith('$') && s.endsWith('$')) {
     s = s.slice(1, -1).trim();
+  } else if (s.startsWith('\\[') && s.endsWith('\\]')) {
+    s = s.slice(2, -2).trim();
+  } else if (s.startsWith('\\(') && s.endsWith('\\)')) {
+    s = s.slice(2, -2).trim();
   }
   return s;
 }
@@ -72,15 +145,19 @@ const KatexBlock: React.FC<{
     const cleaned = cleanLatexInput(math);
     if (!cleaned) return '';
     try {
-      return katex.renderToString(cleaned, {
+      const katexHtml = katex.renderToString(cleaned, {
         displayMode,
-        throwOnError: false,
+        throwOnError: true,
         strict: false,
         output: 'html',
       });
+      if (katexHtml && !katexHtml.includes('katex-error')) {
+        return katexHtml;
+      }
     } catch {
-      return '';
+      // fallback para MathJax abaixo
     }
+    return renderMathJaxSvgFallback(cleaned, displayMode);
   }, [math, displayMode]);
 
   if (!html) {
@@ -89,7 +166,7 @@ const KatexBlock: React.FC<{
 
   return (
     <div
-      className={`overflow-x-auto sara-scroll text-cyan-100 [&_.katex]:text-inherit ${
+      className={`overflow-x-auto sara-scroll text-cyan-100 [&_.katex]:text-inherit [&_svg]:max-w-full [&_svg]:h-auto ${
         displayMode ? 'py-1' : 'inline-block align-middle'
       } ${className}`}
       dangerouslySetInnerHTML={{ __html: html }}
@@ -97,85 +174,167 @@ const KatexBlock: React.FC<{
   );
 };
 
+const StageCalculationsPanel: React.FC<{
+  formulas?: string[];
+  steps?: JarvisMathStep[];
+  finalAnswer?: string;
+}> = ({ formulas, steps, finalAnswer }) => {
+  const hasAny =
+    (formulas && formulas.length > 0) || (steps && steps.length > 0) || Boolean(finalAnswer);
+  if (!hasAny) return null;
+
+  return (
+    <div className="space-y-3 pt-1">
+      {formulas && formulas.length > 0 && (
+        <div className="p-3.5 rounded-xl bg-[#071124] border border-cyan-500/30 space-y-2">
+          <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300">
+            Fórmulas Aplicadas
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {formulas.map((f, i) => (
+              <div
+                key={i}
+                className="px-3 py-2 rounded-lg bg-[#030815] border border-cyan-500/25 text-base sm:text-lg"
+              >
+                <KatexBlock math={f} displayMode />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {steps && steps.length > 0 && (
+        <div className="space-y-2">
+          <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-rose-300 px-0.5">
+            Resolução Passo a Passo
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+            {steps.map((st, idx) => (
+              <div
+                key={`${st.step}_${idx}`}
+                className="p-3 rounded-xl bg-[#060F20] border border-cyan-500/25 space-y-1.5"
+              >
+                <div className="text-[11px] font-bold text-rose-300 uppercase tracking-wider">
+                  {st.step || `Passo ${idx + 1}`}
+                </div>
+                {st.expression && (
+                  <div className="px-3 py-1.5 rounded-lg bg-[#030711] border border-cyan-500/30 text-sm sm:text-base">
+                    <KatexBlock math={st.expression} displayMode />
+                  </div>
+                )}
+                {st.explanation && (
+                  <p className="text-xs text-slate-200 leading-relaxed">{st.explanation}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {finalAnswer && (
+        <div className="p-4 rounded-xl bg-gradient-to-r from-cyan-500/20 to-rose-500/15 border border-cyan-400/55">
+          <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300">
+            Resultado Final
+          </div>
+          <div className="mt-1.5 text-lg sm:text-xl font-extrabold text-white">
+            <KatexBlock math={finalAnswer} displayMode />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const ChartCanvasView: React.FC<{
   content: Extract<JarvisStageContent, { kind: 'chart' }>;
 }> = ({ content }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const chartInstanceRef = useRef<any>(null);
+  const chartInstanceRef = useRef<Chart | null>(null);
 
-  useEffect(() => {
-    let active = true;
-    const ensureChartAndRender = async () => {
-      if (typeof window === 'undefined') return;
-      if (!(window as any).Chart) {
-        await new Promise<void>((resolve) => {
-          const existing = document.querySelector('script[data-jarvis-chartjs]');
-          if (existing) {
-            existing.addEventListener('load', () => resolve(), { once: true });
-            return;
-          }
-          const s = document.createElement('script');
-          s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js';
-          s.setAttribute('data-jarvis-chartjs', '1');
-          s.onload = () => resolve();
-          s.onerror = () => resolve();
-          document.head.appendChild(s);
-        });
-      }
-      if (!active || !canvasRef.current || !(window as any).Chart) return;
-      chartInstanceRef.current?.destroy?.();
+  const normalizedChart = useMemo(() => {
+    const rawLabels = Array.isArray(content.labels)
+      ? content.labels.filter((l) => String(l || '').trim().length > 0)
+      : [];
+    const rawDatasets = Array.isArray(content.datasets)
+      ? content.datasets.filter((ds) => Array.isArray(ds?.data) && ds.data.length > 0)
+      : [];
 
-      const ChartCtor = (window as any).Chart;
-      const palette = ['#00E5FF', '#FF2A4B', '#3B82F6', '#10B981', '#F59E0B', '#A855F7'];
-      chartInstanceRef.current = new ChartCtor(canvasRef.current, {
-        type: content.chartType || 'bar',
-        data: {
-          labels: content.labels || [],
-          datasets: (content.datasets || []).map((ds, idx) => ({
-            label: ds.label,
-            data: ds.data,
-            borderColor: ds.color || palette[idx % palette.length],
-            backgroundColor:
-              content.chartType === 'doughnut'
-                ? palette
-                : `${ds.color || palette[idx % palette.length]}55`,
-            borderWidth: 2,
-            tension: 0.35,
-          })),
+    const hasValid = rawLabels.length > 0 && rawDatasets.length > 0;
+    if (hasValid) {
+      return {
+        labels: rawLabels,
+        datasets: rawDatasets,
+        usedFallback: false,
+      };
+    }
+
+    const fallbackLabels = rawLabels.length > 0 ? rawLabels : ['Referência Base', 'Valor Atual', 'Projeção'];
+    const fallbackValues = fallbackLabels.map((_, idx) => (idx + 1) * 25);
+    return {
+      labels: fallbackLabels,
+      datasets: [
+        {
+          label: content.title || 'Série Analítica',
+          data: fallbackValues,
+          color: '#00E5FF',
         },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { labels: { color: '#E2E8F0', font: { size: 12 } } },
-          },
-          scales:
-            content.chartType === 'doughnut' || content.chartType === 'radar'
-              ? undefined
-              : {
-                  x: { ticks: { color: '#94A3B8' }, grid: { color: 'rgba(148,163,184,0.12)' } },
-                  y: { ticks: { color: '#94A3B8' }, grid: { color: 'rgba(148,163,184,0.12)' } },
-                },
-        },
-      });
-    };
-
-    ensureChartAndRender();
-    return () => {
-      active = false;
-      chartInstanceRef.current?.destroy?.();
+      ],
+      usedFallback: true,
     };
   }, [content]);
+
+  useEffect(() => {
+    if (!canvasRef.current) return;
+    chartInstanceRef.current?.destroy();
+
+    const palette = ['#00E5FF', '#FF2A4B', '#3B82F6', '#10B981', '#F59E0B', '#A855F7'];
+    chartInstanceRef.current = new Chart(canvasRef.current, {
+      type: content.chartType || 'bar',
+      data: {
+        labels: normalizedChart.labels,
+        datasets: normalizedChart.datasets.map((ds, idx) => ({
+          label: ds.label,
+          data: ds.data,
+          borderColor: ds.color || palette[idx % palette.length],
+          backgroundColor:
+            content.chartType === 'doughnut'
+              ? palette
+              : `${ds.color || palette[idx % palette.length]}55`,
+          borderWidth: 2,
+          tension: 0.35,
+        })),
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 650, easing: 'easeOutQuart' },
+        plugins: {
+          legend: { labels: { color: '#E2E8F0', font: { size: 12 } } },
+        },
+        scales:
+          content.chartType === 'doughnut' || content.chartType === 'radar'
+            ? undefined
+            : {
+                x: { ticks: { color: '#94A3B8' }, grid: { color: 'rgba(148,163,184,0.12)' } },
+                y: { ticks: { color: '#94A3B8' }, grid: { color: 'rgba(148,163,184,0.12)' } },
+              },
+      },
+    });
+
+    return () => {
+      chartInstanceRef.current?.destroy();
+    };
+  }, [content.chartType, normalizedChart]);
 
   return (
     <div className="flex flex-col h-full gap-3">
       {content.subtitle && <p className="text-xs text-cyan-200/80">{content.subtitle}</p>}
-      <div className="relative flex-1 min-h-[240px] rounded-xl bg-[#040812]/90 border border-cyan-500/25 p-3">
+      <div className="relative flex-1 min-h-[260px] rounded-xl bg-[#040812]/90 border border-cyan-500/25 p-3">
         <canvas ref={canvasRef} />
       </div>
-      {content.summary && (
+      {(content.summary || normalizedChart.usedFallback) && (
         <p className="text-xs text-slate-300 bg-cyan-950/30 border border-cyan-500/20 rounded-xl p-3">
-          {content.summary}
+          {content.summary || 'Visualização estruturada automaticamente para evitar gráfico vazio.'}
         </p>
       )}
     </div>
@@ -612,6 +771,20 @@ const YouTubeMediaPlayer: React.FC<{
   );
 };
 
+interface JarvisStageRendererProps {
+  content: JarvisStageContent;
+  layoutMode: 'split' | 'focus';
+  onChangeLayoutMode: (mode: 'split' | 'focus') => void;
+  onClose: () => void;
+  onNextTrack?: () => void;
+  onAskAboutDocument?: (docTitle: string) => void;
+  playlist?: JarvisTrack[];
+  mediaPaused?: boolean;
+  mediaVolume?: number;
+  onToggleMediaPause?: () => void;
+  onChangeMediaVolume?: (volume: number) => void;
+}
+
 export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
   content,
   layoutMode,
@@ -626,7 +799,42 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
 }) => {
   const [svgZoom, setSvgZoom] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  const [isExportingPng, setIsExportingPng] = useState(false);
   const htmlIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const exportRootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setSvgZoom(false);
+    if (exportRootRef.current) {
+      gsap.fromTo(
+        exportRootRef.current,
+        { opacity: 0.65, y: 10 },
+        { opacity: 1, y: 0, duration: 0.35, ease: 'power2.out' }
+      );
+    }
+  }, [content.id]);
+
+  const handleExportPng = async () => {
+    if (!exportRootRef.current || isExportingPng) return;
+    setIsExportingPng(true);
+    try {
+      const canvas = await html2canvas(exportRootRef.current, {
+        backgroundColor: '#040914',
+        scale: 2,
+        useCORS: true,
+        logging: false,
+      });
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${(content.title || 'preview-sara').toLowerCase().replace(/[^a-z0-9]+/gi, '-')}.png`;
+      a.click();
+    } catch {
+      // ignore export errors gracefully
+    } finally {
+      setIsExportingPng(false);
+    }
+  };
 
   const copyCardText = async (text: string, idx: number) => {
     try {
@@ -672,6 +880,8 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
 
   const renderIcon = () => {
     switch (content.kind) {
+      case '3d':
+        return <Box className="w-4 h-4 text-cyan-300" />;
       case 'math':
         return <Calculator className="w-4 h-4 text-cyan-300" />;
       case 'chart':
@@ -695,53 +905,96 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
     }
   };
 
-  const hasSvgCalculations =
-    content.kind === 'svg' &&
-    Boolean(
-      (content.formulas && content.formulas.length > 0) ||
-        (content.steps && content.steps.length > 0) ||
-        content.finalAnswer
-    );
+  const svgValidation = useMemo(
+    () => (content.kind === 'svg' ? sanitizeAndFixSvgMarkup(content.svgCode) : null),
+    [content]
+  );
+  const mathSvgValidation = useMemo(
+    () => (content.kind === 'math' && content.svgCode ? sanitizeAndFixSvgMarkup(content.svgCode) : null),
+    [content]
+  );
+  const explanationSvgValidation = useMemo(
+    () =>
+      content.kind === 'explanation' && content.visualSvg
+        ? sanitizeAndFixSvgMarkup(content.visualSvg)
+        : null,
+    [content]
+  );
+
+  const svgFallback3DShape = useMemo(() => {
+    if (content.kind !== 'svg') return null;
+    if (svgValidation?.isRenderable) return null;
+    return detect3DShapeFromTitle(`${content.title} ${content.description || ''}`) || 'cube';
+  }, [content, svgValidation]);
+
+  const canExportPng =
+    content.kind === '3d' ||
+    content.kind === 'svg' ||
+    content.kind === 'math' ||
+    content.kind === 'chart' ||
+    content.kind === 'explanation';
 
   return (
-    <div className="flex flex-col h-full min-h-0 rounded-2xl bg-[#050B18]/92 border border-cyan-400/40 shadow-[0_0_32px_rgba(0,229,255,0.16)] backdrop-blur-md overflow-hidden">
-      {/* Barra do Palco */}
-      <div className="px-3.5 py-2.5 border-b border-cyan-500/25 bg-[#071124]/90 flex items-center justify-between gap-2 shrink-0">
+    <motion.div
+      initial={{ opacity: 0.75, scale: 0.99 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.25 }}
+      className="flex flex-col h-full min-h-0 rounded-2xl bg-[#050B18]/92 border border-cyan-400/40 shadow-[0_0_32px_rgba(0,229,255,0.16)] overflow-hidden"
+    >
+      {/* Barra do Palco - TODOS OS BOTÕES TÊM TEXTO VISÍVEL CLARO E FUNÇÃO REAL */}
+      <div className="px-3.5 py-2.5 border-b border-cyan-500/25 bg-[#071124]/95 flex flex-wrap items-center justify-between gap-2 shrink-0">
         <div className="flex items-center gap-2 min-w-0">
           {renderIcon()}
           <h3 className="text-xs sm:text-sm font-bold text-white truncate">{content.title}</h3>
         </div>
 
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-1.5 shrink-0">
           {(content.kind === 'explanation' || content.kind === 'document') && (
             <button
               type="button"
               onClick={() => startVoiceReading(content.title, buildReadableStageText())}
-              className="px-2 py-1 rounded-lg bg-cyan-500/15 border border-cyan-400/45 text-[11px] text-cyan-200 hover:bg-cyan-500/25 transition flex items-center gap-1 cursor-pointer"
+              className="px-2.5 py-1 rounded-lg bg-cyan-500/15 border border-cyan-400/45 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/25 transition flex items-center gap-1 cursor-pointer"
               title="Ler em voz alta em segundo plano"
             >
               <Volume2 className="w-3 h-3" />
-              <span className="hidden sm:inline">Ler</span>
+              <span>Ler</span>
             </button>
           )}
 
-          {content.kind === 'svg' && (
+          {canExportPng && (
+            <button
+              type="button"
+              onClick={() => void handleExportPng()}
+              disabled={isExportingPng}
+              className="px-2.5 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/35 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/20 transition flex items-center gap-1 cursor-pointer disabled:opacity-50"
+              title="Exportar preview para imagem PNG"
+            >
+              <Camera className="w-3 h-3" />
+              <span>{isExportingPng ? 'A guardar...' : 'Exportar PNG'}</span>
+            </button>
+          )}
+
+          {content.kind === 'svg' && svgValidation?.isRenderable && (
             <>
               <button
                 type="button"
                 onClick={() => setSvgZoom((z) => !z)}
-                className="px-2 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/30 text-[11px] text-cyan-200 hover:bg-cyan-500/15 transition flex items-center gap-1 cursor-pointer"
-                title="Ampliar SVG"
+                className="px-2.5 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/35 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/20 transition flex items-center gap-1 cursor-pointer"
+                title={svgZoom ? 'Reduzir zoom do desenho' : 'Ampliar desenho'}
               >
                 <ZoomIn className="w-3 h-3" />
+                <span>{svgZoom ? 'Normal' : 'Ampliar'}</span>
               </button>
               <button
                 type="button"
-                onClick={() => downloadTextFile(`${content.title || 'arte-sara'}.svg`, content.svgCode, 'image/svg+xml')}
-                className="px-2 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/30 text-[11px] text-cyan-200 hover:bg-cyan-500/15 transition flex items-center gap-1 cursor-pointer"
-                title="Descarregar SVG"
+                onClick={() =>
+                  downloadTextFile(`${content.title || 'arte-sara'}.svg`, svgValidation.html, 'image/svg+xml')
+                }
+                className="px-2.5 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/35 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/20 transition flex items-center gap-1 cursor-pointer"
+                title="Descarregar ficheiro vetorial SVG"
               >
                 <Download className="w-3 h-3" />
+                <span>Baixar SVG</span>
               </button>
             </>
           )}
@@ -751,19 +1004,20 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
               <button
                 type="button"
                 onClick={() => htmlIframeRef.current?.contentWindow?.print()}
-                className="px-2 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/30 text-[11px] text-cyan-200 hover:bg-cyan-500/15 transition flex items-center gap-1 cursor-pointer"
+                className="px-2.5 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/35 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/20 transition flex items-center gap-1 cursor-pointer"
                 title="Imprimir ou guardar como PDF"
               >
                 <Printer className="w-3 h-3" />
-                <span className="hidden sm:inline">PDF</span>
+                <span>PDF</span>
               </button>
               <button
                 type="button"
                 onClick={() => downloadTextFile(`${content.title || 'visual-sara'}.html`, content.html, 'text/html')}
-                className="px-2 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/30 text-[11px] text-cyan-200 hover:bg-cyan-500/15 transition flex items-center gap-1 cursor-pointer"
+                className="px-2.5 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/35 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/20 transition flex items-center gap-1 cursor-pointer"
                 title="Descarregar HTML"
               >
                 <Download className="w-3 h-3" />
+                <span>Baixar HTML</span>
               </button>
             </>
           )}
@@ -771,105 +1025,81 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
           <button
             type="button"
             onClick={() => onChangeLayoutMode(layoutMode === 'split' ? 'focus' : 'split')}
-            className="px-2 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/30 text-[11px] text-cyan-200 hover:bg-cyan-500/15 transition flex items-center gap-1 cursor-pointer"
-            title={layoutMode === 'split' ? 'Cabeça no canto / Palco máximo' : 'Dividir ecrã com a Sara'}
+            className="px-2.5 py-1 rounded-lg bg-[#0A162C] border border-cyan-500/35 text-[11px] font-semibold text-cyan-200 hover:bg-cyan-500/20 transition flex items-center gap-1 cursor-pointer"
+            title={layoutMode === 'split' ? 'Expandir palco ao máximo' : 'Dividir ecrã com a Sara'}
           >
             {layoutMode === 'split' ? <Maximize2 className="w-3 h-3" /> : <Columns2 className="w-3 h-3" />}
-            <span className="hidden sm:inline">{layoutMode === 'split' ? 'Expandir' : 'Dividir'}</span>
+            <span>{layoutMode === 'split' ? 'Expandir' : 'Dividir'}</span>
           </button>
 
           <button
             type="button"
             onClick={onClose}
-            className="px-2 py-1 rounded-lg bg-rose-500/15 border border-rose-500/40 text-rose-200 hover:bg-rose-500/30 transition cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
-            title="Fechar visualização e voltar à Sara em destaque"
+            className="px-2.5 py-1 rounded-lg bg-rose-500/20 border border-rose-500/45 text-rose-200 hover:bg-rose-500/35 transition cursor-pointer flex items-center gap-1 text-[11px] font-semibold"
+            title="Fechar visualização e voltar à Sara"
           >
             <X className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Voltar</span>
+            <span>Fechar</span>
           </button>
         </div>
       </div>
 
       {/* Corpo dinâmico */}
-      <div className="flex-1 min-h-0 overflow-y-auto sara-scroll p-3.5">
-        {content.kind === 'svg' && (
-          <div className="flex flex-col gap-3 h-full">
-            {content.subtitle && <p className="text-xs text-cyan-200/80">{content.subtitle}</p>}
+      <div ref={exportRootRef} className="flex-1 min-h-0 overflow-y-auto sara-scroll p-3.5">
+        {content.kind === '3d' && (
+          <div className="flex flex-col gap-3.5">
+            {content.subtitle && <p className="text-xs text-cyan-200/85">{content.subtitle}</p>}
 
-            <div
-              className={
-                hasSvgCalculations
-                  ? 'grid grid-cols-1 xl:grid-cols-[1.1fr_0.9fr] gap-3 items-stretch flex-1 min-h-0'
-                  : 'flex flex-col gap-3 flex-1 min-h-0'
-              }
-            >
-              <div
-                className={`min-h-[240px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-4 overflow-auto transition [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:h-auto ${
-                  svgZoom ? 'scale-105' : ''
-                }`}
-                dangerouslySetInnerHTML={{ __html: sanitizeSvgMarkup(content.svgCode) }}
-              />
-
-              {hasSvgCalculations && (
-                <div className="space-y-2.5 overflow-y-auto sara-scroll pr-1">
-                  {content.formulas && content.formulas.length > 0 && (
-                    <div className="p-3 rounded-xl bg-[#071124] border border-cyan-500/25 space-y-2">
-                      <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
-                        Fórmulas
-                      </div>
-                      <div className="space-y-1.5">
-                        {content.formulas.map((f, i) => (
-                          <div
-                            key={i}
-                            className="px-2.5 py-1.5 rounded-lg bg-[#030815] border border-cyan-500/20"
-                          >
-                            <KatexBlock math={f} displayMode />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {content.steps && content.steps.length > 0 && (
-                    <div className="space-y-2">
-                      {content.steps.map((st, idx) => (
-                        <div
-                          key={`${st.step}_${idx}`}
-                          className="p-2.5 rounded-xl bg-[#060F20] border border-cyan-500/20 space-y-1"
-                        >
-                          <div className="text-[10px] font-bold text-rose-300 uppercase tracking-wider">
-                            {st.step || `Passo ${idx + 1}`}
-                          </div>
-                          {st.expression && (
-                            <div className="px-2.5 py-1 rounded-lg bg-[#030711] border border-cyan-500/25">
-                              <KatexBlock math={st.expression} displayMode />
-                            </div>
-                          )}
-                          {st.explanation && (
-                            <p className="text-xs text-slate-300 leading-relaxed">{st.explanation}</p>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {content.finalAnswer && (
-                    <div className="p-3 rounded-xl bg-gradient-to-r from-cyan-500/20 to-rose-500/15 border border-cyan-400/50">
-                      <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
-                        Resultado Final
-                      </div>
-                      <div className="mt-1 text-white font-bold">
-                        <KatexBlock math={content.finalAnswer} displayMode />
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
+            <ThreeSceneStageView
+              shape={content.shape}
+              title={content.title}
+              dimensions={content.dimensions}
+              unit={content.unit || 'cm'}
+              labelLines={content.labelLines}
+              autoRotateInitial={content.autoRotate ?? true}
+            />
 
             {content.description && (
-              <p className="text-xs text-slate-300 leading-relaxed">{content.description}</p>
+              <p className="text-xs text-slate-200 leading-relaxed">{content.description}</p>
             )}
+
+            <StageCalculationsPanel
+              formulas={content.formulas}
+              steps={content.steps}
+              finalAnswer={content.finalAnswer}
+            />
+          </div>
+        )}
+
+        {content.kind === 'svg' && (
+          <div className="flex flex-col gap-3.5">
+            {content.subtitle && <p className="text-xs text-cyan-200/80">{content.subtitle}</p>}
+
+            {svgValidation?.isRenderable ? (
+              <div
+                className={`w-full min-h-[290px] max-h-[390px] rounded-xl bg-[#040914] border border-cyan-500/30 flex items-center justify-center p-4 overflow-hidden transition-transform duration-200 ${
+                  svgZoom ? 'scale-[1.06]' : ''
+                }`}
+                dangerouslySetInnerHTML={{ __html: svgValidation.html }}
+              />
+            ) : (
+              /* Auto-cura: se SVG vier vazio/inválido, materializa imediatamente em 3D real em vez de deixar caixa preta */
+              <ThreeSceneStageView
+                shape={svgFallback3DShape || 'cube'}
+                title={content.title}
+                {...extractDimensionsFromText(`${content.title} ${content.description || ''}`)}
+              />
+            )}
+
+            {content.description && (
+              <p className="text-xs text-slate-200 leading-relaxed">{content.description}</p>
+            )}
+
+            <StageCalculationsPanel
+              formulas={content.formulas}
+              steps={content.steps}
+              finalAnswer={content.finalAnswer}
+            />
           </div>
         )}
 
@@ -884,10 +1114,10 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
               </div>
             )}
 
-            {content.svgCode && (
+            {mathSvgValidation?.isRenderable && (
               <div
-                className="min-h-[180px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-3 [&>svg]:max-w-full [&>svg]:max-h-[220px]"
-                dangerouslySetInnerHTML={{ __html: sanitizeSvgMarkup(content.svgCode) }}
+                className="w-full min-h-[220px] max-h-[300px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-3 overflow-hidden"
+                dangerouslySetInnerHTML={{ __html: mathSvgValidation.html }}
               />
             )}
 
@@ -940,19 +1170,22 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
 
         {content.kind === 'explanation' && (
           <div className="space-y-3.5">
-            {content.summary && (
+            {(content.summary || (content.sections.length === 0 && !explanationSvgValidation?.isRenderable)) && (
               <div className="p-3.5 rounded-xl bg-[#08152C] border border-cyan-400/35">
                 <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300 mb-1">
                   Síntese Visual
                 </div>
-                <p className="text-xs sm:text-sm text-slate-100 leading-relaxed">{content.summary}</p>
+                <p className="text-xs sm:text-sm text-slate-100 leading-relaxed">
+                  {content.summary ||
+                    `Explicação estruturada sobre ${content.title}. Usa o botão Ler para ouvir em voz alta ou faz uma pergunta de seguimento.`}
+                </p>
               </div>
             )}
 
-            {content.visualSvg && (
+            {explanationSvgValidation?.isRenderable && (
               <div
-                className="min-h-[200px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-4 [&>svg]:max-w-full [&>svg]:max-h-[250px]"
-                dangerouslySetInnerHTML={{ __html: sanitizeSvgMarkup(content.visualSvg) }}
+                className="w-full min-h-[220px] max-h-[300px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-4 overflow-hidden"
+                dangerouslySetInnerHTML={{ __html: explanationSvgValidation.html }}
               />
             )}
 
@@ -1067,13 +1300,17 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
         )}
 
         {content.kind === 'html' && (
-          <div className="h-full min-h-[300px] rounded-xl overflow-hidden border border-cyan-500/30 bg-white">
+          <div className="h-full min-h-[340px] rounded-xl overflow-hidden border border-cyan-500/30 bg-[#071124]">
             <iframe
               ref={htmlIframeRef}
-              srcDoc={content.html}
+              srcDoc={
+                /<(html|body)\b/i.test(content.html || '')
+                  ? content.html
+                  : `<!DOCTYPE html><html lang="pt"><head><meta charset="utf-8" /><style>html,body{margin:0;min-height:100vh;background:#071124;color:#f8fafc;font-family:Inter,system-ui,sans-serif;padding:16px;box-sizing:border-box;}</style></head><body>${content.html || '<p>Visualização interativa pronta.</p>'}</body></html>`
+              }
               title={content.title}
               sandbox="allow-scripts allow-same-origin allow-modals"
-              className="w-full h-full min-h-[300px]"
+              className="w-full h-full min-h-[340px]"
             />
           </div>
         )}
@@ -1149,6 +1386,6 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
 
         {content.kind === 'flashcards' && <FlashcardsStageView content={content} />}
       </div>
-    </div>
+    </motion.div>
   );
 };

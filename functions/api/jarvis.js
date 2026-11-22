@@ -1,4 +1,5 @@
 import {
+  fetchHudLiveFeedEdge,
   formatFriendlyEdgeError,
   handleOptions,
   jsonResponse,
@@ -17,6 +18,10 @@ export async function onRequestPost(context) {
     if (body?.action === 'youtube_search') {
       const track = await searchYouTubeTrackEdge(body?.query || '', body?.kind || 'music');
       return jsonResponse({ track }, 200);
+    }
+    if (body?.action === 'hud_live_feed') {
+      const feed = await fetchHudLiveFeedEdge();
+      return jsonResponse(feed, 200);
     }
 
     const apiKey = resolveEdgeApiKey(context.request, context.env);

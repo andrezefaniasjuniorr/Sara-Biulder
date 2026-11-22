@@ -5,6 +5,8 @@ export type VoiceLevel = 'short' | 'medium' | 'full';
 export type VoiceCommandAction =
   | { type: 'background_smalltalk'; reply: string; raw: string }
   | { type: 'silence_sara'; raw: string }
+  | { type: 'unsilence_sara'; raw: string }
+  | { type: 'show_builder_progress'; raw: string }
   | { type: 'confirm_pending'; raw: string }
   | { type: 'cancel_pending'; raw: string }
   | { type: 'voice_level'; level: VoiceLevel; raw: string }
@@ -54,6 +56,8 @@ export type VoiceCommandAction =
       moduleTab: 'voz' | 'sistema' | 'agenda' | 'musica' | 'documentos' | 'tarefas';
       raw: string;
     }
+  | { type: 'open_panel'; raw: string }
+  | { type: 'close_panel'; raw: string }
   | { type: 'pause_music'; raw: string }
   | { type: 'resume_music'; raw: string }
   | { type: 'close_music'; raw: string }
@@ -255,38 +259,76 @@ export function getManualStepApprovalSpeech(stepTitle: string): string {
 export function getPlatformCommandSpeech(action: string, detail?: string): string {
   switch (action) {
     case 'open_editor':
-      return pickNonRepeating(['A abrir o editor de código.', 'Editor aberto para ti.']);
+      return pickNonRepeating(['Editor aberto.', 'Abri o editor de código aqui ao lado.', 'Pronto, já estás no editor.']);
     case 'open_editor_fullscreen':
-      return pickNonRepeating(['A expandir o editor em tela cheia.', 'Editor em ecrã inteiro ativo.']);
+      return pickNonRepeating(['Editor em ecrã inteiro.', 'Expandi o editor para trabalhares à vontade.']);
     case 'open_files':
-      return pickNonRepeating(['A mostrar a árvore de ficheiros do projeto.', 'Pasta de ficheiros aberta.']);
+      return pickNonRepeating(['Aqui tens os ficheiros do projeto.', 'Abri a árvore de ficheiros.']);
     case 'open_console':
-      return pickNonRepeating(['A abrir o console de execução agora.', 'Console aberto.']);
+      return pickNonRepeating(['Console aberto.', 'Mostrei o console de execução.']);
     case 'show_preview':
-      return pickNonRepeating(['A focar o preview ao vivo.', 'Aqui está o preview atualizado.']);
+      return pickNonRepeating(['Preview ao vivo focado.', 'Aqui está o preview atualizado.']);
     case 'open_preview_fullscreen':
-      return pickNonRepeating(['Preview em tela cheia ativo.', 'A expandir o preview para ecrã inteiro.']);
+      return pickNonRepeating(['Preview em tela cheia.', 'Expandi o preview ao máximo.']);
     case 'close_editor_or_back':
-      return pickNonRepeating(['De volta ao painel principal.', 'Fechei e voltei para a vista principal.']);
+      return pickNonRepeating(['Fechei e voltei para a vista principal.', 'Já recuei para o painel principal.']);
     case 'preview_mobile':
-      return pickNonRepeating(['A mudar o preview para telemóvel.', 'Modo telemóvel ativo no preview.']);
+      return pickNonRepeating(['Preview mudado para telemóvel.', 'Agora estás a ver a versão mobile.']);
     case 'preview_tablet':
-      return pickNonRepeating(['A alternar para a vista de tablet.', 'Preview em tablet ativo.']);
+      return pickNonRepeating(['Preview ajustado para tablet.', 'Vista de tablet ativa.']);
     case 'preview_desktop':
-      return pickNonRepeating(['A voltar para a vista de computador.', 'Preview em computador ativo.']);
+      return pickNonRepeating(['Voltei para a vista de computador.', 'Preview em ecrã desktop.']);
     case 'save_project':
-      return pickNonRepeating(['A guardar o projeto no Firebase.', 'Projeto guardado com segurança.']);
+      return pickNonRepeating(['Projeto guardado na nuvem.', 'Tudo salvo com segurança.']);
     case 'open_projects':
-      return pickNonRepeating(['A abrir a tua lista de projetos.', 'Aqui estão os teus projetos.']);
+      return pickNonRepeating(['Aqui estão os teus projetos.', 'Abri a lista de projetos.']);
     case 'open_settings':
-      return pickNonRepeating(['A abrir as definições da plataforma.', 'Configurações abertas.']);
+      return pickNonRepeating(['Definições abertas.', 'Aqui estão as configurações.']);
     case 'open_deploy':
-      return pickNonRepeating(['A abrir o painel de publicação e deploy.', 'Painel de deploy pronto.']);
+      return pickNonRepeating(['Painel de deploy aberto.', 'Abri a área de publicação.']);
     case 'refresh_preview':
-      return pickNonRepeating(['A recarregar o preview agora.', 'Preview atualizado.']);
+      return pickNonRepeating(['Preview atualizado.', 'Recarreguei a vista do site.']);
     default:
       return detail || 'Feito.';
   }
+}
+
+export function getWorkspaceSwitchSpeech(target: 'jarvis' | 'builder', projectName?: string): string {
+  if (target === 'builder') {
+    return pickNonRepeating([
+      projectName && projectName !== 'Novo Projeto'
+        ? `Entrei no Builder com ${projectName}. Que queres construir ou ajustar agora?`
+        : 'Builder aberto. Diz-me o que vamos construir.',
+      'Cá estamos no Builder. Pronta para pôr as mãos no código.',
+      'Mudei para o Builder. Podes acompanhar tudo por aqui.',
+    ]);
+  }
+  return pickNonRepeating([
+    'Voltei para o Assistente. Em que posso ajudar?',
+    'Estamos no modo Assistente outra vez. Fala comigo.',
+    'Cá estou de volta no palco principal. Qual é a próxima?',
+  ]);
+}
+
+export function getBackgroundBuildAckSpeech(goal: string): string {
+  const shortTopic = goal.trim().slice(0, 48);
+  return pickNonRepeating([
+    `Boa ideia! Já pus o Builder a construir isso em segundo plano (${shortTopic}) enquanto continuamos a conversar aqui.`,
+    `Aceite! O Builder já arrancou em segundo plano para montar esse projeto — fico contigo aqui no Assistente e aviso assim que terminar.`,
+    `Bora lá! Deixei o Builder a trabalhar em segundo plano nesse pedido. Podes continuar a falar comigo normalmente.`,
+  ]);
+}
+
+export function getBackgroundBuildDoneSpeech(projectName: string): string {
+  return pickNonRepeating([
+    `Terminei! O projeto ${projectName} já está pronto no Builder — queres ver?`,
+    `Chefe, o trabalho no Builder ficou pronto (${projectName}). Queres abrir para ver como ficou?`,
+    `Missão cumprida em segundo plano: ${projectName} está concluído e testado. Queres dar uma olhadela?`,
+  ]);
+}
+
+export function getHumanChoice(options: string[]): string {
+  return pickNonRepeating(options);
 }
 
 export function getModeSwitchSpeech(mode: 'manual' | 'automatic'): string {
@@ -294,18 +336,18 @@ export function getModeSwitchSpeech(mode: 'manual' | 'automatic'): string {
     return pickNonRepeating([
       'Modo manual ligado! Vamos decidir juntos e aprovo contigo antes de construir cada etapa.',
       'Combinado, passei para o modo manual. Eu sugiro a arquitetura, pergunto-te primeiro e avançamos passo a passo.',
-      'Modo colaborativo ativo, chefe! Diz-me o que queres construir que eu planeio e confirmo contigo.',
+      'Modo colaborativo ativo! Diz-me o que queres construir que eu planeio e confirmo contigo.',
     ]);
   }
   return pickNonRepeating([
-    'Modo automático ligado! Falo contigo logo no início com sugestões, depois construo, testo e corrijo tudo sozinha.',
-    'Ativei o modo automático! Podes mandar o objetivo que eu alinho as ideias contigo e executo de ponta a ponta.',
-    'Modo autónomo pronto, Senhor Júnior. Manda a missão que eu assumo daqui até ao teste final.',
+    'Modo automático ligado! Alinho as ideias contigo logo no início e depois construo, testo e corrijo sozinha.',
+    'Ativei o modo automático! Manda o objetivo que eu executo etapa por etapa até ao teste final.',
+    'Modo autónomo pronto. Manda a missão que eu assumo daqui.',
   ]);
 }
 
 /**
- * Corrige erros fonéticos frequentes do reconhecimento de voz pt-PT dentro do contexto técnico da plataforma.
+ * Corrige erros fonéticos frequentes do reconhecimento de voz pt-PT / Moçambique dentro do contexto da plataforma.
  */
 export function normalizePhoneticVoiceTranscript(transcript: string): string {
   let out = transcript.trim();
@@ -313,17 +355,25 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
 
   // Confusão comum do nome "Sara" no início da frase (ex: "sala abre o editor", "zara modo manual")
   out = out.replace(
-    /^(sala|saia|cara|zara|lara)(?=[\s,]+(abre|abrir|fecha|fechar|apaga|apagar|elimina|remove|cria|criar|faz|fazer|modo|desfaz|mostra|vai|para|continua|limpa|baixa|salva|guarda|atualiza|recarrega|cala|pausa|retoma|tudo|esta|oi|ola|duplica|renomeia|quero|podes|pode|muda|poe))/i,
+    /^(sala|saia|cara|zara|lara|saraa|çara|seara)(?=[\s,]+(abre|abrir|fecha|fechar|apaga|apagar|elimina|remove|cria|criar|faz|fazer|modo|desfaz|mostra|vai|para|continua|limpa|baixa|salva|guarda|atualiza|recarrega|cala|fala|podes|pode|pausa|retoma|tudo|esta|oi|ola|duplica|renomeia|quero|muda|poe|explica|me\s+explica|como|builder|biuder|assistente|volta))/i,
     'Sara'
   );
 
-  // Confusões técnicas recorrentes em STT português
+  // Confusões técnicas e fonéticas recorrentes em STT português
   const replacements: Array<[RegExp, string]> = [
+    [/\b(biuder|biulder|bilder|bilda|bider|builder\s*pro)\b/gi, 'builder'],
+    [/\b(assistent|acistente|assistenta)\b/gi, 'assistente'],
+    [/\b(jarves|javis|jarvis)\b/gi, 'jarvis'],
     [/\b(priviu|perviu|pr[eé]vio|pre viu)\b/gi, 'preview'],
     [/\b(consola|consolo|conselho)\b/gi, 'console'],
     [/\b(heitor|aditor|edito|edictor)\b/gi, 'editor'],
     [/\b(feicheiros|fixeiros)\b/gi, 'ficheiros'],
     [/\b(proj[eé]to|progeto)\b/gi, 'projeto'],
+    [/\b(web\s*site|uebsite)\b/gi, 'website'],
+    [/\b(aplicassao|aplicacao)\b/gi, 'aplicação'],
+    [/\b(matem[aá]ticas?)\b/gi, 'matemática'],
+    [/\b(progre[sç]o|progre[cç]ao)\b/gi, 'progresso'],
+    [/\b(por\s*cento|porcento)\b/gi, 'porcento'],
     [/\b(deploi|de\s+poi|dip[l]?oy)\b/gi, 'deploy'],
     [/\b(fire\s*base|faire\s*base|faribase)\b/gi, 'firebase'],
     [/\b(puxa|puxe|puche|pux)\b(?=\s+(para|pro|github|git|agora|$))/gi, 'push'],
@@ -343,6 +393,36 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
   }
 
   return out.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Deteta se o utilizador (mesmo estando dentro do Builder) está a pedir uma explicação geral / matemática / estudo para a Assistente.
+ */
+export function isAssistantExplanationIntent(text: string): boolean {
+  const lower = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  if (!lower) return false;
+
+  // Se pede alteração explícita no código/site/projeto atual, fica no Builder
+  if (
+    /\b(no\s+(site|projeto|app|codigo|editor|preview)|adiciona|implementa|cria\s+uma?\s+(pagina|tela|botao|seccao|componente)|corrige\s+(o\s+)?erro)\b/i.test(
+      lower
+    )
+  ) {
+    return false;
+  }
+
+  return (
+    /\b(me\s+explica|explica[-\s]?me|podes\s+explicar|explica\s+(isso|isto|sobre|a\s+materia|matematica|fisica|quimica|biologia|historia|como))\b/i.test(
+      lower
+    ) ||
+    /^(sara[,\s]+)?(o\s+que\s+e|como\s+funciona|qual\s+e\s+a\s+formula|resolve\s+esta?\s+(equacao|conta|calculo)|calcula\s+(o\s+volume|a\s+area)|faz\s+um\s+(teste|quiz|flashcards|resumo))\b/i.test(
+      lower
+    )
+  );
 }
 
 /**
@@ -436,7 +516,7 @@ export function parseVoiceCommand(
     }
   }
 
-  // Calar a Sara imediatamente
+  // Calar / Reativar a voz da Sara imediatamente
   if (
     lower.includes('sara, cala') ||
     lower.includes('sara cala') ||
@@ -446,9 +526,20 @@ export function parseVoiceCommand(
     lower.includes('cala-te') ||
     lower.includes('cala te') ||
     lower === 'cala' ||
-    lower.includes('fica calada')
+    lower.includes('fica calada') ||
+    lower.includes('silencia a voz')
   ) {
     return { type: 'silence_sara', raw: clean };
+  }
+
+  if (
+    /^(sara[,\s]+)?(fala|podes\s+falar|pode\s+falar|volta\s+a\s+falar|reativa\s+a\s+voz|ativa\s+a\s+voz|liga\s+a\s+voz)$/i.test(
+      lower
+    ) ||
+    lower.includes('sara, fala') ||
+    lower.includes('sara fala')
+  ) {
+    return { type: 'unsilence_sara', raw: clean };
   }
 
   // Ajuste de velocidade da voz
@@ -493,6 +584,16 @@ export function parseVoiceCommand(
     return { type: 'start_listening' };
   }
 
+  // Mostrar o progresso visual do que está a ser construído no Builder
+  if (
+    /\b(mostra|mostrar|exibe|ver|abre)\s+(o\s+que\s+estas\s+a\s+fazer|o\s+trabalho|a\s+construcao|o\s+progresso)\s+(no\s+|do\s+)?builder\b/.test(
+      lower
+    ) ||
+    /\bmostra\s+o\s+que\s+(estas|ta|t[aá]s)\s+a\s+fazer\s+no\s+builder\b/.test(lower)
+  ) {
+    return { type: 'show_builder_progress', raw: clean };
+  }
+
   // Troca de Modo Principal: Assistente JARVIS <-> Builder
   if (
     /\b(abre|abrir|vai\s+para|muda\s+para|passa\s+para|entra\s+no|ativa|ativar|quero)\s+(o\s+)?(modo\s+)?(builder|construtor)\b/.test(
@@ -504,7 +605,7 @@ export function parseVoiceCommand(
   }
 
   if (
-    /\b(volta\s+para|abre|abrir|vai\s+para|muda\s+para|passa\s+para|ativa|ativar|quero)\s+(o\s+)?(modo\s+)?(assistente|jarvis|modo\s+normal)\b/.test(
+    /\b(volta\s+para|volta\s+ao|abre|abrir|vai\s+para|muda\s+para|passa\s+para|ativa|ativar|quero)\s+(o\s+)?(modo\s+)?(assistente|jarvis|modo\s+normal)\b/.test(
       lower
     ) ||
     /\b(sai\s+do|sair\s+do|fecha\s+o)\s+builder\b/.test(lower) ||
@@ -616,26 +717,34 @@ export function parseVoiceCommand(
     }
   }
 
-  // No Modo Assistente JARVIS: fechar conteúdo no Preview, abrir módulos ou continuar explicação
-  if (context?.workspaceMode === 'jarvis') {
-    if (
-      context?.hasActiveStage &&
-      /^(sara[,\s]+)?(fecha|fechar|fecha\s+isso|fecha\s+isto|fecha\s+o\s+painel|esconde|esconde\s+isso|tira\s+isso|volta|voltar|volta\s+para\s+o\s+centro|sair)$/i.test(
-        lower
-      )
-    ) {
-      return { type: 'close_stage', raw: clean };
-    }
-    if (/^(sara[,\s]+)?(continua|continua\s+a\s+falar|prossegue|segue)$/i.test(lower)) {
-      return { type: 'continue_sara', raw: clean };
-    }
+  // Abrir ou fechar o Menu Deslizante [☰ PAINEL]
+  if (
+    /^(sara[,\s]+)?(abre|abrir|abres|mostra|mostrar|exibe|ver)\s+(o\s+)?(painel|menu)(\s+(lateral|de\s+modulos|jarvis))?$/i.test(
+      lower
+    ) ||
+    lower === 'painel' ||
+    lower === 'menu'
+  ) {
+    return { type: 'open_panel', raw: clean };
+  }
+
+  if (
+    /^(sara[,\s]+)?(fecha|fechar|esconde|esconder|oculta|ocultar)\s+(o\s+)?(painel|menu)(\s+(lateral|de\s+modulos|jarvis))?$/i.test(
+      lower
+    )
+  ) {
+    return { type: 'close_panel', raw: clean };
+  }
+
+  // Módulos do Painel JARVIS acessíveis por voz em QUALQUER modo (Assistente ou Builder)
+  if (!hasExplicitAppFeatureEdit(lower)) {
     if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|entra\s+em|ver)\s+(a\s+|o\s+|os\s+)?musica(s)?\b|^musica$/.test(lower)) {
       return { type: 'open_jarvis_module', moduleTab: 'musica', raw: clean };
     }
     if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(a\s+|o\s+)?(agenda|alarmes?)\b|^agenda$/.test(lower)) {
       return { type: 'open_jarvis_module', moduleTab: 'agenda', raw: clean };
     }
-    if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(os\s+|o\s+)?(documentos?|docs?|ficheiros?)\b|^documentos$/.test(lower)) {
+    if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(os\s+|o\s+)?(documentos?|docs?)\b|^documentos$|^docs$/.test(lower)) {
       return { type: 'open_jarvis_module', moduleTab: 'documentos', raw: clean };
     }
     if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(as\s+|a\s+)?tarefas?\b|^tarefas$/.test(lower)) {
@@ -646,6 +755,41 @@ export function parseVoiceCommand(
     }
     if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(a\s+|o\s+)?voz\b/.test(lower)) {
       return { type: 'open_jarvis_module', moduleTab: 'voz', raw: clean };
+    }
+  }
+
+  // Perguntar progresso durante construção em segundo plano / automático (funciona no Assistente e no Builder)
+  if (
+    lower.includes('como esta o projeto') ||
+    lower.includes('como esta o progresso') ||
+    lower.includes('progresso do website') ||
+    lower.includes('progresso do site') ||
+    lower.includes('progresso do builder') ||
+    lower.includes('como esta o website') ||
+    lower.includes('como vai o website') ||
+    lower.includes('como vai o site') ||
+    lower.includes('em que etapa') ||
+    lower.includes('em que porcento') ||
+    lower.includes('quantos porcento') ||
+    lower.includes('como vai o projeto') ||
+    lower.includes('qual o progresso') ||
+    lower.includes('o que falta fazer')
+  ) {
+    return { type: 'query_status', raw: clean };
+  }
+
+  // No Modo Assistente JARVIS: fechar conteúdo no Preview ou continuar explicação
+  if (context?.workspaceMode === 'jarvis') {
+    if (
+      context?.hasActiveStage &&
+      /^(sara[,\s]+)?(fecha|fechar|fecha\s+isso|fecha\s+isto|esconde|esconde\s+isso|tira\s+isso|volta|voltar|volta\s+para\s+o\s+centro|sair)$/i.test(
+        lower
+      )
+    ) {
+      return { type: 'close_stage', raw: clean };
+    }
+    if (/^(sara[,\s]+)?(continua|continua\s+a\s+falar|prossegue|segue)$/i.test(lower)) {
+      return { type: 'continue_sara', raw: clean };
     }
     if (lower.includes('configuracoes') || lower.includes('definicoes')) {
       return { type: 'open_settings' };
@@ -1220,7 +1364,7 @@ export function resumirParaVoz(
   if (!normalizedText) return '';
 
   if (level === 'full') {
-    return normalizedText.slice(0, 900);
+    return normalizedText.slice(0, 6500);
   }
 
   const sentences = normalizedText
@@ -1323,7 +1467,7 @@ export function startContinuousVoiceRecognition(options: {
     recognition.lang = 'pt-PT';
     recognition.continuous = true;
     recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = 3;
 
     recognition.onstart = () => {
       consecutiveErrors = 0;
@@ -1338,9 +1482,24 @@ export function startContinuousVoiceRecognition(options: {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const res = event.results[i];
         if (!res?.isFinal) continue;
-        const transcript = (res?.[0]?.transcript || '').trim();
-        if (!transcript) continue;
-        options.onResult(transcript);
+        let bestTranscript = (res?.[0]?.transcript || '').trim();
+        let bestScore = typeof res?.[0]?.confidence === 'number' ? res[0].confidence : 0.5;
+        // Seleciona melhor alternativa para voz baixa/rápida com contexto SARA/Builder
+        for (let altIdx = 0; altIdx < Math.min(3, res.length || 0); altIdx++) {
+          const cand = (res?.[altIdx]?.transcript || '').trim();
+          if (!cand) continue;
+          const baseConf = typeof res?.[altIdx]?.confidence === 'number' ? res[altIdx].confidence : 0.45;
+          const domainBoost = /\b(sara|builder|assistente|painel|cubo|musica|agenda|explica)\b/i.test(cand)
+            ? 0.25
+            : 0;
+          const score = baseConf + domainBoost;
+          if (score > bestScore) {
+            bestScore = score;
+            bestTranscript = cand;
+          }
+        }
+        if (!bestTranscript) continue;
+        options.onResult(bestTranscript);
       }
     };
 
@@ -1630,6 +1789,46 @@ export function adjustVoiceSpeed(direction: 'faster' | 'slower' | 'normal'): num
  * Fala com sincronização exata de lábios via speechSynthesis.onstart / onend.
  * A boca NUNCA mexe antes do áudio realmente começar a tocar.
  */
+function splitTextForFluentSpeech(text: string): string[] {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  if (clean.length <= 215) return [clean];
+
+  const rawSentences = clean.split(/(?<=[.!?])\s+/);
+  const chunks: string[] = [];
+  let buffer = '';
+
+  const flushBuf = () => {
+    if (buffer.trim()) {
+      chunks.push(buffer.trim());
+      buffer = '';
+    }
+  };
+
+  for (const s of rawSentences) {
+    const trimmed = s.trim();
+    if (!trimmed) continue;
+    if (trimmed.length > 215) {
+      flushBuf();
+      const parts = trimmed.split(/(?<=[,;:])\s+/);
+      for (const p of parts) {
+        if ((buffer + ' ' + p).trim().length > 210 && buffer) {
+          flushBuf();
+        }
+        buffer = buffer ? `${buffer} ${p}` : p;
+      }
+      flushBuf();
+      continue;
+    }
+    if ((buffer + ' ' + trimmed).trim().length > 215 && buffer) {
+      flushBuf();
+    }
+    buffer = buffer ? `${buffer} ${trimmed}` : trimmed;
+  }
+  flushBuf();
+  return chunks.length > 0 ? chunks : [clean];
+}
+
 export function speakAsSara(
   text: string,
   enabled: boolean,
@@ -1650,7 +1849,7 @@ export function speakAsSara(
     return;
   }
 
-  // Se pedido queueIfSpeaking e já há fala ativa no momento, coloca em fila sem cortar o início ("Já vou...")
+  // Se pedido queueIfSpeaking e já há fala ativa no momento, coloca em fila sem cortar o início
   if (opts.queueIfSpeaking && saraEstaAFalar) {
     queuedSpeeches.push({ text, enabled, options: { ...opts, queueIfSpeaking: false } });
     return;
@@ -1669,7 +1868,7 @@ export function speakAsSara(
     const normKey = normalizeForRepeatCheck(spoken);
     if (!opts.forceSpeak && normKey && recentSpokenNormalized.includes(normKey)) {
       if (opts.isQuestionReply) {
-        spoken = 'Já te disse há pouco, está tudo aqui no painel.';
+        spoken = 'Já te passei esse detalhe há pouco — está tudo no painel.';
       } else {
         opts.onFinished?.();
         return;
@@ -1684,9 +1883,14 @@ export function speakAsSara(
       restartAfterSpeechTimer = null;
     }
 
-    // Cancela qualquer fila pendente se esta chamada é interruptiva (não-queued)
     if (!opts.queueIfSpeaking) {
       queuedSpeeches.length = 0;
+    }
+
+    const speechChunks = splitTextForFluentSpeech(spoken);
+    if (speechChunks.length === 0) {
+      opts.onFinished?.();
+      return;
     }
 
     // Trava o microfone ANTES de falar (mas NÃO anima a boca ainda — espera utterance.onstart!)
@@ -1707,48 +1911,15 @@ export function speakAsSara(
     window.speechSynthesis.cancel();
 
     const period = getTimePeriod();
-    const hasExcitement = spoken.includes('!');
-    const hasQuestion = spoken.includes('?');
-    const utterance = new SpeechSynthesisUtterance(spoken);
-    utterance.lang = 'pt-PT';
-    utterance.rate =
-      period === 'night'
-        ? Math.max(0.85, customBaseRate - 0.03)
-        : hasExcitement
-        ? Math.min(1.38, customBaseRate + 0.03)
-        : customBaseRate;
-    utterance.pitch =
-      (period === 'night' ? 1.0 : period === 'morning' ? 1.06 : 1.04) +
-      (hasExcitement ? 0.04 : hasQuestion ? 0.03 : 0);
-    utterance.volume = period === 'night' ? 0.88 : 1.0;
-
     const voice = pickBestFemalePortugueseVoice();
-    if (voice) {
-      utterance.voice = voice;
-      utterance.lang = voice.lang;
-    }
-
-    let finished = false;
     let keepAliveTimer: ReturnType<typeof setInterval> | null = null;
+    let activeChunkTimer: ReturnType<typeof setTimeout> | null = null;
+    let finishedAll = false;
 
-    // Boca SÓ começa a mexer quando o áudio REALMENTE começa a tocar
-    utterance.onstart = () => {
-      if (mySpeechSeq !== currentSpeechSeq || finished) return;
-      speakingStateListener?.(true);
-    };
-    utterance.onpause = () => {
-      if (mySpeechSeq !== currentSpeechSeq) return;
-      speakingStateListener?.(false);
-    };
-    utterance.onresume = () => {
-      if (mySpeechSeq !== currentSpeechSeq || finished) return;
-      speakingStateListener?.(true);
-    };
-
-    const finishSpeech = () => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(safetyTimer);
+    const finalizeAllSpeech = () => {
+      if (finishedAll) return;
+      finishedAll = true;
+      if (activeChunkTimer) clearTimeout(activeChunkTimer);
       if (keepAliveTimer) clearInterval(keepAliveTimer);
       opts.onFinished?.();
 
@@ -1756,7 +1927,6 @@ export function speakAsSara(
 
       speakingStateListener?.(false);
 
-      // Se há fala em fila (ex: resposta completa logo após "Já vou..."), dispara já
       const nextQueued = queuedSpeeches.shift();
       if (nextQueued) {
         saraEstaAFalar = false;
@@ -1773,12 +1943,12 @@ export function speakAsSara(
           if (!saraEstaAFalar && micShouldBeActive) {
             resumeMicFn?.();
           }
-        }, 400);
+        }, 380);
       }
     };
 
     keepAliveTimer = setInterval(() => {
-      if (mySpeechSeq !== currentSpeechSeq || finished) {
+      if (mySpeechSeq !== currentSpeechSeq || finishedAll) {
         if (keepAliveTimer) clearInterval(keepAliveTimer);
         return;
       }
@@ -1789,15 +1959,78 @@ export function speakAsSara(
       } catch {
         // ignore
       }
-    }, 2200);
+    }, 1800);
 
-    const safetyMs = Math.min(16000, Math.max(2400, spoken.length * 85));
-    const safetyTimer = setTimeout(finishSpeech, safetyMs);
+    // Encadeia frases naturalmente sem nunca cortar explicações longas aos 16s
+    const speakChunkAt = (chunkIdx: number) => {
+      if (mySpeechSeq !== currentSpeechSeq || finishedAll) return;
+      if (chunkIdx >= speechChunks.length) {
+        finalizeAllSpeech();
+        return;
+      }
 
-    utterance.onend = finishSpeech;
-    utterance.onerror = finishSpeech;
+      const chunkText = speechChunks[chunkIdx];
+      const hasExcitement = chunkText.includes('!');
+      const hasQuestion = chunkText.includes('?');
+      const utterance = new SpeechSynthesisUtterance(chunkText);
+      utterance.lang = 'pt-PT';
+      utterance.rate =
+        period === 'night'
+          ? Math.max(0.85, customBaseRate - 0.03)
+          : hasExcitement
+          ? Math.min(1.38, customBaseRate + 0.03)
+          : customBaseRate;
+      utterance.pitch =
+        (period === 'night' ? 1.0 : period === 'morning' ? 1.06 : 1.04) +
+        (hasExcitement ? 0.04 : hasQuestion ? 0.03 : 0);
+      utterance.volume = period === 'night' ? 0.88 : 1.0;
 
-    window.speechSynthesis.speak(utterance);
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang;
+      }
+
+      let chunkDone = false;
+      const onChunkFinished = () => {
+        if (chunkDone) return;
+        chunkDone = true;
+        if (activeChunkTimer) {
+          clearTimeout(activeChunkTimer);
+          activeChunkTimer = null;
+        }
+        if (mySpeechSeq !== currentSpeechSeq || finishedAll) {
+          finalizeAllSpeech();
+          return;
+        }
+        if (chunkIdx + 1 < speechChunks.length) {
+          setTimeout(() => speakChunkAt(chunkIdx + 1), 15);
+        } else {
+          finalizeAllSpeech();
+        }
+      };
+
+      utterance.onstart = () => {
+        if (mySpeechSeq !== currentSpeechSeq || finishedAll) return;
+        speakingStateListener?.(true);
+      };
+      utterance.onpause = () => {
+        if (mySpeechSeq !== currentSpeechSeq) return;
+        speakingStateListener?.(false);
+      };
+      utterance.onresume = () => {
+        if (mySpeechSeq !== currentSpeechSeq || finishedAll) return;
+        speakingStateListener?.(true);
+      };
+      utterance.onend = onChunkFinished;
+      utterance.onerror = onChunkFinished;
+
+      const chunkSafetyMs = Math.min(26000, Math.max(3500, chunkText.length * 105));
+      activeChunkTimer = setTimeout(onChunkFinished, chunkSafetyMs);
+
+      window.speechSynthesis.speak(utterance);
+    };
+
+    speakChunkAt(0);
   } catch {
     saraEstaAFalar = false;
     speakingStateListener?.(false);
@@ -1805,7 +2038,7 @@ export function speakAsSara(
     if (micShouldBeActive && resumeMicFn) {
       setTimeout(() => {
         if (!saraEstaAFalar && micShouldBeActive) resumeMicFn?.();
-      }, 400);
+      }, 380);
     }
   }
 }

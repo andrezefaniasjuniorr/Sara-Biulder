@@ -11,6 +11,8 @@ import {
   Presentation,
   Bot,
   UserCheck,
+  Menu,
+  X,
   Sparkles,
   Hammer,
 } from 'lucide-react';
@@ -29,6 +31,8 @@ interface TopBarProps {
   isThinking: boolean;
   firebaseUser: FirebaseUserProfile | null;
   isSyncingFirebase?: boolean;
+  isJarvisPanelOpen?: boolean;
+  onToggleJarvisPanel?: () => void;
   onChangeWorkspaceMode: (mode: WorkspaceMode) => void;
   onChangeAgentMode: (mode: AgentMode) => void;
   onToggleVoice: () => void;
@@ -54,6 +58,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   isThinking,
   firebaseUser,
   isSyncingFirebase = false,
+  isJarvisPanelOpen = false,
+  onToggleJarvisPanel,
   onChangeWorkspaceMode,
   onChangeAgentMode,
   onToggleVoice,
@@ -67,19 +73,36 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenDeploy,
 }) => {
   const voiceLevelLabel =
-    voiceLevel === 'full' ? 'Completo' : voiceLevel === 'medium' ? 'Médio' : 'Curto';
+    voiceLevel === 'full' ? 'Longo' : voiceLevel === 'medium' ? 'Médio' : 'Curto';
   const isJarvis = workspaceMode === 'jarvis';
 
   return (
     <header
       className={`h-14 shrink-0 px-2.5 sm:px-4 flex items-center justify-between gap-2 overflow-x-auto sara-scroll border-b transition-colors ${
         isJarvis
-          ? 'bg-[#040916] border-cyan-500/35 shadow-[0_2px_22px_rgba(0,229,255,0.12)]'
+          ? 'bg-[#030713] border-cyan-500/35 shadow-[0_2px_22px_rgba(0,229,255,0.12)]'
           : 'bg-[#0D1117] border-[#1E2433]'
       }`}
     >
-      {/* Esquerda: Avatar + Logo + Indicador de Estado de Voz/Pensamento */}
+      {/* Esquerda: Em JARVIS -> Botão Único [☰ PAINEL] + Avatar + SARA JARVIS | Em Builder -> Modo Switcher completo */}
       <div className="flex items-center gap-2.5 min-w-0 shrink-0">
+        {isJarvis && onToggleJarvisPanel && (
+          <button
+            type="button"
+            onClick={onToggleJarvisPanel}
+            aria-expanded={isJarvisPanelOpen}
+            className={`px-3 py-1.5 rounded-xl text-xs font-extrabold tracking-wider flex items-center gap-2 transition cursor-pointer whitespace-nowrap shrink-0 border ${
+              isJarvisPanelOpen
+                ? 'bg-gradient-to-r from-[#00E5FF]/25 to-[#FF2A4B]/20 border-[#00E5FF] text-cyan-100 shadow-[0_0_16px_rgba(0,229,255,0.3)]'
+                : 'bg-[#071124] border-cyan-500/45 text-cyan-300 hover:border-[#00E5FF] hover:text-white'
+            }`}
+            title="Abrir / fechar Painel de Módulos, Builder e Configurações"
+          >
+            {isJarvisPanelOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+            <span>PAINEL</span>
+          </button>
+        )}
+
         <div
           className={`w-8 h-8 sm:w-9 sm:h-9 rounded-xl p-[1.5px] shrink-0 ${
             isJarvis
@@ -130,7 +153,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           <span
             className={`font-extrabold text-sm sm:text-base tracking-tight bg-clip-text text-transparent whitespace-nowrap ${
               isJarvis
-                ? 'bg-gradient-to-r from-[#00E5FF] via-blue-300 to-[#FF2A4B]'
+                ? 'bg-gradient-to-r from-[#00E5FF] via-cyan-200 to-[#FF2A4B]'
                 : 'bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6]'
             }`}
           >
@@ -151,55 +174,44 @@ export const TopBar: React.FC<TopBarProps> = ({
           )}
         </div>
 
-        {/* BOTÃO GRANDE DE TROCA DE MODO: [ASSISTENTE JARVIS <-> BUILDER] */}
-        <div
-          className="flex items-center bg-[#060B16] p-1 rounded-xl border border-cyan-500/40 shadow-[0_0_14px_rgba(0,229,255,0.16)] shrink-0 ml-1"
-          role="group"
-          aria-label="Alternar entre Assistente JARVIS e Builder"
-        >
-          <button
-            type="button"
-            onClick={() => onChangeWorkspaceMode('jarvis')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-              isJarvis
-                ? 'bg-gradient-to-r from-[#00E5FF]/25 to-[#FF2A4B]/25 border border-[#00E5FF]/70 text-cyan-200 shadow-[0_0_14px_rgba(0,229,255,0.28)]'
-                : 'text-slate-400 hover:text-white border border-transparent'
-            }`}
-            title="Modo 1 — Assistente Pessoal SARA JARVIS"
+        {/* Interruptor de modo na barra apenas no Modo Builder (no JARVIS fica limpo dentro de [☰ PAINEL]) */}
+        {!isJarvis && (
+          <div
+            className="flex items-center bg-[#060B16] p-1 rounded-xl border border-cyan-500/40 shadow-[0_0_14px_rgba(0,229,255,0.16)] shrink-0 ml-1"
+            role="group"
+            aria-label="Alternar entre Assistente JARVIS e Builder"
           >
-            <Sparkles className="w-3.5 h-3.5 text-[#00E5FF]" />
-            <span>ASSISTENTE</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onChangeWorkspaceMode('builder')}
-            className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap ${
-              !isJarvis
-                ? 'bg-gradient-to-r from-[#3B82F6]/30 to-[#8B5CF6]/30 border border-[#3B82F6]/70 text-blue-200 shadow-[0_0_14px_rgba(59,130,246,0.28)]'
-                : 'text-slate-400 hover:text-white border border-transparent'
-            }`}
-            title="Modo 2 — Construtor IDE SARA BIULDER"
-          >
-            <Hammer className="w-3.5 h-3.5 text-[#8B5CF6]" />
-            <span>BUILDER</span>
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={() => onChangeWorkspaceMode('jarvis')}
+              className="px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap text-slate-400 hover:text-white border border-transparent"
+              title="Modo 1 — Assistente Pessoal SARA JARVIS"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-[#00E5FF]" />
+              <span>ASSISTENTE</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onChangeWorkspaceMode('builder')}
+              className="px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap bg-gradient-to-r from-[#3B82F6]/30 to-[#8B5CF6]/30 border border-[#3B82F6]/70 text-blue-200 shadow-[0_0_14px_rgba(59,130,246,0.28)]"
+              title="Modo 2 — Construtor IDE SARA BIULDER"
+            >
+              <Hammer className="w-3.5 h-3.5 text-[#8B5CF6]" />
+              <span>BUILDER</span>
+            </button>
+          </div>
+        )}
 
         {/* Indicadores ao vivo: A falar / A ouvir com onda / A pensar */}
         {isSaraSpeaking ? (
           <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#8B5CF6]/15 border border-[#8B5CF6]/40 text-[11px] font-medium text-[#C4B5FD] whitespace-nowrap">
-            <Volume2 className="w-3.5 h-3.5 animate-pulse" />
-            <span>Sara a falar...</span>
+            <Volume2 className="w-3.5 h-3.5" />
+            <span>Sara a falar</span>
           </div>
         ) : isListening ? (
           <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-[11px] font-medium text-emerald-300 whitespace-nowrap">
-            <span className="flex items-end gap-[2px] h-3" aria-hidden="true">
-              <span className="w-[2px] h-2 bg-emerald-400 animate-pulse" />
-              <span className="w-[2px] h-3 bg-emerald-400 animate-bounce" />
-              <span className="w-[2px] h-1.5 bg-emerald-400 animate-pulse" />
-              <span className="w-[2px] h-2.5 bg-emerald-400 animate-bounce" />
-            </span>
-            <span>A ouvir...</span>
+            <Mic className="w-3.5 h-3.5" />
+            <span>A ouvir</span>
           </div>
         ) : isThinking ? (
           <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#3B82F6]/15 border border-[#3B82F6]/40 text-[11px] font-medium text-blue-300 whitespace-nowrap">
@@ -208,7 +220,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         ) : null}
       </div>
 
-      {/* Centro: Interruptor [🟢 MANUAL | 🤖 AUTOMÁTICO] (exclusivo do Modo Builder) */}
+      {/* Centro: Interruptor [MANUAL | AUTOMÁTICO] no Builder OR Banner STARK HUD no Assistente */}
       {!isJarvis ? (
         <div
           className="flex items-center bg-[#0A0A0F] p-1 rounded-xl border border-[#1F1F2E] shrink-0"
@@ -245,15 +257,15 @@ export const TopBar: React.FC<TopBarProps> = ({
           </button>
         </div>
       ) : (
-        <div className="hidden lg:flex items-center gap-2 px-3 py-1 rounded-xl bg-[#071124] border border-cyan-500/25 text-[11px] font-mono text-cyan-300 shrink-0">
-          <span className="w-2 h-2 rounded-full bg-[#00E5FF] animate-pulse" />
+        <div className="hidden md:flex items-center gap-2 px-3.5 py-1 rounded-xl bg-[#071124] border border-cyan-500/30 text-[11px] font-mono tracking-wider text-cyan-300 shrink-0">
+          <Sparkles className="w-3.5 h-3.5 text-[#00E5FF]" />
           <span>STARK HUD // ASSISTENTE PESSOAL</span>
         </div>
       )}
 
-      {/* Direita: Controlos de Voz, Calar Sara e Ações */}
+      {/* Direita: Eletro-Jr, Calar Sara, Voz: Curto/Médio/Longo, Mic (+ botões Builder quando no Builder) */}
       <div className="flex items-center gap-1.5 shrink-0">
-        <span className="hidden 2xl:inline text-xs font-semibold text-white/90 mr-1 whitespace-nowrap">
+        <span className="hidden sm:inline text-xs font-semibold text-cyan-100 mr-1 whitespace-nowrap">
           {firebaseUser?.displayName || 'Eletro-Jr'}
         </span>
 
@@ -264,7 +276,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             isSaraSilenced
               ? 'bg-rose-500/20 border-rose-500/50 text-rose-300'
               : isSaraSpeaking
-              ? 'bg-amber-500/20 border-amber-400/60 text-amber-200 animate-pulse'
+              ? 'bg-amber-500/20 border-amber-400/60 text-amber-200'
               : 'bg-[#0A0A0F] border-[#1F1F2E] text-[#A1A1AA] hover:text-rose-300'
           }`}
           title={
@@ -281,7 +293,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           onClick={onCycleVoiceLevel}
           className="px-2 py-1.5 rounded-lg text-[11px] font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white transition whitespace-nowrap shrink-0 cursor-pointer"
-          title="Nível de voz da Sara (Curto = só resumo essencial, Médio, Completo)"
+          title="Nível de voz da Sara (Curto, Médio, Longo)"
         >
           Voz: <span className="text-cyan-300">{voiceLevelLabel}</span>
         </button>
@@ -294,7 +306,7 @@ export const TopBar: React.FC<TopBarProps> = ({
               ? 'bg-[#3B82F6]/15 border-[#3B82F6]/50 text-[#3B82F6]'
               : 'bg-[#0A0A0F] border-[#1F1F2E] text-[#A1A1AA] hover:text-white'
           }`}
-          title={voiceEnabled ? 'Desligar voz da Sara' : 'Ligar voz da Sara'}
+          title={voiceEnabled ? 'Desligar áudio de voz' : 'Ligar áudio de voz'}
         >
           {voiceEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
         </button>
@@ -309,7 +321,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           }`}
           title="Microfone contínuo mãos-livres (com pausa automática enquanto Sara fala)"
         >
-          {isListening ? <Mic className="w-3.5 h-3.5 animate-pulse" /> : <MicOff className="w-3.5 h-3.5" />}
+          {isListening ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
           <span className="hidden lg:inline">{isListening ? 'Mãos Livres' : 'Mic'}</span>
         </button>
 
@@ -342,27 +354,25 @@ export const TopBar: React.FC<TopBarProps> = ({
               <FolderKanban className="w-3.5 h-3.5 text-[#3B82F6]" />
               <span className="hidden sm:inline">Projetos</span>
             </button>
+
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#8B5CF6]/50 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              title="Configurações"
+            >
+              <Settings className="w-3.5 h-3.5 text-[#8B5CF6]" />
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenDeploy}
+              className="px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] hover:opacity-95 text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-[0_0_14px_rgba(59,130,246,0.3)]"
+            >
+              <Rocket className="w-3.5 h-3.5" />
+              <span>Deploy</span>
+            </button>
           </>
-        )}
-
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#8B5CF6]/50 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-          title="Configurações"
-        >
-          <Settings className="w-3.5 h-3.5 text-[#8B5CF6]" />
-        </button>
-
-        {!isJarvis && (
-          <button
-            type="button"
-            onClick={onOpenDeploy}
-            className="px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] hover:opacity-95 text-white transition flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer shadow-[0_0_14px_rgba(59,130,246,0.3)]"
-          >
-            <Rocket className="w-3.5 h-3.5" />
-            <span>Deploy</span>
-          </button>
         )}
       </div>
     </header>

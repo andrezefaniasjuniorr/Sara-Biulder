@@ -11,6 +11,7 @@ import {
   buildJarvisEnvelopeParts,
   buildStreamParts,
   enrichJarvisActionsNode,
+  fetchHudLiveFeedNode,
   formatFriendlyAiError,
   getGeminiClient,
   isRetryableModelError,
@@ -294,6 +295,10 @@ async function startServer() {
           req.body?.kind || 'music'
         );
         return res.json({ track });
+      }
+      if (req.body?.action === 'hud_live_feed') {
+        const feed = await fetchHudLiveFeedNode();
+        return res.json(feed);
       }
       const headerKey = req.headers['x-gemini-api-key'];
       const customKey = typeof headerKey === 'string' ? headerKey : undefined;

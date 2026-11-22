@@ -59,12 +59,16 @@ import { getSavedGitHubToken, pushProjectToGitHub } from './utils/githubService'
 import {
   adjustVoiceSpeed,
   detectAmbiguousOrDangerousPrompt,
+  getBackgroundBuildDoneSpeech,
+  getHumanChoice,
   getManualStepApprovalSpeech,
   getModeSwitchSpeech,
   getPlatformCommandSpeech,
   getSpokenBuildRecap,
   getVoiceReadingStatus,
+  getWorkspaceSwitchSpeech,
   interruptSaraAndListen,
+  isAssistantExplanationIntent,
   normalizePhoneticVoiceTranscript,
   parseVoiceCommand,
   pauseVoiceReading,
@@ -237,6 +241,18 @@ function isRejectionOrCancelMessage(text: string): boolean {
   );
 }
 
+function computeLiveBuildPct(info: LiveBuildInfo): number {
+  if (!info.isBuilding) return 0;
+  const total = info.steps?.length || 0;
+  const done = info.steps?.filter((s) => s.status === 'done').length || 0;
+  if (info.phase === 'thinking') return 12;
+  if (info.phase === 'planning') return 24;
+  if (info.phase === 'testing') return 91;
+  if (info.phase === 'fixing') return 84;
+  if (total > 0) return Math.min(88, 26 + Math.round((done / total) * 58));
+  return 38;
+}
+
 export default function App() {
   const [projects, setProjects] = useState<ProjectRecord[]>(loadInitialProjects);
   const [currentProjectId, setCurrentProjectId] = useState<string>(() => {
@@ -274,6 +290,13 @@ export default function App() {
     steps: [],
     createdFiles: [],
   });
+  const [completedBackgroundBuild, setCompletedBackgroundBuild] = useState<{
+    id: string;
+    projectName: string;
+    elapsedSeconds: number;
+    filesCount: number;
+  } | null>(null);
+  const jarvisNotifyChatRef = useRef<((shortMsg: string) => void) | null>(null);
 
   const [activeFile, setActiveFile] = useState<FileKey>('index.html');
   const [rightTab, setRightTab] = useState<RightPanelTab>('editor');
@@ -343,6 +366,8 @@ export default function App() {
   >(null);
   const jarvisFocusRef = useRef<((enabled: boolean) => void) | null>(null);
   const jarvisModuleRef = useRef<((tab: JarvisModuleTab) => void) | null>(null);
+  const jarvisPanelRef = useRef<((open: boolean) => void) | null>(null);
+  const [isJarvisPanelOpen, setIsJarvisPanelOpen] = useState(false);
   const jarvisRepeatRef = useRef<(() => void) | null>(null);
   const jarvisContinueRef = useRef<(() => Promise<void>) | null>(null);
   const jarvisMediaControlRef = useRef<{
@@ -445,10 +470,10 @@ export default function App() {
     readingStatus.paused,
   ]);
 
-  // Saudação falada inicial da SARA ao ativar o sistema
+  // Saudação falada inicial espontânea da SARA ao ativar o sistema
   useEffect(() => {
     const greeting =
-      'Olá! Sou a SARA, estou pronta. Queres trabalhar no modo Assistente ou abrir o Builder?';
+      'Sistemas no ar! O meu holograma e a telemetria já estão ligados — podes falar comigo ou abrir o painel quando quiseres.';
     const speakGreeting = () => {
       if (startupGreetedRef.current) return;
       startupGreetedRef.current = true;
@@ -1087,15 +1112,20 @@ export default function App() {
         contextCue?: 'sleep' | 'leave';
         skipUserMsg?: boolean;
         source?: 'text' | 'voice';
+        backgroundInJarvis?: boolean;
       }
     ) => {
       const cleanGoal =
         goalText.replace(/^(sara,?\s*faz sozinha:?|miss[aã]o:?)\s*/i, '').trim() || goalText;
+      const isRunningInBackground = Boolean(
+        options?.backgroundInJarvis || workspaceModeRef.current === 'jarvis'
+      );
 
       missionAbortRef.current = false;
       missionPausedRef.current = false;
       setAgentMode('automatic');
       setManualProposal(EMPTY_MANUAL_PROPOSAL);
+      setCompletedBackgroundBuild(null);
 
       if (!options?.skipUserMsg && !options?.resumedMission && options?.source !== 'voice') {
         const userMsg: ChatMessage = {
@@ -1128,21 +1158,15 @@ export default function App() {
         const startedAtIso = options?.resumedMission?.startedAt || new Date().toISOString();
 
         if (options?.resumedMission) {
-          await speakAsSaraAndWait(
-            `Vou retomar agora a construção de ${currentProject.name} exatamente de onde parámos, Eletro-Júnior.`,
-            voiceEnabledRef.current,
-            { level: 'short', forceSpeak: true }
-          );
+          if (!isRunningInBackground) {
+            await speakAsSaraAndWait(
+              `Vou retomar agora a construção de ${currentProject.name} exatamente de onde parámos.`,
+              voiceEnabledRef.current,
+              { level: 'short', forceSpeak: true }
+            );
+          }
         } else {
           const activeState = loadActiveProjectState(currentProject.id);
-          const kickoffPromise = fetchSaraFastKickoff({
-            prompt: cleanGoal,
-            files: currentProject.files,
-            agentMode: 'automatic',
-            hasExistingCode: hasExistingAtStart,
-            projectName: currentProject.name,
-            contextCue: options?.contextCue,
-          });
           const planPromise = planAutonomousMission(
             cleanGoal,
             currentProject.files,
@@ -1151,26 +1175,41 @@ export default function App() {
             activeState
           );
 
-          // 1. Sara fala PRIMEIRO aceitando o pedido com sugestões práticas enquanto o plano é preparado em paralelo
-          const kickoffRes = await kickoffPromise;
-          const kickoffChatMsg: ChatMessage = {
-            id: `sara_kick_${Date.now()}`,
-            sender: 'sara',
-            text: kickoffRes.reply,
-            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
-            mode: 'conversation',
-            voiceDelivered: true,
-          };
-          setMessages((prev) => [...prev, kickoffChatMsg]);
-          salvarMensagemChatFirebase(kickoffChatMsg, currentProject.id, firebaseUser?.uid);
+          let plan;
+          if (isRunningInBackground) {
+            plan = await planPromise;
+          } else {
+            const kickoffPromise = fetchSaraFastKickoff({
+              prompt: cleanGoal,
+              files: currentProject.files,
+              agentMode: 'automatic',
+              hasExistingCode: hasExistingAtStart,
+              projectName: currentProject.name,
+              contextCue: options?.contextCue,
+            });
 
-          const [plan] = await Promise.all([
-            planPromise,
-            speakAsSaraAndWait(kickoffRes.reply, voiceEnabledRef.current, {
-              level: 'medium',
-              forceSpeak: true,
-            }),
-          ]);
+            // 1. Sara fala PRIMEIRO aceitando o pedido com sugestões práticas enquanto o plano é preparado em paralelo
+            const kickoffRes = await kickoffPromise;
+            const kickoffChatMsg: ChatMessage = {
+              id: `sara_kick_${Date.now()}`,
+              sender: 'sara',
+              text: kickoffRes.reply,
+              timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+              mode: 'conversation',
+              voiceDelivered: true,
+            };
+            setMessages((prev) => [...prev, kickoffChatMsg]);
+            salvarMensagemChatFirebase(kickoffChatMsg, currentProject.id, firebaseUser?.uid);
+
+            const [resolvedPlan] = await Promise.all([
+              planPromise,
+              speakAsSaraAndWait(kickoffRes.reply, voiceEnabledRef.current, {
+                level: 'medium',
+                forceSpeak: true,
+              }),
+            ]);
+            plan = resolvedPlan;
+          }
 
           plannedTasks = (plan.tasks || []).map((t, idx) => ({
             id: idx + 1,
@@ -1344,9 +1383,9 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
                 'warn',
                 `[Automático] Erro detetado na etapa ${i + 1}: ${latestErrorsRef.current[0]}`
               );
-              if (attempts === 1) {
+              if (attempts === 1 && !isRunningInBackground) {
                 speakAsSara(
-                  'Eletro-Jr, encontrei 1 erro, já estou a corrigir.',
+                  'Encontrei 1 erro e já estou a corrigir.',
                   voiceEnabledRef.current,
                   { level: 'short' }
                 );
@@ -1356,8 +1395,8 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
 
           if (!taskSucceeded) {
             totalErrorsRemaining += 1;
-          } else if (i === 0 && plannedTasks.length > 1) {
-            speakAsSara('Primeira parte pronta, Eletro-Jr.', voiceEnabledRef.current, {
+          } else if (i === 0 && plannedTasks.length > 1 && !isRunningInBackground) {
+            speakAsSara('Primeira parte pronta, a avançar para a seguinte.', voiceEnabledRef.current, {
               level: 'short',
             });
           }
@@ -1533,20 +1572,37 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
         setMessages((prev) => [...prev, reportChatMsg]);
         salvarMensagemChatFirebase(reportChatMsg, currentProject.id, firebaseUser?.uid);
 
-        if (Object.keys(workingFiles).length >= 4) {
+        if (Object.keys(workingFiles).length >= 4 && workspaceModeRef.current === 'builder') {
           setRightTab('files');
         }
 
         playCompletionChime();
-        speakAsSara(
-          finalReport.sleptOvernight
-            ? `Eletro-Jr, terminei enquanto dormias! O projeto ${resolvedName} já está pronto.`
-            : errorsFixed > 0
-            ? `Tudo fechado, Eletro-Jr! Concluí ${plannedTasks.length} etapas e corrigi ${errorsFixed} erros.`
-            : `Tudo pronto no ${resolvedName}, Eletro-Jr, e já está testado.`,
-          voiceEnabledRef.current,
-          { level: 'short' }
-        );
+        if (workspaceModeRef.current === 'jarvis' || options?.backgroundInJarvis) {
+          setCompletedBackgroundBuild({
+            id: `bg_done_${Date.now()}`,
+            projectName: resolvedName,
+            elapsedSeconds: finalReport.elapsedSeconds,
+            filesCount: Object.keys(workingFiles).length,
+          });
+          jarvisNotifyChatRef.current?.(
+            `Projeto "${resolvedName}" pronto no Builder. Queres ver?`
+          );
+          showToast(`${resolvedName} concluído no Builder!`);
+          speakAsSara(getBackgroundBuildDoneSpeech(resolvedName), voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        } else {
+          speakAsSara(
+            finalReport.sleptOvernight
+              ? `Terminei enquanto descansavas! O projeto ${resolvedName} já está pronto.`
+              : errorsFixed > 0
+              ? `Tudo fechado! Concluí ${plannedTasks.length} etapas e corrigi ${errorsFixed} erros.`
+              : `Tudo pronto no ${resolvedName}, e já está testado.`,
+            voiceEnabledRef.current,
+            { level: 'short' }
+          );
+        }
       } catch (err: any) {
         setIsThinking(false);
         setLiveBuild({
@@ -1772,27 +1828,37 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     [currentProject.files, consoleLogs, messages, replaceCurrentProjectFiles]
   );
 
+  const handleTriggerBackgroundBuild = useCallback(
+    async (goal: string, source: 'voice' | 'text' = 'text') => {
+      setCompletedBackgroundBuild(null);
+      await runAutonomousMission(goal, {
+        source,
+        skipUserMsg: true,
+        backgroundInJarvis: true,
+      });
+    },
+    [runAutonomousMission]
+  );
+
   const handleChangeWorkspaceMode = useCallback(
-    (nextMode: WorkspaceMode) => {
+    (nextMode: WorkspaceMode, opts?: { silent?: boolean }) => {
       setWorkspaceMode(nextMode);
       workspaceModeRef.current = nextMode;
       if (nextMode === 'builder') {
+        setCompletedBackgroundBuild(null);
         showToast('Modo 2: SARA BIULDER ativado');
-        speakAsSara(
-          'Modo Builder ligado. Que app ou site vamos construir?',
-          voiceEnabledRef.current,
-          { level: 'short', forceSpeak: true }
-        );
       } else {
         showToast('Modo 1: SARA Assistente ativado');
+      }
+      if (!opts?.silent) {
         speakAsSara(
-          'De volta ao Modo Assistente. Em que posso ajudar agora?',
+          getWorkspaceSwitchSpeech(nextMode, currentProject.name),
           voiceEnabledRef.current,
           { level: 'short', forceSpeak: true }
         );
       }
     },
-    [showToast]
+    [showToast, currentProject.name]
   );
 
   const handleSwitchMode = useCallback(
@@ -1962,9 +2028,21 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
   // Controlo total da plataforma por Voz ou Chat
   const executePlatformCommand = useCallback(
     async (cmd: VoiceCommandAction, rawText: string): Promise<boolean> => {
-      // 1. Calar Sara imediatamente
+      // 1. Calar ou reativar voz da Sara imediatamente
       if (cmd.type === 'silence_sara') {
         handleForceSilenceSara();
+        return true;
+      }
+
+      if (cmd.type === 'unsilence_sara') {
+        setSaraSilenced(false);
+        setIsSaraSilencedState(false);
+        showToast('Voz da Sara reativada');
+        speakAsSara(
+          getHumanChoice(['Voz reativada! Podes falar.', 'Estou a ouvir-te de novo! Diz lá.']),
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
         return true;
       }
 
@@ -2022,8 +2100,54 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      if (cmd.type === 'show_builder_progress') {
+        handleChangeWorkspaceMode('builder', { silent: true });
+        setIsEditorFullscreen(false);
+        setIsPreviewFullscreen(false);
+        setShowProjectsModal(false);
+        setShowSettingsModal(false);
+        setShowDeployModal(false);
+        setMobileTab('preview');
+        const pct = computeLiveBuildPct(liveBuild);
+        const spoken = liveBuild.isBuilding
+          ? getHumanChoice([
+              `Aqui está o Builder em ${pct}% — ${liveBuild.currentStepLabel || 'a montar o projeto'}.`,
+              `Progresso ao vivo no Builder: ${pct}% concluído no ${currentProject.name}.`,
+            ])
+          : `Aqui está o Builder com o ${currentProject.name}.`;
+        showToast(liveBuild.isBuilding ? `Builder a construir (${pct}%)` : `Builder: ${currentProject.name}`);
+        speakAsSara(spoken, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
       if (cmd.type === 'open_jarvis_mode') {
         handleChangeWorkspaceMode('jarvis');
+        return true;
+      }
+
+      if (cmd.type === 'open_panel') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        setTimeout(() => jarvisPanelRef.current?.(true), 40);
+        showToast('Painel JARVIS aberto');
+        speakAsSara(
+          getHumanChoice(['Painel aberto.', 'Aqui tens o painel de controlo.']),
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+        return true;
+      }
+
+      if (cmd.type === 'close_panel') {
+        jarvisPanelRef.current?.(false);
+        showToast('Painel fechado');
+        speakAsSara(
+          getHumanChoice(['Fechei o painel.', 'Painel recolhido.']),
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
         return true;
       }
 
@@ -2032,7 +2156,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           setWorkspaceMode('jarvis');
           workspaceModeRef.current = 'jarvis';
         }
-        setTimeout(() => jarvisModuleRef.current?.(cmd.moduleTab), 40);
+        setTimeout(() => {
+          jarvisPanelRef.current?.(true);
+          jarvisModuleRef.current?.(cmd.moduleTab);
+        }, 40);
         const tabLabels: Record<JarvisModuleTab, string> = {
           voz: 'canal de voz',
           sistema: 'diagnóstico do sistema',
@@ -2042,10 +2169,15 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           tarefas: 'tarefas',
         };
         showToast(`Módulo ${cmd.moduleTab} aberto`);
-        speakAsSara(`A abrir ${tabLabels[cmd.moduleTab]}.`, voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
+        speakAsSara(
+          getHumanChoice([
+            `Abri ${tabLabels[cmd.moduleTab]}.`,
+            `Aqui tens ${tabLabels[cmd.moduleTab]}.`,
+            `Secção ${tabLabels[cmd.moduleTab]} pronta.`,
+          ]),
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
         return true;
       }
 
@@ -2141,11 +2273,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       if (cmd.type === 'close_stage') {
         jarvisMediaControlRef.current?.closeStage();
-        showToast('Voltei ao centro');
-        speakAsSara('Voltei ao centro.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
+        showToast('Palco fechado');
+        speakAsSara(
+          getHumanChoice(['De volta ao holograma.', 'Palco fechado. Podes continuar.']),
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
         return true;
       }
 
@@ -2800,18 +2933,27 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       // 8. Consultas de progresso e relatório (respondem em 2.º plano por voz, sem conversa no chat)
       if (cmd.type === 'query_status') {
+        const pct = computeLiveBuildPct(liveBuild);
         let reply = '';
-        if (mission.active && mission.tasks.length > 0) {
+        if (liveBuild.isBuilding) {
+          const done = mission.tasks.filter((t) => t.status === 'done').length;
+          const stepPart =
+            mission.tasks.length > 0
+              ? `etapa ${Math.min(mission.tasks.length, done + 1)} de ${mission.tasks.length}`
+              : liveBuild.currentStepLabel || 'em construção';
+          const filePart = liveBuild.activeFile ? ` no ficheiro ${liveBuild.activeFile}` : '';
+          reply = `O Builder está em ${pct}% (${stepPart}${filePart}), há ${liveBuild.elapsedSeconds} segundos.`;
+        } else if (mission.active && mission.tasks.length > 0) {
           const done = mission.tasks.filter((t) => t.status === 'done').length;
           const remaining = mission.tasks.filter((t) => t.status !== 'done').map((t) => t.title);
-          reply = `Já fiz ${done} de ${mission.tasks.length} etapas, Eletro-Júnior, falta: ${remaining.join(', ')}.`;
+          reply = `Já fiz ${done} de ${mission.tasks.length} etapas, falta: ${remaining.join(', ')}.`;
         } else if (manualProposal.active) {
-          reply = `Estamos no Modo Manual na etapa ${manualProposal.currentStepIndex + 1} de ${manualProposal.totalEstimatedSteps}, Eletro-Júnior.`;
+          reply = `Estamos no Modo Manual na etapa ${manualProposal.currentStepIndex + 1} de ${manualProposal.totalEstimatedSteps}.`;
         } else {
           const mem = loadActiveProjectState(currentProject.id);
           reply = mem
-            ? `O projeto atual ${mem.projectName} tem ${Object.keys(currentProject.files).length} ficheiros. Próximo passo: ${mem.nextStep}.`
-            : `O projeto atual ${currentProject.name} tem ${Object.keys(currentProject.files).length} ficheiros prontos, Eletro-Júnior.`;
+            ? `O projeto ${mem.projectName} está pronto com ${Object.keys(currentProject.files).length} ficheiros.`
+            : `O projeto ${currentProject.name} tem ${Object.keys(currentProject.files).length} ficheiros prontos.`;
         }
         speakAsSara(reply, voiceEnabledRef.current, {
           level: 'medium',
@@ -2867,6 +3009,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       switchToProject,
       lastCompletedReport,
       messages.length,
+      liveBuild,
     ]
   );
 
@@ -3173,6 +3316,16 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                     if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
                       return jarvisPromptRef.current(transcript, 'voice');
                     }
+                    if (
+                      workspaceModeRef.current === 'builder' &&
+                      isAssistantExplanationIntent(transcript)
+                    ) {
+                      handleChangeWorkspaceMode('jarvis', { silent: true });
+                      setTimeout(() => {
+                        void jarvisPromptRef.current?.(transcript, 'voice');
+                      }, 90);
+                      return;
+                    }
                     return handleSendMessageRef.current?.(transcript, undefined, undefined, 'voice');
                   }
                 })
@@ -3210,6 +3363,21 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       // Separação estrita: pedidos apenas de controlo de interface nunca acionam criação/edição de código
       const isPlatformOnly =
         isPlatformCommandIntent(trimmed) && !image && (!attachments || attachments.length === 0);
+
+      // CONEXÃO BUILDER -> ASSISTENTE: pedidos de explicação/estudo/dúvida no Builder mudam para o Assistente SEM parar builds ativos
+      if (
+        workspaceModeRef.current === 'builder' &&
+        !isPlatformOnly &&
+        !image &&
+        (!attachments || attachments.length === 0) &&
+        isAssistantExplanationIntent(trimmed)
+      ) {
+        handleChangeWorkspaceMode('jarvis', { silent: true });
+        setTimeout(() => {
+          void jarvisPromptRef.current?.(trimmed, source);
+        }, 90);
+        return;
+      }
 
       const hasExistingCode = !isProjectBlank(currentProject.files);
       const activeProjectState = loadActiveProjectState(currentProject.id);
@@ -3836,6 +4004,16 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
                 return jarvisPromptRef.current(transcript, 'voice');
               }
+              if (
+                workspaceModeRef.current === 'builder' &&
+                isAssistantExplanationIntent(transcript)
+              ) {
+                handleChangeWorkspaceMode('jarvis', { silent: true });
+                setTimeout(() => {
+                  void jarvisPromptRef.current?.(transcript, 'voice');
+                }, 90);
+                return;
+              }
               return handleSendMessageRef.current?.(transcript, undefined, undefined, 'voice');
             }
           })
@@ -4025,6 +4203,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         isThinking={isThinking || liveBuild.isBuilding}
         firebaseUser={firebaseUser}
         isSyncingFirebase={isSyncingFirebase}
+        isJarvisPanelOpen={isJarvisPanelOpen}
+        onToggleJarvisPanel={() => jarvisPanelRef.current?.(!isJarvisPanelOpen)}
         onChangeWorkspaceMode={handleChangeWorkspaceMode}
         onChangeAgentMode={(m) => handleSwitchMode(m)}
         onToggleVoice={handleToggleVoice}
@@ -4053,16 +4233,24 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           firebaseUserUid={firebaseUser?.uid}
           activeBuilderProjectName={currentProject.name}
           activeBuilderFiles={Object.keys(currentProject.files || {})}
+          liveBuild={liveBuild}
+          completedBackgroundBuild={completedBackgroundBuild}
+          onDismissCompletedBuild={() => setCompletedBackgroundBuild(null)}
+          onTriggerBackgroundBuild={handleTriggerBackgroundBuild}
+          externalNotifyChatRef={jarvisNotifyChatRef}
           onToggleMic={handleToggleMic}
           onSilenceSara={handleSilenceSara}
           onSwitchMode={handleChangeWorkspaceMode}
+          onOpenSettings={() => setShowSettingsModal(true)}
           onNotify={showToast}
           onExecuteSystemCommand={executePlatformCommand}
           onStageStateChange={handleJarvisStageStateChange}
+          onPanelOpenChange={setIsJarvisPanelOpen}
           externalMediaControlRef={jarvisMediaControlRef}
           externalCommandRef={jarvisPromptRef}
           externalFocusCommandRef={jarvisFocusRef}
           externalModuleRef={jarvisModuleRef}
+          externalPanelRef={jarvisPanelRef}
           externalRepeatRef={jarvisRepeatRef}
           externalContinueRef={jarvisContinueRef}
         />

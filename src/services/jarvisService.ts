@@ -3,9 +3,11 @@ import type {
   JarvisAgendaItem,
   JarvisAlarmItem,
   JarvisAssistantResponse,
+  JarvisBuilderContext,
   JarvisConversationEntry,
   JarvisDocumentItem,
   JarvisHeadMood,
+  JarvisHudLiveFeed,
   JarvisMediaStateContext,
   JarvisMemoryState,
   JarvisModuleTab,
@@ -25,6 +27,7 @@ const JARVIS_STORAGE_KEYS = {
   chat: 'sara_jarvis_chat_v1',
   playlist: 'sara_jarvis_playlist_v1',
   weather: 'sara_jarvis_weather_v1',
+  hudFeed: 'sara_jarvis_hud_feed_v1',
 };
 
 const INHAMBANE_DEFAULT = {
@@ -171,6 +174,7 @@ function documentAttachmentMime(doc: JarvisDocumentItem): string {
 export function sanitizeAssistantPlainText(raw: string): string {
   if (!raw) return '';
   return raw
+    .replace(/<\/?JARVIS_[A-Z_]+>/gi, ' ')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/```[\s\S]*$/g, ' ')
     .replace(/<svg\b[\s\S]*?<\/svg>/gi, ' ')
@@ -194,6 +198,18 @@ function normalizeJarvisAction(act: any): JarvisActionPayload {
   const normalized: JarvisActionPayload = { ...act };
   if (normalized.type === 'open_module' && !normalized.moduleTab && act?.module) {
     normalized.moduleTab = act.module as JarvisModuleTab;
+  }
+  if (normalized.type === 'show_3d') {
+    normalized.shape = (act?.shape || 'cube') as JarvisActionPayload['shape'];
+    normalized.unit = act?.unit || 'cm';
+    if (act?.dimensions && typeof act.dimensions === 'object') {
+      const cleanDims: Record<string, number> = {};
+      for (const [k, v] of Object.entries(act.dimensions)) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n > 0) cleanDims[k] = n;
+      }
+      normalized.dimensions = cleanDims;
+    }
   }
   if (normalized.type === 'show_explanation') {
     normalized.sections = Array.isArray(act?.sections) ? act.sections : [];
@@ -229,34 +245,192 @@ function normalizeJarvisAction(act: any): JarvisActionPayload {
     if (typeof act?.volume === 'number') normalized.volume = act.volume;
     if (typeof act?.delta === 'number') normalized.delta = act.delta;
   }
+  if (normalized.type === 'build_in_builder') {
+    normalized.goal = String(act?.goal || act?.title || '').trim();
+  }
   return normalized;
 }
 
-function maybeExtractSvgAction(
+/**
+ * Deteta pedidos de construção completa (site, aplicativo, sistema, jogo, loja, portfólio)
+ * que devem correr em segundo plano no Builder sem sair do Modo Assistente.
+ */
+export function isFullBuilderAppRequest(prompt: string): boolean {
+  const lower = String(prompt || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+  if (!lower) return false;
+
+  // Pedidos rápidos próprios do palco Assistente ficam no Assistente (HTML planilha/CV, gráficos, 3D, explicações, quizzes)
+  if (
+    /\b(planilha|orcamento|curriculo|cv|fatura|recibo|carta|apresentacao|slides|teste|quiz|flashcards|grafico|cubo|esfera|cone|cilindro|piramide|prisma|octaedro|equacao|explica|resumo)\b/i.test(
+      lower
+    ) &&
+    !/\b(sistema\s+de|plataforma\s+de|site\s+completo|aplicativo|ecommerce|loja\s+online)\b/i.test(lower)
+  ) {
+    return false;
+  }
+
+  // Se pede explicação/pergunta, não é build
+  if (/^(sara[,\s]+)?(o\s+que\s+e|como\s+funciona|explica|me\s+explica|qual\s+e)\b/i.test(lower)) {
+    return false;
+  }
+
+  return /\b(faz|fazer|cria|criar|constroi|construir|desenvolve|desenvolver|monta|montar|gera|gerar)\s+(um|uma)?\s*(novo\s+|nova\s+)?(site|website|web\s*site|pagina\s+web|landing\s*page|loja(\s+online|\s+virtual|\s+de\s+vendas)?|e-?commerce|site\s+de\s+vendas|aplicativo|app(\s+web|\s+mobile)?|aplicacao|sistema(\s+web|\s+de\s+\w+)?|plataforma|portal|portfolio|jogo|game|dashboard\s+completo)\b/i.test(
+    lower
+  );
+}
+
+function detect3DShapeIntent(text: string): JarvisActionPayload['shape'] | null {
+  const s = String(text || '').toLowerCase();
+  if (/\b(cubo|hexaedro)\b/.test(s)) return 'cube';
+  if (/\b(paralelep[ií]pedo|bloco retangular)\b/.test(s)) return 'cuboid';
+  if (/\b(esfera|globo)\b/.test(s)) return 'sphere';
+  if (/\b(cilindro)\b/.test(s)) return 'cylinder';
+  if (/\b(cone)\b/.test(s)) return 'cone';
+  if (/\b(pir[aâ]mide)\b/.test(s)) return 'pyramid';
+  if (/\b(prisma)\b/.test(s)) return 'prism';
+  if (/\b(octaedro)\b/.test(s)) return 'octahedron';
+  if (/\b(toro)\b/.test(s)) return 'torus';
+  if (/\b([aá]tomo|mol[eé]cula)\b/.test(s)) return 'atom';
+  return null;
+}
+
+function buildAuto3DAction(
+  shape: NonNullable<JarvisActionPayload['shape']>,
+  prompt: string,
+  baseAct?: Partial<JarvisActionPayload>
+): JarvisActionPayload {
+  const numMatch = prompt.match(/(\d+(?:[.,]\d+)?)\s*(mm|cm|dm|m|km)?/i);
+  const sideVal =
+    baseAct?.dimensions?.lado ??
+    baseAct?.dimensions?.a ??
+    baseAct?.dimensions?.raio ??
+    (numMatch ? Number(numMatch[1].replace(',', '.')) : 5);
+  const safeVal = Number.isFinite(sideVal) && sideVal > 0 ? sideVal : 5;
+  const unit = baseAct?.unit || numMatch?.[2] || 'cm';
+
+  let formulas = baseAct?.formulas;
+  let steps = baseAct?.steps;
+  let finalAnswer = baseAct?.finalAnswer;
+  let dimensions = baseAct?.dimensions;
+
+  if (shape === 'cube' && (!formulas || !formulas.length)) {
+    const a = safeVal;
+    const areaTotal = Number((6 * a * a).toFixed(2));
+    const volume = Number((a * a * a).toFixed(2));
+    const perimetroArestas = Number((12 * a).toFixed(2));
+    dimensions = dimensions || { lado: a };
+    formulas = [
+      'A_{total} = 6 \\cdot a^2',
+      'V = a^3',
+    ];
+    steps = [
+      {
+        step: '1. Área Total das 6 faces',
+        expression: `A_{total} = 6 \\cdot ${a}^2 = 6 \\cdot ${Number((a * a).toFixed(2))} = ${areaTotal}\\text{ ${unit}}^2`,
+        explanation: `Cada face quadrada mede ${a} × ${a} ${unit}, logo 6 faces somam ${areaTotal} ${unit}².`,
+      },
+      {
+        step: '2. Volume do Cubo',
+        expression: `V = ${a}^3 = ${a} \\cdot ${a} \\cdot ${a} = ${volume}\\text{ ${unit}}^3`,
+        explanation: `Soma das 12 arestas: 12 × ${a} = ${perimetroArestas} ${unit}.`,
+      },
+    ];
+    finalAnswer = `V = ${volume}\\text{ ${unit}}^3 \\quad | \\quad A_{total} = ${areaTotal}\\text{ ${unit}}^2`;
+  } else if (shape === 'sphere' && (!formulas || !formulas.length)) {
+    const r = safeVal;
+    const area = Number((4 * Math.PI * r * r).toFixed(2));
+    const vol = Number(((4 / 3) * Math.PI * r * r * r).toFixed(2));
+    dimensions = dimensions || { raio: r };
+    formulas = ['A = 4\\pi r^2', 'V = \\frac{4}{3}\\pi r^3'];
+    steps = [
+      {
+        step: '1. Área da Superfície',
+        expression: `A = 4\\pi \\cdot ${r}^2 \\approx ${area}\\text{ ${unit}}^2`,
+        explanation: `Substituímos o raio r = ${r} ${unit}.`,
+      },
+      {
+        step: '2. Volume da Esfera',
+        expression: `V = \\frac{4}{3}\\pi \\cdot ${r}^3 \\approx ${vol}\\text{ ${unit}}^3`,
+        explanation: `Cálculo exato do volume tridimensional.`,
+      },
+    ];
+    finalAnswer = `V \\approx ${vol}\\text{ ${unit}}^3 \\quad | \\quad A \\approx ${area}\\text{ ${unit}}^2`;
+  } else if (!dimensions) {
+    dimensions = shape === 'cylinder' || shape === 'cone' ? { raio: safeVal, altura: safeVal * 2 } : { lado: safeVal };
+  }
+
+  return {
+    type: 'show_3d',
+    shape,
+    title: baseAct?.title || `Modelo 3D: ${shape === 'cube' ? `Cubo (${safeVal} ${unit})` : prompt.slice(0, 42)}`,
+    subtitle: baseAct?.subtitle || 'Arrasta para girar em 3D e confere os cálculos abaixo.',
+    dimensions,
+    unit,
+    formulas,
+    steps,
+    finalAnswer,
+    description: baseAct?.description,
+    autoRotate: true,
+  };
+}
+
+function maybeExtractVisualActions(
   prompt: string,
   reply: string,
   actions: JarvisActionPayload[]
 ): JarvisActionPayload[] {
-  const hasSvgAction = actions.some((a) => a.type === 'show_svg' && a.svgCode);
-  if (hasSvgAction) return actions;
+  let list = [...actions];
 
-  const svgMatch = reply.match(/<svg\b[\s\S]*?<\/svg>/i);
-  if (svgMatch?.[0]) {
-    return [
-      ...actions,
-      {
+  // 1) Se já existe show_3d, garante dimensões e cálculos preenchidos
+  const idx3d = list.findIndex((a) => a.type === 'show_3d');
+  if (idx3d !== -1) {
+    const act = list[idx3d];
+    list[idx3d] = buildAuto3DAction(act.shape || 'cube', prompt, act);
+    return list;
+  }
+
+  // 2) Se o utilizador pediu desenho/figura 3D (cubo, esfera, cone, cilindro, pirâmide, etc.)
+  //    e veio show_svg ou show_math (ou nenhum visual), promove para 3D interativo real mantendo fórmulas/passos!
+  const requested3DShape = detect3DShapeIntent(prompt);
+  const asksToDrawOrShow = /(desenh|mostr|faz|cria|calcul|volume|[aá]rea|figura|3d|no preview|preview)/i.test(prompt);
+  if (requested3DShape && asksToDrawOrShow) {
+    const existingSvgIdx = list.findIndex((a) => a.type === 'show_svg');
+    const existingMathIdx = list.findIndex((a) => a.type === 'show_math');
+    const carrier = existingSvgIdx !== -1 ? list[existingSvgIdx] : existingMathIdx !== -1 ? list[existingMathIdx] : undefined;
+    const upgraded = buildAuto3DAction(requested3DShape, prompt, carrier);
+    if (existingSvgIdx !== -1) {
+      list[existingSvgIdx] = upgraded;
+    } else if (existingMathIdx !== -1) {
+      list[existingMathIdx] = upgraded;
+    } else {
+      list.push(upgraded);
+    }
+    return list;
+  }
+
+  // 3) Se houver <svg> no texto sem show_svg, extrai como show_svg
+  const hasSvgAction = list.some((a) => a.type === 'show_svg' && a.svgCode);
+  if (!hasSvgAction) {
+    const svgMatch = reply.match(/<svg\b[\s\S]*?<\/svg>/i);
+    if (svgMatch?.[0]) {
+      list.push({
         type: 'show_svg',
         title: prompt.slice(0, 52) || 'Ilustração Vetorial SARA',
         svgCode: svgMatch[0],
-      },
-    ];
+      });
+    }
   }
-  return actions;
+  return list;
 }
 
 function parseStreamingJarvisTags(buffer: string): {
   speak: string;
   speakComplete: boolean;
+  chatSummary: string;
   reply: string;
   actions: JarvisActionPayload[];
   mood?: JarvisHeadMood;
@@ -272,6 +446,16 @@ function parseStreamingJarvisTags(buffer: string): {
     } else {
       speak = buffer.slice(speakOpen + 14).trim();
     }
+  }
+
+  let chatSummary = '';
+  const chatOpen = buffer.indexOf('<JARVIS_CHAT>');
+  const chatClose = buffer.indexOf('</JARVIS_CHAT>');
+  if (chatOpen !== -1) {
+    chatSummary =
+      chatClose !== -1
+        ? buffer.slice(chatOpen + 13, chatClose).trim()
+        : buffer.slice(chatOpen + 13).trim();
   }
 
   let reply = '';
@@ -300,7 +484,7 @@ function parseStreamingJarvisTags(buffer: string): {
   const moodMatch = buffer.match(/<JARVIS_MOOD>\s*(idle|listening|thinking|speaking|happy|focus)\s*<\/JARVIS_MOOD>/i);
   const mood = moodMatch?.[1] as JarvisHeadMood | undefined;
 
-  return { speak, speakComplete, reply, actions, mood };
+  return { speak, speakComplete, chatSummary, reply, actions, mood };
 }
 
 export interface JarvisStreamCallbacks {
@@ -322,7 +506,7 @@ export async function askJarvisAssistantStream(
     mediaState?: JarvisMediaStateContext | null;
     documentAttachment?: JarvisDocumentItem | null;
     activeDocument?: JarvisDocumentItem | null;
-    builderContext?: { activeProjectName?: string; activeProjectFiles?: string[] } | null;
+    builderContext?: JarvisBuilderContext | null;
   },
   callbacks?: JarvisStreamCallbacks
 ): Promise<JarvisAssistantResponse> {
@@ -425,13 +609,14 @@ export async function askJarvisAssistantStream(
         const finalParsed = parseStreamingJarvisTags(rawAccum);
         const strippedFallback = rawAccum
           .replace(/<JARVIS_SPEAK>[\s\S]*?<\/JARVIS_SPEAK>/gi, '')
+          .replace(/<JARVIS_CHAT>[\s\S]*?<\/JARVIS_CHAT>/gi, '')
           .replace(/<JARVIS_ACTIONS>[\s\S]*?<\/JARVIS_ACTIONS>/gi, '')
           .replace(/<JARVIS_MOOD>[\s\S]*?<\/JARVIS_MOOD>/gi, '')
           .replace(/<\/?JARVIS_REPLY>/gi, '')
           .trim();
 
         const rawActions = enrichedActionsFromServer || finalParsed.actions;
-        const finalActions = maybeExtractSvgAction(
+        const finalActions = maybeExtractVisualActions(
           params.prompt,
           finalParsed.reply || strippedFallback,
           rawActions
@@ -439,7 +624,8 @@ export async function askJarvisAssistantStream(
         const cleanReply =
           sanitizeAssistantPlainText(
             finalParsed.reply || strippedFallback || finalParsed.speak
-          ) || 'Mostrei tudo no palco.';
+          ) || 'Mostrei no preview.';
+        const cleanChatSummary = sanitizeAssistantPlainText(finalParsed.chatSummary || '');
         const cleanSpeak = sanitizeAssistantPlainText(finalParsed.speak || cleanReply) || cleanReply;
 
         if (!speakEmitted && cleanSpeak) {
@@ -448,6 +634,7 @@ export async function askJarvisAssistantStream(
 
         return {
           reply: cleanReply,
+          chatSummary: cleanChatSummary || undefined,
           voiceSummary: cleanSpeak,
           mood: finalParsed.mood || 'speaking',
           actions: finalActions,
@@ -481,18 +668,20 @@ async function askJarvisAssistantFallbackJson(
     if (resp.ok) {
       const data = (await resp.json()) as JarvisAssistantResponse;
       if (data && typeof data.reply === 'string') {
-        const extractedActions = maybeExtractSvgAction(
+        const extractedActions = maybeExtractVisualActions(
           prompt,
           data.reply,
           (data.actions || []).map(normalizeJarvisAction)
         );
         const cleanReply = sanitizeAssistantPlainText(data.reply) || 'Feito.';
+        const cleanChat = sanitizeAssistantPlainText(data.chatSummary || '');
         const spoken =
           sanitizeAssistantPlainText(data.voiceSummary || cleanReply) || cleanReply;
         callbacks?.onSpeakReady?.(spoken);
         return {
           ...data,
           reply: cleanReply,
+          chatSummary: cleanChat || undefined,
           voiceSummary: spoken,
           actions: extractedActions,
         };
@@ -503,11 +692,12 @@ async function askJarvisAssistantFallbackJson(
   }
 
   const honestUnavailable =
-    'Não consegui ligar-me ao motor neural neste momento. Verifica a tua ligação à internet ou a chave API e tenta novamente.';
-  callbacks?.onSpeakReady?.('Não consegui responder agora porque falhou a ligação ao motor.');
+    'Não consegui ligar-me ao motor agora. Verifica a ligação ou a chave API.';
+  callbacks?.onSpeakReady?.('Não consegui responder agora porque falhou a ligação ao servidor.');
   return {
     reply: honestUnavailable,
-    voiceSummary: 'Não consegui responder agora porque falhou a ligação.',
+    chatSummary: 'Falha na ligação ao servidor.',
+    voiceSummary: 'Não consegui responder agora porque falhou a ligação ao servidor.',
     mood: 'idle',
     actions: [],
   };
@@ -525,7 +715,7 @@ export async function askJarvisAssistant(params: {
   mediaState?: JarvisMediaStateContext | null;
   documentAttachment?: JarvisDocumentItem | null;
   activeDocument?: JarvisDocumentItem | null;
-  builderContext?: { activeProjectName?: string; activeProjectFiles?: string[] } | null;
+  builderContext?: JarvisBuilderContext | null;
 }): Promise<JarvisAssistantResponse> {
   return askJarvisAssistantStream(params);
 }
@@ -591,13 +781,21 @@ async function reverseGeocodeCityName(lat: number, lon: number): Promise<string 
   }
 }
 
+function degToCompassLabel(deg: number): string {
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SO', 'O', 'NO'];
+  const idx = Math.round((((deg % 360) + 360) % 360) / 45) % 8;
+  return dirs[idx];
+}
+
 export async function fetchLiveWeather(forceRefresh = false): Promise<JarvisWeatherInfo> {
   const cached = safeReadJson<{ ts: number; data: JarvisWeatherInfo } | null>(
     JARVIS_STORAGE_KEYS.weather,
     null
   );
   const cacheIsValidLocation =
-    cached?.data?.city && !/\b(luanda|angola|matola)\b/i.test(cached.data.city);
+    cached?.data?.city &&
+    !/\b(luanda|angola|matola)\b/i.test(cached.data.city) &&
+    cached.data.uvIndex !== undefined;
 
   if (!forceRefresh && cached && cacheIsValidLocation && Date.now() - cached.ts < 10 * 60 * 1000) {
     return cached.data;
@@ -636,13 +834,33 @@ export async function fetchLiveWeather(forceRefresh = false): Promise<JarvisWeat
       4
     )}&longitude=${lon.toFixed(
       4
-    )}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,is_day&timezone=auto`;
+    )}&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m,wind_direction_10m,uv_index,is_day&hourly=temperature_2m,weather_code,uv_index&forecast_hours=4&timezone=auto`;
     const resp = await fetch(url);
     if (resp.ok) {
       const json = await resp.json();
       const curr = json?.current;
       if (curr && typeof curr.temperature_2m === 'number') {
         const isDay = curr.is_day !== 0;
+        const windDeg =
+          typeof curr.wind_direction_10m === 'number' ? Math.round(Number(curr.wind_direction_10m)) : null;
+        const uvVal = typeof curr.uv_index === 'number' ? Number(Number(curr.uv_index).toFixed(1)) : null;
+
+        const hourlyTimes: string[] = Array.isArray(json?.hourly?.time) ? json.hourly.time : [];
+        const hourlyTemps: number[] = Array.isArray(json?.hourly?.temperature_2m) ? json.hourly.temperature_2m : [];
+        const hourlyCodes: number[] = Array.isArray(json?.hourly?.weather_code) ? json.hourly.weather_code : [];
+        const hourlyUvs: number[] = Array.isArray(json?.hourly?.uv_index) ? json.hourly.uv_index : [];
+
+        const hourlyForecast = hourlyTimes.slice(1, 4).map((iso, i) => {
+          const idx = i + 1;
+          const hhmm = typeof iso === 'string' && iso.includes('T') ? iso.split('T')[1].slice(0, 5) : `+${idx}h`;
+          return {
+            time: hhmm,
+            tempC: Math.round(Number(hourlyTemps[idx] ?? curr.temperature_2m)),
+            condition: mapWeatherCodeToCondition(Number(hourlyCodes[idx] ?? curr.weather_code ?? 0), isDay),
+            uv: typeof hourlyUvs[idx] === 'number' ? Number(Number(hourlyUvs[idx]).toFixed(1)) : null,
+          };
+        });
+
         const info: JarvisWeatherInfo = {
           tempC: Math.round(Number(curr.temperature_2m)),
           feelsLikeC:
@@ -657,6 +875,10 @@ export async function fetchLiveWeather(forceRefresh = false): Promise<JarvisWeat
             typeof curr.wind_speed_10m === 'number'
               ? Math.round(Number(curr.wind_speed_10m))
               : null,
+          windDirectionDeg: windDeg,
+          windDirectionLabel: windDeg !== null ? degToCompassLabel(windDeg) : null,
+          uvIndex: uvVal,
+          hourlyForecast,
           condition: mapWeatherCodeToCondition(Number(curr.weather_code ?? 0), isDay),
           city,
           isDay,
@@ -680,10 +902,48 @@ export async function fetchLiveWeather(forceRefresh = false): Promise<JarvisWeat
     feelsLikeC: null,
     humidityPct: null,
     windKmh: null,
+    windDirectionDeg: null,
+    windDirectionLabel: null,
+    uvIndex: null,
+    hourlyForecast: [],
     condition: 'Clima indisponível',
     city,
     loadedFromApi: false,
     errorMsg: 'Não consegui buscar o clima real agora',
+  };
+}
+
+export async function fetchLiveHudFeed(forceRefresh = false): Promise<JarvisHudLiveFeed> {
+  const cached = safeReadJson<{ ts: number; data: JarvisHudLiveFeed } | null>(
+    JARVIS_STORAGE_KEYS.hudFeed,
+    null
+  );
+  if (!forceRefresh && cached && Date.now() - cached.ts < 10 * 60 * 1000) {
+    return cached.data;
+  }
+
+  try {
+    const resp = await fetch('/api/jarvis', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'hud_live_feed' }),
+    });
+    if (resp.ok) {
+      const json = (await resp.json()) as JarvisHudLiveFeed;
+      if (json && (json.fx || Array.isArray(json.news))) {
+        safeWriteJson(JARVIS_STORAGE_KEYS.hudFeed, { ts: Date.now(), data: json });
+        return json;
+      }
+    }
+  } catch {
+    // offline fallback
+  }
+
+  if (cached) return cached.data;
+  return {
+    fx: null,
+    news: [],
+    loadedAt: new Date().toISOString(),
   };
 }
 
