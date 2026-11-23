@@ -35,6 +35,7 @@ import {
   Newspaper,
   Paperclip,
   Pause,
+  Pencil,
   Play,
   Plus,
   Radar,
@@ -140,6 +141,17 @@ import type { LocalDeviceFile } from '../../types/jarvis';
 import { SaraJarvisHead } from './SaraJarvisHead';
 import { JarvisStageRenderer } from './JarvisStageRenderer';
 import type { LocalFullscreenSignal, LocalSeekSignal } from './LocalMediaStageView';
+import {
+  evaluateAgendaAlerts,
+  formatIsoDateToPtHuman,
+  getMaputoNowParts,
+  getUpcomingAgendaCountdown,
+  isQueryAgendaCommand,
+  parseAgendaCommand,
+  resolvePortugueseDate,
+  sortAgendaItems,
+  type TriggeredAgendaAlert,
+} from '../../utils/timeAgendaService';
 
 interface JarvisWorkspaceProps {
   session: SaraSession;
@@ -380,7 +392,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const [mobileSection, setMobileSection] = useState<'stage' | 'hud' | 'log'>('stage');
   const [isMemoryExpanded, setIsMemoryExpanded] = useState(false);
 
-  const [agenda, setAgenda] = useState<JarvisAgendaItem[]>(initialBundle.agenda);
+  const [agenda, setAgenda] = useState<JarvisAgendaItem[]>(() =>
+    sortAgendaItems(initialBundle.agenda)
+  );
   const [alarms, setAlarms] = useState<JarvisAlarmItem[]>(initialBundle.alarms);
   const [tasks, setTasks] = useState<JarvisTaskItem[]>(initialBundle.tasks);
   const [memory, setMemory] = useState<JarvisMemoryState>(initialBundle.memory);
@@ -467,11 +481,20 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     readSyncSystemTelemetry()
   );
   const [activeRingingAlarm, setActiveRingingAlarm] = useState<JarvisAlarmItem | null>(null);
+  const [activeAgendaAlert, setActiveAgendaAlert] = useState<TriggeredAgendaAlert | null>(null);
 
   // Inputs dos módulos dentro da gaveta [☰ PAINEL]
   const [newAgendaTitle, setNewAgendaTitle] = useState('');
-  const [newAgendaDate, setNewAgendaDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [newAgendaDate, setNewAgendaDate] = useState(() => getMaputoNowParts().isoDate);
   const [newAgendaTime, setNewAgendaTime] = useState('10:00');
+  const [newAgendaNotes, setNewAgendaNotes] = useState('');
+  const [editingAgendaId, setEditingAgendaId] = useState<string | null>(null);
+  const [editAgendaTitle, setEditAgendaTitle] = useState('');
+  const [editAgendaDate, setEditAgendaDate] = useState('');
+  const [editAgendaTime, setEditAgendaTime] = useState('10:00');
+  const [editAgendaNotes, setEditAgendaNotes] = useState('');
+  const notifiedAgendaKeysRef = useRef<Set<string>>(new Set());
+  const agendaRef = useRef<JarvisAgendaItem[]>(sortAgendaItems(initialBundle.agenda));
   const [newAlarmTime, setNewAlarmTime] = useState('07:00');
   const [newAlarmLabel, setNewAlarmLabel] = useState('Despertar');
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -479,6 +502,27 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const [musicSearch, setMusicSearch] = useState('');
   const [isSearchingMusic, setIsSearchingMusic] = useState(false);
   const [newMemoryFact, setNewMemoryFact] = useState('');
+
+  const commitAgendaUpdate = useCallback(
+    (updater: (current: JarvisAgendaItem[]) => JarvisAgendaItem[]): boolean => {
+      const nextSorted = sortAgendaItems(updater(agendaRef.current));
+      const persistedOk = saveJarvisAgenda(nextSorted, session.userId, session.isGuest);
+      if (!persistedOk) {
+        onNotify('Não consegui guardar, tenta de novo');
+        return false;
+      }
+      agendaRef.current = nextSorted;
+      setAgenda(nextSorted);
+      if (!session.isGuest) {
+        salvarJarvisStateFirebase(
+          { agenda: nextSorted, alarms, tasks, memory },
+          session.userId
+        ).catch(() => {});
+      }
+      return true;
+    },
+    [session.userId, session.isGuest, alarms, tasks, memory, onNotify]
+  );
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const spectrumCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -540,7 +584,11 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   }, [isPanelOpen]);
 
   // Persistência local automática isolada por usuário (zero persistência para convidado)
-  useEffect(() => saveJarvisAgenda(agenda, session.userId, session.isGuest), [agenda, session.userId, session.isGuest]);
+  useEffect(() => {
+    const sorted = sortAgendaItems(agenda);
+    agendaRef.current = sorted;
+    saveJarvisAgenda(sorted, session.userId, session.isGuest);
+  }, [agenda, session.userId, session.isGuest]);
   useEffect(() => saveJarvisAlarms(alarms, session.userId, session.isGuest), [alarms, session.userId, session.isGuest]);
   useEffect(() => saveJarvisTasks(tasks, session.userId, session.isGuest), [tasks, session.userId, session.isGuest]);
   useEffect(() => saveJarvisMemory(memory, session.userId, session.isGuest), [memory, session.userId, session.isGuest]);
@@ -1609,7 +1657,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     };
   }, [voiceEnabled, isSaraSilenced, isCallMode, onNotify]);
 
-  // Relógio ao vivo (1s) + Uptime + Verificador real de alarmes
+  // Relógio ao vivo (1s) Maputo + Uptime + Verificador real de alarmes
   useEffect(() => {
     const interval = setInterval(() => {
       const current = new Date();
@@ -1618,8 +1666,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       setHudPulseTick((t) => (t + 1) % 3600);
       setTelemetry(readSyncSystemTelemetry(batteryInfoRef.current));
 
-      const hhmm = current.toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
-      const todayKey = current.toISOString().slice(0, 10);
+      const maputoNow = getMaputoNowParts(current);
+      const hhmm = maputoNow.timeHHmm;
+      const todayKey = maputoNow.isoDate;
 
       setAlarms((prevAlarms) => {
         let changed = false;
@@ -1643,6 +1692,42 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     }, 1000);
     return () => clearInterval(interval);
   }, [voiceEnabled, isCallMode, isSaraSilenced]);
+
+  // Verificador automático em 2.º plano da Agenda (a cada 30s + imediato ao atualizar agenda)
+  useEffect(() => {
+    const runAgendaCheck = () => {
+      const triggered = evaluateAgendaAlerts(agenda, notifiedAgendaKeysRef.current, new Date());
+      if (triggered.length === 0) return;
+
+      const topAlert = triggered[0];
+      for (const alert of triggered) {
+        notifiedAgendaKeysRef.current.add(alert.key);
+      }
+      setActiveAgendaAlert(topAlert);
+      onNotify(topAlert.headline);
+
+      if (!isSaraSilenced && !isCallMode) {
+        if (topAlert.kind === 'due') {
+          playJarvisAlarmSound();
+          if (typeof navigator !== 'undefined' && typeof navigator.vibrate === 'function') {
+            try {
+              navigator.vibrate([300, 150, 300]);
+            } catch {
+              // ignore vibration errors
+            }
+          }
+        }
+        speakAsSara(topAlert.speakText, voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+    };
+
+    runAgendaCheck();
+    const timer = setInterval(runAgendaCheck, 30000);
+    return () => clearInterval(timer);
+  }, [agenda, voiceEnabled, isSaraSilenced, isCallMode, onNotify]);
 
   // Clima real via Open-Meteo + Geolocalização (Inhambane Cidade fallback fixo) a cada 10 minutos
   const refreshWeatherNow = useCallback(async (force = false) => {
@@ -1923,18 +2008,33 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           }
           case 'add_agenda': {
             onUserActivity?.('agenda');
+            const rawDateInput = String(act.date || '').trim();
+            const resolvedDate = /^\d{4}-\d{2}-\d{2}$/.test(rawDateInput)
+              ? rawDateInput
+              : resolvePortugueseDate(rawDateInput || act.title || '', new Date()).dateIso;
+            const safeTime = /^\d{1,2}:\d{2}$/.test(String(act.time || '').trim())
+              ? String(act.time).trim().padStart(5, '0')
+              : '09:00';
             const item: JarvisAgendaItem = {
               id: `ag_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-              title: act.title || 'Compromisso',
-              date: act.date || new Date().toISOString().slice(0, 10),
-              time: act.time || '09:00',
-              notes: act.notes,
+              title: String(act.title || 'Compromisso').trim(),
+              date: resolvedDate,
+              time: safeTime,
+              notes: act.notes ? String(act.notes).trim() : '',
               completed: false,
               createdAt: new Date().toISOString(),
             };
-            setAgenda((prev) => [item, ...prev]);
-            setActiveModule('agenda');
-            onNotify(`Agenda: ${item.title} (${item.time})`);
+            const savedOk = commitAgendaUpdate((prev) => [...prev, item]);
+            if (savedOk) {
+              setActiveModule('agenda');
+              const human = formatIsoDateToPtHuman(item.date, new Date());
+              onNotify(`Marcado: ${item.title}, ${human}, ${item.time}`);
+            } else {
+              speakAsSara('Não consegui guardar, tenta de novo.', voiceEnabled, {
+                level: 'short',
+                forceSpeak: true,
+              });
+            }
             break;
           }
           case 'add_alarm': {
@@ -2528,11 +2628,80 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         }
       }
 
-      // CONEXÃO ASSISTENTE -> BUILDER EM 2.º PLANO: pedidos de site/app completo constroem no Builder sem sair do Assistente
+      // AGENDA DETERMINÍSTICA (CRIAR E CONSULTAR): garante gravação real na Memória da SARA + Núcleo SARA
+      if (clean && !docToSend) {
+        if (isQueryAgendaCommand(clean)) {
+          onUserActivity?.('agenda');
+          if (source === 'text') setInputText('');
+          const currentSorted = sortAgendaItems(agendaRef.current.filter((a) => !a.completed));
+          const nowMaputo = getMaputoNowParts(new Date());
+          const replyText =
+            currentSorted.length === 0
+              ? 'Não tens compromissos pendentes na agenda.'
+              : `Tens ${currentSorted.length} compromisso(s) na agenda. O próximo é ${currentSorted[0].title}, ${formatIsoDateToPtHuman(
+                  currentSorted[0].date
+                )}, às ${currentSorted[0].time}.`;
+          setActiveModule('agenda');
+          updatePanelOpen(true);
+          setConversation((prev) => [
+            ...prev.slice(-28),
+            { id: `usr_agq_${Date.now()}`, sender: 'user', text: clean, timestamp: nowMaputo.timeHHmm },
+            { id: `sara_agq_${Date.now()}`, sender: 'sara', text: replyText, timestamp: nowMaputo.timeHHmm },
+          ]);
+          speakAsSara(replyText, voiceEnabled, { level: 'medium', forceSpeak: true });
+          return;
+        }
+
+        const parsedAgenda = parseAgendaCommand(clean, new Date());
+        if (parsedAgenda) {
+          onUserActivity?.('agenda');
+          if (source === 'text') setInputText('');
+          const nowMaputo = getMaputoNowParts(new Date());
+          const newItem: JarvisAgendaItem = {
+            id: `ag_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+            title: parsedAgenda.title,
+            date: parsedAgenda.dateIso,
+            time: parsedAgenda.timeHHmm,
+            notes: parsedAgenda.notes,
+            completed: false,
+            createdAt: new Date().toISOString(),
+          };
+          const savedOk = commitAgendaUpdate((prev) => [...prev, newItem]);
+          if (!savedOk) {
+            const failMsg = 'Não consegui guardar, tenta de novo.';
+            setConversation((prev) => [
+              ...prev.slice(-28),
+              { id: `usr_agf_${Date.now()}`, sender: 'user', text: clean, timestamp: nowMaputo.timeHHmm },
+              { id: `sara_agf_${Date.now()}`, sender: 'sara', text: failMsg, timestamp: nowMaputo.timeHHmm },
+            ]);
+            speakAsSara(failMsg, voiceEnabled, { level: 'short', forceSpeak: true });
+            return;
+          }
+          setActiveModule('agenda');
+          onNotify(parsedAgenda.confirmationText);
+          setConversation((prev) => [
+            ...prev.slice(-28),
+            { id: `usr_ags_${Date.now()}`, sender: 'user', text: clean, timestamp: nowMaputo.timeHHmm },
+            {
+              id: `sara_ags_${Date.now()}`,
+              sender: 'sara',
+              text: parsedAgenda.confirmationText,
+              timestamp: nowMaputo.timeHHmm,
+            },
+          ]);
+          speakAsSara(parsedAgenda.confirmationText, voiceEnabled, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return;
+        }
+      }
+
+      // CONEXÃO ASSISTENTE -> ESTÚDIO SARA EM 2.º PLANO: pedidos de site/app completo constroem no Estúdio sem sair do Assistente
       if (clean && !docToSend && onTriggerBackgroundBuild && isFullBuilderAppRequest(clean)) {
         lastDomainRef.current = 'builder';
         onUserActivity?.('builder');
-        const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        const nowTime = getMaputoNowParts().timeHHmm;
         const ackSpeech = getBackgroundBuildAckSpeech(clean);
         if (source === 'text') {
           setInputText('');
@@ -2542,7 +2711,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             {
               id: `sara_bg_ack_${Date.now()}`,
               sender: 'sara',
-              text: 'Builder em segundo plano: projeto em montagem mantendo o Assistente livre.',
+              text: 'Estúdio SARA em segundo plano: projeto em montagem mantendo o Assistente livre.',
               timestamp: nowTime,
             },
           ]);
@@ -2552,7 +2721,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             {
               id: `sara_bg_ack_${Date.now()}`,
               sender: 'sara',
-              text: 'Builder em segundo plano: projeto em montagem.',
+              text: 'Estúdio SARA em segundo plano: projeto em montagem.',
               timestamp: nowTime,
             },
           ]);
@@ -2973,21 +3142,27 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
   const neuralPct = isThinking ? thinkingPercent || 78 : isSaraSpeaking ? 94 : 64 + (hudPulseTick % 7);
 
-  // Calendário mensal real
+  const nowMaputo = useMemo(() => getMaputoNowParts(now), [now]);
+
+  // Calendário mensal real (Maputo)
   const calendarCells = useMemo(() => {
-    const yr = now.getFullYear();
-    const mo = now.getMonth();
-    const firstWeekday = new Date(yr, mo, 1).getDay();
-    const daysInMonth = new Date(yr, mo + 1, 0).getDate();
+    const yr = nowMaputo.year;
+    const mo = nowMaputo.month - 1;
+    const firstWeekday = new Date(Date.UTC(yr, mo, 1, 12, 0, 0)).getUTCDay();
+    const daysInMonth = new Date(Date.UTC(yr, mo + 1, 0, 12, 0, 0)).getUTCDate();
     const cells: Array<number | null> = [];
     for (let i = 0; i < firstWeekday; i++) cells.push(null);
     for (let d = 1; d <= daysInMonth; d++) cells.push(d);
     return cells;
-  }, [now]);
+  }, [nowMaputo.year, nowMaputo.month]);
 
-  const todayIso = now.toISOString().slice(0, 10);
+  const todayIso = nowMaputo.isoDate;
+  const upcomingAgenda = useMemo(
+    () => getUpcomingAgendaCountdown(agenda, now),
+    [agenda, now]
+  );
   const todayAgendaItems = useMemo(
-    () => agenda.filter((a) => a.date === todayIso).slice(0, 3),
+    () => sortAgendaItems(agenda.filter((a) => !a.completed && a.date >= todayIso)).slice(0, 3),
     [agenda, todayIso]
   );
 
@@ -3044,7 +3219,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-[#020612] text-white overflow-hidden relative">
-      {/* Alarme a tocar no topo */}
+      {/* Alarme ou Alerta de Agenda no topo */}
       {activeRingingAlarm && (
         <div className="z-50 px-4 py-2 bg-gradient-to-r from-[#FF2A4B]/30 via-[#081529] to-[#00E5FF]/25 border-b border-[#FF2A4B] flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-white">
@@ -3060,6 +3235,40 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           >
             Dispensar
           </button>
+        </div>
+      )}
+
+      {activeAgendaAlert && (
+        <div
+          className={`z-50 px-4 py-2 border-b flex items-center justify-between gap-3 ${
+            activeAgendaAlert.kind === 'due'
+              ? 'bg-gradient-to-r from-rose-600/35 via-[#091529] to-cyan-600/25 border-rose-400'
+              : 'bg-gradient-to-r from-cyan-600/30 via-[#091529] to-amber-500/20 border-cyan-400'
+          }`}
+        >
+          <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-white min-w-0">
+            <BellRing className="w-4 h-4 text-cyan-300 shrink-0" />
+            <span className="truncate">{activeAgendaAlert.headline}</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveModule('agenda');
+                updatePanelOpen(true);
+              }}
+              className="px-2.5 py-1 rounded-lg bg-cyan-500/25 border border-cyan-400/60 text-cyan-100 text-xs font-bold cursor-pointer hover:bg-cyan-500/35"
+            >
+              Ver Agenda
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveAgendaAlert(null)}
+              className="px-2.5 py-1 rounded-lg bg-[#0A162B] border border-slate-600 text-slate-200 text-xs font-bold cursor-pointer hover:text-white"
+            >
+              Dispensar
+            </button>
+          </div>
         </div>
       )}
 
@@ -3118,7 +3327,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 className="py-2 px-2 rounded-xl bg-[#071126] border border-cyan-500/25 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:border-cyan-400"
               >
                 <Hammer className="w-3.5 h-3.5 text-rose-400" />
-                <span>Builder</span>
+                <span>Estúdio SARA</span>
               </button>
               {session.isOwner && (
                 <button
@@ -3328,6 +3537,17 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
               {activeModule === 'agenda' && (
                 <div className="space-y-4">
+                  {upcomingAgenda && (
+                    <div className="p-2.5 rounded-xl bg-cyan-500/15 border border-cyan-400/45 flex items-center justify-between gap-2 text-xs">
+                      <span className="font-semibold text-cyan-100 truncate">
+                        {upcomingAgenda.badgeText}
+                      </span>
+                      <span className="font-mono text-[10px] text-cyan-300 shrink-0">
+                        {upcomingAgenda.item.time}
+                      </span>
+                    </div>
+                  )}
+
                   <div className="p-3 rounded-2xl bg-[#071126] border border-cyan-500/25 space-y-2">
                     <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
                       Novo Compromisso
@@ -3336,7 +3556,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       type="text"
                       value={newAgendaTitle}
                       onChange={(e) => setNewAgendaTitle(e.target.value)}
-                      placeholder="Ex: Reunião de arquitetura"
+                      placeholder="Ex: Reunião de projeto"
                       className="w-full px-2.5 py-1.5 rounded-lg bg-[#030815] border border-cyan-500/30 text-xs text-white focus:outline-none focus:border-cyan-400"
                     />
                     <div className="grid grid-cols-2 gap-2">
@@ -3353,25 +3573,40 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                         className="px-2 py-1.5 rounded-lg bg-[#030815] border border-cyan-500/30 text-xs text-white"
                       />
                     </div>
+                    <input
+                      type="text"
+                      value={newAgendaNotes}
+                      onChange={(e) => setNewAgendaNotes(e.target.value)}
+                      placeholder="Notas (opcional)"
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-[#030815] border border-cyan-500/30 text-xs text-white focus:outline-none focus:border-cyan-400"
+                    />
                     <button
                       type="button"
                       onClick={() => {
                         if (!newAgendaTitle.trim()) return;
-                        setAgenda((prev) => [
-                          {
-                            id: `ag_${Date.now()}`,
-                            title: newAgendaTitle.trim(),
-                            date: newAgendaDate,
-                            time: newAgendaTime,
-                            completed: false,
-                            createdAt: new Date().toISOString(),
-                          },
-                          ...prev,
-                        ]);
+                        const newItem: JarvisAgendaItem = {
+                          id: `ag_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+                          title: newAgendaTitle.trim(),
+                          date: newAgendaDate || getMaputoNowParts().isoDate,
+                          time: newAgendaTime || '09:00',
+                          notes: newAgendaNotes.trim() || undefined,
+                          completed: false,
+                          createdAt: new Date().toISOString(),
+                        };
+                        const savedOk = commitAgendaUpdate((prev) => [...prev, newItem]);
+                        if (!savedOk) {
+                          speakAsSara('Não consegui guardar, tenta de novo.', voiceEnabled, {
+                            level: 'short',
+                            forceSpeak: true,
+                          });
+                          return;
+                        }
                         setNewAgendaTitle('');
-                        onNotify('Compromisso guardado na agenda!');
+                        setNewAgendaNotes('');
+                        const human = formatIsoDateToPtHuman(newItem.date, new Date());
+                        onNotify(`Marcado: ${newItem.title}, ${human}, ${newItem.time}`);
                       }}
-                      className="w-full py-1.5 rounded-lg bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 text-xs font-bold flex items-center justify-center gap-1 cursor-pointer"
+                      className="w-full py-1.5 rounded-lg bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 text-xs font-bold flex items-center justify-center gap-1 cursor-pointer hover:bg-cyan-500/30"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       <span>Adicionar à Agenda</span>
@@ -3387,26 +3622,142 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                         Agenda vazia. Pede por voz ou adiciona acima.
                       </p>
                     ) : (
-                      agenda.map((ag) => (
+                      sortAgendaItems(agenda).map((ag) => (
                         <div
                           key={ag.id}
-                          className="p-2.5 rounded-xl bg-[#071126] border border-cyan-500/20 flex items-center justify-between gap-2"
+                          className="p-2.5 rounded-xl bg-[#071126] border border-cyan-500/20 space-y-2"
                         >
-                          <div className="min-w-0">
-                            <div className="text-xs font-semibold text-white truncate">
-                              {ag.title}
+                          {editingAgendaId === ag.id ? (
+                            <div className="space-y-2">
+                              <input
+                                type="text"
+                                value={editAgendaTitle}
+                                onChange={(e) => setEditAgendaTitle(e.target.value)}
+                                className="w-full px-2 py-1 rounded bg-[#030815] border border-cyan-400/50 text-xs text-white"
+                              />
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <input
+                                  type="date"
+                                  value={editAgendaDate}
+                                  onChange={(e) => setEditAgendaDate(e.target.value)}
+                                  className="px-2 py-1 rounded bg-[#030815] border border-cyan-500/30 text-xs text-white"
+                                />
+                                <input
+                                  type="time"
+                                  value={editAgendaTime}
+                                  onChange={(e) => setEditAgendaTime(e.target.value)}
+                                  className="px-2 py-1 rounded bg-[#030815] border border-cyan-500/30 text-xs text-white"
+                                />
+                              </div>
+                              <input
+                                type="text"
+                                value={editAgendaNotes}
+                                onChange={(e) => setEditAgendaNotes(e.target.value)}
+                                placeholder="Notas"
+                                className="w-full px-2 py-1 rounded bg-[#030815] border border-cyan-500/30 text-xs text-white"
+                              />
+                              <div className="flex gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!editAgendaTitle.trim()) return;
+                                    const ok = commitAgendaUpdate((prev) =>
+                                      prev.map((x) =>
+                                        x.id === ag.id
+                                          ? {
+                                              ...x,
+                                              title: editAgendaTitle.trim(),
+                                              date: editAgendaDate || x.date,
+                                              time: editAgendaTime || x.time,
+                                              notes: editAgendaNotes.trim() || undefined,
+                                            }
+                                          : x
+                                      )
+                                    );
+                                    if (ok) {
+                                      setEditingAgendaId(null);
+                                      onNotify('Compromisso atualizado.');
+                                    }
+                                  }}
+                                  className="flex-1 py-1 rounded bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 text-[11px] font-bold cursor-pointer"
+                                >
+                                  Guardar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingAgendaId(null)}
+                                  className="px-2.5 py-1 rounded bg-[#040915] border border-slate-600 text-slate-300 text-[11px] cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
                             </div>
-                            <div className="text-[10px] font-mono text-cyan-300">
-                              {ag.date} • {ag.time}
+                          ) : (
+                            <div className="flex items-start justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  commitAgendaUpdate((prev) =>
+                                    prev.map((x) =>
+                                      x.id === ag.id ? { ...x, completed: !x.completed } : x
+                                    )
+                                  )
+                                }
+                                className="mt-0.5 text-cyan-300 hover:text-emerald-300 cursor-pointer shrink-0"
+                                title={ag.completed ? 'Marcar pendente' : 'Concluir compromisso'}
+                              >
+                                {ag.completed ? (
+                                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                ) : (
+                                  <Circle className="w-3.5 h-3.5" />
+                                )}
+                              </button>
+                              <div className="flex-1 min-w-0">
+                                <div
+                                  className={`text-xs font-semibold truncate ${
+                                    ag.completed ? 'line-through text-slate-500' : 'text-white'
+                                  }`}
+                                >
+                                  {ag.title}
+                                </div>
+                                <div className="text-[10px] font-mono text-cyan-300">
+                                  {formatIsoDateToPtHuman(ag.date, now)} • {ag.time}
+                                </div>
+                                {ag.notes && (
+                                  <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                                    {ag.notes}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingAgendaId(ag.id);
+                                    setEditAgendaTitle(ag.title);
+                                    setEditAgendaDate(ag.date);
+                                    setEditAgendaTime(ag.time);
+                                    setEditAgendaNotes(ag.notes || '');
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-cyan-300 cursor-pointer"
+                                  title="Editar compromisso"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    commitAgendaUpdate((prev) => prev.filter((x) => x.id !== ag.id));
+                                    onNotify('Compromisso removido.');
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer"
+                                  title="Remover compromisso"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                             </div>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setAgenda((prev) => prev.filter((x) => x.id !== ag.id))}
-                            className="p-1 text-slate-400 hover:text-rose-400 cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          )}
                         </div>
                       ))
                     )}
@@ -4115,7 +4466,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               <div className="flex items-center justify-between text-[10px] font-mono uppercase tracking-widest">
                 <span className="text-cyan-300 font-bold flex items-center gap-1.5">
                   <Calendar className="w-3.5 h-3.5" />
-                  {now.toLocaleDateString('pt-PT', { month: 'long', year: 'numeric' })}
+                  {nowMaputo.monthFull} {nowMaputo.year}
                 </span>
                 <button
                   type="button"
@@ -4128,6 +4479,11 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   Agenda ({agenda.length})
                 </button>
               </div>
+              {upcomingAgenda && (
+                <div className="px-2 py-1 rounded-lg bg-cyan-500/15 border border-cyan-400/40 text-[10px] font-mono text-cyan-200 truncate">
+                  {upcomingAgenda.badgeText}
+                </div>
+              )}
               <div className="grid grid-cols-7 gap-0.5 text-center text-[9px] font-mono">
                 {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((d, i) => (
                   <div key={i} className="text-slate-500 pb-0.5">
@@ -4135,7 +4491,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   </div>
                 ))}
                 {calendarCells.map((day, idx) => {
-                  const isToday = day === now.getDate();
+                  const isToday = day === nowMaputo.day;
                   return (
                     <div
                       key={idx}
@@ -4359,7 +4715,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                         <div className="flex items-center justify-between text-[10px] font-mono">
                           <span className="text-cyan-300 font-bold flex items-center gap-1.5">
                             <Loader2 className="w-3 h-3 animate-spin" />
-                            BUILDER • 2.º PLANO
+                            ESTÚDIO SARA • 2.º PLANO
                           </span>
                           <span className="text-white font-bold tabular-nums">{builderProgressPct}%</span>
                         </div>
@@ -4395,7 +4751,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                         <div className="flex items-center justify-between text-[10px] font-mono">
                           <span className="text-emerald-300 font-bold flex items-center gap-1">
                             <CheckCircle2 className="w-3 h-3" />
-                            BUILDER CONCLUÍDO
+                            ESTÚDIO CONCLUÍDO
                           </span>
                           {onDismissCompletedBuild && (
                             <button
@@ -4424,7 +4780,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                             }}
                             className="px-2.5 py-1 rounded-lg bg-emerald-500/25 border border-emerald-400/60 text-[10px] font-bold text-emerald-100 hover:bg-emerald-500/35 cursor-pointer"
                           >
-                            Ver no Builder
+                            Ver no Estúdio
                           </button>
                         </div>
                       </div>
@@ -4536,7 +4892,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           className="px-2.5 py-1 rounded-xl bg-[#040B1A]/85 border border-cyan-400/50 text-[10px] font-mono text-cyan-200 flex items-center gap-1.5 cursor-pointer"
                         >
                           <Loader2 className="w-3 h-3 animate-spin" />
-                          <span>Builder {builderProgressPct}%</span>
+                          <span>Estúdio {builderProgressPct}%</span>
                         </button>
                       )}
                       {!liveBuild?.isBuilding && completedBackgroundBuild && (
@@ -4548,7 +4904,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           }}
                           className="px-2.5 py-1 rounded-xl bg-emerald-500/20 border border-emerald-400/60 text-[10px] font-bold text-emerald-100 cursor-pointer"
                         >
-                          Ver no Builder ({completedBackgroundBuild.projectName})
+                          Ver no Estúdio ({completedBackgroundBuild.projectName})
                         </button>
                       )}
                       {readingStatus.active && (
@@ -4689,7 +5045,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           className="w-full p-2 rounded-xl bg-[#071126]/85 border border-cyan-400/40 text-left space-y-1 cursor-pointer"
                         >
                           <div className="flex items-center justify-between text-[9px] font-mono text-cyan-300">
-                            <span>BUILDER 2.º PLANO</span>
+                            <span>ESTÚDIO 2.º PLANO</span>
                             <span>{builderProgressPct}%</span>
                           </div>
                           <div className="h-1 rounded-full bg-[#030815] overflow-hidden">
@@ -4933,7 +5289,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 placeholder="Fala ou escreve à SARA (explicações, 3D, cálculos, música, vídeos, gráficos...)"
-                className="flex-1 min-w-0 px-3.5 py-2.5 rounded-xl bg-[#061024] border border-cyan-500/30 text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-none focus:border-[#00E5FF]"
+                className="flex-1 min-w-0 px-4 py-3 rounded-xl bg-[#061024] border border-cyan-500/30 text-[15px] tracking-normal [word-spacing:normal] text-white placeholder-slate-400 focus:outline-none focus:border-[#00E5FF]"
               />
 
               <button

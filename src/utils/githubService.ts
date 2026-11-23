@@ -15,7 +15,7 @@ export function formatRepoSlug(name: string): string {
     name
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '') || 'sara-biulder-projeto'
+      .replace(/^-|-$/g, '') || 'estudio-sara-projeto'
   );
 }
 
@@ -28,7 +28,7 @@ export async function pushProjectToGitHub(params: {
 }): Promise<{ ok: boolean; repoUrl: string; owner: string; repo: string; fileCount: number }> {
   const token = (params.tokenOverride || getSavedGitHubToken()).trim();
   if (!token) {
-    throw new Error('Nenhum GitHub Token configurado.');
+    throw new Error('Nenhuma Chave do Cofre configurada.');
   }
 
   const headers = {
@@ -39,7 +39,7 @@ export async function pushProjectToGitHub(params: {
 
   const userRes = await fetch('https://api.github.com/user', { headers });
   if (!userRes.ok) {
-    throw new Error('Token GitHub inválido ou expirado.');
+    throw new Error('Chave do Cofre inválida ou expirada.');
   }
   const ghUser = await userRes.json();
   const owner = ghUser.login;
@@ -50,7 +50,7 @@ export async function pushProjectToGitHub(params: {
     headers,
     body: JSON.stringify({
       name: cleanRepo,
-      description: `Criado na SARA BIULDER por Eletro-Jr`,
+      description: `Criado no Estúdio SARA por Eletro-Jr`,
       private: Boolean(params.isPrivate),
       auto_init: false,
     }),
@@ -58,7 +58,7 @@ export async function pushProjectToGitHub(params: {
 
   if (!createRes.ok && createRes.status !== 422) {
     const errData = await createRes.json().catch(() => ({}));
-    throw new Error(errData.message || 'Falha ao criar repositório no GitHub.');
+    throw new Error(errData.message || 'Falha ao criar repositório no Cofre de Projetos.');
   }
 
   const uploadMap: Record<string, string> = {};
@@ -76,7 +76,7 @@ export async function pushProjectToGitHub(params: {
     uploadMap['index.html'] = buildStandaloneHtml(params.files, params.projectName);
   }
   if (!uploadMap['README.md']) {
-    uploadMap['README.md'] = `# ${params.projectName}\nCriado na SARA BIULDER por Eletro-Jr.`;
+    uploadMap['README.md'] = `# ${params.projectName}\nCriado no Estúdio SARA por Eletro-Jr.`;
   }
   if (!uploadMap['_redirects']) {
     uploadMap['_redirects'] = '/* /index.html 200\n';
@@ -102,7 +102,7 @@ export async function pushProjectToGitHub(params: {
         method: 'PUT',
         headers,
         body: JSON.stringify({
-          message: `Deploy via SARA BIULDER (${filePath})`,
+          message: `Deploy via Estúdio SARA (${filePath})`,
           content: encoded,
           ...(sha ? { sha } : {}),
         }),

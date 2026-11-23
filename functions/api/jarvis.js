@@ -30,8 +30,8 @@ export async function onRequestPost(context) {
       return jsonResponse(
         {
           error: isOwner
-            ? 'Chave Gemini não configurada.'
-            : 'Estou a ajustar o sistema em segundo plano. Tenta novamente em instantes.',
+            ? 'Chave do Núcleo não configurada.'
+            : 'Núcleo offline. A tentar reconectar...',
         },
         500
       );

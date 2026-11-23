@@ -186,8 +186,8 @@ export async function testarConexaoFirebase(): Promise<{ ok: boolean; label: str
     if (!app || app.options?.projectId !== 'sara-biulder') {
       return {
         ok: false,
-        label: 'Desligado',
-        detail: 'Projeto Firebase não corresponde a sara-biulder.',
+        label: 'Núcleo Offline',
+        detail: 'Núcleo offline. A tentar reconectar...',
       };
     }
 
@@ -199,25 +199,25 @@ export async function testarConexaoFirebase(): Promise<{ ok: boolean; label: str
       await firestoreMod.getDocs(q);
       return {
         ok: true,
-        label: 'Ligado a sara-biulder',
-        detail: 'Firestore e Auth ligados ao projeto sara-biulder com sincronização automática ativa.',
+        label: 'Núcleo SARA Online',
+        detail: 'Ligação ao Núcleo SARA ativa com sincronização automática.',
       };
     } catch (fireErr: any) {
       const code = String(fireErr?.code || '');
       if (code === 'permission-denied') {
         return {
           ok: true,
-          label: 'Ligado a sara-biulder',
-          detail: 'Ligado ao projeto sara-biulder (inicia sessão para gravar e restaurar tudo na nuvem).',
+          label: 'Núcleo SARA Online',
+          detail: 'Ligação ao Núcleo SARA pronta. Inicia sessão para sincronizar.',
         };
       }
       throw fireErr;
     }
-  } catch (err: any) {
+  } catch {
     return {
       ok: false,
-      label: 'Desligado',
-      detail: err?.message || 'Falha ao conectar ao Firebase sara-biulder.',
+      label: 'Núcleo Offline',
+      detail: 'Núcleo offline. A tentar reconectar...',
     };
   }
 }

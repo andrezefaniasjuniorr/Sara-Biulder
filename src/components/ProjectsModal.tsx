@@ -98,7 +98,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
             </h2>
             <p className="text-xs text-[#A1A1AA]">
               {isOwner
-                ? 'Guardados no navegador e sincronizados com sara_projetos (Firestore)'
+                ? 'Guardados na Memória da SARA e sincronizados com o Núcleo SARA'
                 : 'Espaço pessoal guardado com sincronização segura'}
             </p>
           </div>
@@ -149,7 +149,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
 
             <div className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] flex flex-col justify-between gap-3">
               <div className="text-xs font-semibold text-white">
-                {isOwner ? 'Importação e Nuvem Firebase' : 'Importação e Backup'}
+                {isOwner ? 'Importação e Núcleo SARA' : 'Importação e Backup'}
               </div>
               <div className="flex flex-wrap gap-2">
                 <input
@@ -178,7 +178,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                   ) : (
                     <CloudUpload className="w-3.5 h-3.5 text-[#8B5CF6]" />
                   )}
-                  <span>{isOwner ? 'Salvar no Firebase' : 'Guardar na Nuvem'}</span>
+                  <span>{isOwner ? 'Salvar no Núcleo SARA' : 'Guardar na Nuvem'}</span>
                 </button>
               </div>
               <button
@@ -187,7 +187,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                 disabled={isSyncingFirebase}
                 className="w-full py-2 px-3 rounded-lg bg-[#12121A] border border-[#1F1F2E] hover:border-emerald-500/40 text-xs text-[#A1A1AA] hover:text-white transition cursor-pointer"
               >
-                {isOwner ? 'Sincronizar lista de sara_projetos' : 'Sincronizar projetos guardados'}
+                {isOwner ? 'Sincronizar lista do Núcleo SARA' : 'Sincronizar projetos guardados'}
               </button>
               {importError && <p className="text-[11px] text-rose-400">{importError}</p>}
             </div>
@@ -250,7 +250,7 @@ export const ProjectsModal: React.FC<ProjectsModalProps> = ({
                       {proj.syncedToFirebase && (
                         <>
                           <span>·</span>
-                          <span className="text-emerald-400">{isOwner ? 'Firebase' : 'Sincronizado'}</span>
+                          <span className="text-emerald-400">{isOwner ? 'Núcleo SARA' : 'Sincronizado'}</span>
                         </>
                       )}
                     </div>

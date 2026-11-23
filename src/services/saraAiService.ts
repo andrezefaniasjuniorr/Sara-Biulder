@@ -650,24 +650,23 @@ export async function runSaraStream(params: {
         reply: finalReply,
         updateFiles: false,
         actions: mergedActions.length > 0 ? mergedActions : undefined,
-        engineLabel: isOwner ? `Builder (${saraData.modelUsed || 'gemini-4-hydrogen'})` : 'SARA OS',
+        engineLabel: isOwner ? 'Estúdio SARA' : 'SARA OS',
         modelUsed: saraData.modelUsed,
       };
     } catch (bgErr: any) {
       const errText = String(bgErr?.message || '');
       const needsKey = isKeyAuthErrorMsg(errText);
-      console.warn('[Sara Failover Silencioso - Conversa]:', bgErr);
       const activeProj = screenContext?.projectName || 'este projeto';
       return {
         mode: 'conversation',
         reply:
           needsKey && isOwner
-            ? `Falta configurar uma chave Gemini válida nas Configurações para conversar e gerar em **${activeProj}**, Eletro-Jr.`
-            : `Estou ligada em ${activeProj}${voc}! Diz-me exatamente o que queres testar, mudar no código ou controlar aqui na plataforma.`,
+            ? `Falta configurar a Chave do Núcleo nas Configurações do Sistema para trabalhar em **${activeProj}**, Eletro-Jr.`
+            : `Núcleo offline. A tentar reconectar...`,
         updateFiles: false,
         apiDegraded: true,
         needsApiKey: isOwner ? needsKey : false,
-        engineLabel: 'Sara Continuity Engine',
+        engineLabel: 'Motor Inteligente SARA',
       };
     }
   }
@@ -706,17 +705,16 @@ export async function runSaraStream(params: {
     } catch (bgErr: any) {
       const errText = String(bgErr?.message || '');
       const needsKey = isKeyAuthErrorMsg(errText);
-      console.warn('[Sara Failover Silencioso - Fallback direto]:', bgErr);
       return {
         mode: 'conversation',
         reply:
           needsKey && isOwner
-            ? 'Para a Sara criar e editar ficheiros neste servidor, cola a tua chave Gemini (AIza...) nas Configurações.'
-            : `Estou a reorganizar os motores de geração para continuar ${screenContext?.projectName || 'o teu projeto'}${voc} — envia novamente o detalhe ou testa um comando rápido enquanto estabiliza em segundo plano.`,
+            ? 'Para criar e editar ficheiros no Estúdio SARA, configura a Chave do Núcleo nas Configurações do Sistema.'
+            : 'Núcleo offline. A tentar reconectar...',
         updateFiles: false,
         apiDegraded: true,
         needsApiKey: isOwner ? needsKey : false,
-        engineLabel: 'Sara Continuity Engine',
+        engineLabel: 'Motor Inteligente SARA',
       };
     }
   }
@@ -809,17 +807,16 @@ export async function runSaraStream(params: {
       const errText = `${streamErroredMessage} ${String(fallbackErr?.message || '')}`;
       const needsKey = isKeyAuthErrorMsg(errText);
       if (!rawModelText.trim()) {
-        console.warn('[Sara Failover Silencioso - Stream vazio]:', streamErroredMessage, fallbackErr);
         return {
           mode: 'conversation',
           reply:
             needsKey && isOwner
-              ? 'Para a Sara criar e editar os ficheiros do projeto aqui, carrega ou cola uma chave Gemini válida nas Configurações.'
-              : `Estou a reajustar a rota dos motores para executar "${prompt.slice(0, 60)}" em ${screenContext?.projectName || 'teu projeto'}${voc}. Podes tentar novamente já a seguir que eu assumo daqui!`,
+              ? 'Para criar e editar ficheiros no Estúdio SARA, configura a Chave do Núcleo nas Configurações do Sistema.'
+              : 'Núcleo offline. A tentar reconectar...',
           updateFiles: false,
           apiDegraded: true,
           needsApiKey: isOwner ? needsKey : false,
-          engineLabel: 'Sara Continuity Engine',
+          engineLabel: 'Motor Inteligente SARA',
         };
       }
     }
@@ -829,12 +826,12 @@ export async function runSaraStream(params: {
     return {
       mode: 'conversation',
       reply: isOwner
-        ? 'Para a Sara construir e editar os ficheiros, verifica ou carrega uma chave Gemini válida nas Configurações.'
-        : 'Sistema temporariamente ocupado. Tenta novamente em instantes.',
+        ? 'Para construir e editar ficheiros no Estúdio SARA, verifica a Chave do Núcleo nas Configurações do Sistema.'
+        : 'Núcleo offline. A tentar reconectar...',
       updateFiles: false,
       apiDegraded: true,
       needsApiKey: isOwner,
-      engineLabel: 'Sara Continuity Engine',
+      engineLabel: 'Motor Inteligente SARA',
     };
   }
 

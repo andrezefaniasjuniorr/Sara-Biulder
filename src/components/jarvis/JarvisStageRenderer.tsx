@@ -1,16 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import katex from 'katex';
 import 'katex/dist/katex.min.css';
 import Chart from 'chart.js/auto';
 import gsap from 'gsap';
 import html2canvas from 'html2canvas';
 import { motion } from 'framer-motion';
-import { mathjax } from 'mathjax-full/js/mathjax.js';
-import { TeX } from 'mathjax-full/js/input/tex.js';
-import { SVG as MathJaxSVG } from 'mathjax-full/js/output/svg.js';
-import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor.js';
-import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js';
-import { AllPackages } from 'mathjax-full/js/input/tex/AllPackages.js';
 import {
   X,
   Download,
@@ -45,11 +38,17 @@ import {
   Image as ImageIcon,
   FileSpreadsheet,
   Presentation,
+  Lightbulb,
 } from 'lucide-react';
 import type { Jarvis3DShape, JarvisMathStep, JarvisStageContent, JarvisTrack, LocalDeviceFile } from '../../types/jarvis';
 import { formatDocumentTypeLabel, formatFileSize } from '../../services/localMediaService';
 import { speakPronunciation, startVoiceReading } from '../../utils/voiceService';
-import { ThreeSceneStageView } from './ThreeSceneStageView';
+import {
+  ensureRichMathSteps,
+  renderMathLatexToHtml,
+  renderRichMarkdownHtml,
+} from '../../utils/richContentRenderer';
+import { Sara3DDrawingStudio } from './Sara3DDrawingStudio';
 import {
   LocalJarvisMediaPlayer,
   LocalLibraryBrowserView,
@@ -57,27 +56,6 @@ import {
   type LocalFullscreenSignal,
   type LocalSeekSignal,
 } from './LocalMediaStageView';
-
-let mathJaxInstance: { convert: (tex: string, opts: { display: boolean }) => any; adaptor: any } | null = null;
-function renderMathJaxSvgFallback(latex: string, displayMode: boolean): string {
-  try {
-    if (!mathJaxInstance) {
-      const adaptor = liteAdaptor();
-      RegisterHTMLHandler(adaptor);
-      const tex = new TeX({ packages: AllPackages });
-      const svg = new MathJaxSVG({ fontCache: 'none' });
-      const html = mathjax.document('', { InputJax: tex, OutputJax: svg });
-      mathJaxInstance = {
-        convert: (t: string, opts: { display: boolean }) => html.convert(t, opts),
-        adaptor,
-      };
-    }
-    const node = mathJaxInstance.convert(latex, { display: displayMode });
-    return mathJaxInstance.adaptor.innerHTML(node) || '';
-  } catch {
-    return '';
-  }
-}
 
 function sanitizeAndFixSvgMarkup(raw: string): { html: string; isRenderable: boolean } {
   const cleaned = String(raw || '')
@@ -95,7 +73,6 @@ function sanitizeAndFixSvgMarkup(raw: string): { html: string; isRenderable: boo
     return { html: '', isRenderable: false };
   }
 
-  // Corrige colapso width:0 dentro de flex containers garantindo width/height/viewBox/preserveAspectRatio
   if (!/\bviewBox\s*=/i.test(attrs)) {
     attrs += ' viewBox="0 0 800 500"';
   }
@@ -110,6 +87,11 @@ function sanitizeAndFixSvgMarkup(raw: string): { html: string; isRenderable: boo
 
 function detect3DShapeFromTitle(title: string): Jarvis3DShape | null {
   const t = String(title || '').toLowerCase();
+  if (/\b(carro|autom[oó]vel|viatura|ve[ií]culo|suv|sedan|desportivo)\b/.test(t)) return 'car';
+  if (/\b(mol[eé]cula|h2o|[aá]gua|co2|metano|ch4|etanol|ligac[aã]o qu[ií]mica)\b/.test(t)) return 'molecule';
+  if (/\b(vetores?|vetor|resultante|for[cç]a 3d)\b/.test(t)) return 'vectors';
+  if (/\b(gr[aá]fico 3d|superf[ií]cie 3d|z\s*=|paraboloide)\b/.test(t)) return 'chart3d';
+  if (/\b(cartesiano|eixos xyz|coordenadas 3d)\b/.test(t)) return 'cartesian';
   if (/\b(cubo|hexaedro)\b/.test(t)) return 'cube';
   if (/\b(paralelep[ií]pedo|bloco retangular)\b/.test(t)) return 'cuboid';
   if (/\b(esfera|globo)\b/.test(t)) return 'sphere';
@@ -119,7 +101,7 @@ function detect3DShapeFromTitle(title: string): Jarvis3DShape | null {
   if (/\b(prisma)\b/.test(t)) return 'prism';
   if (/\b(octaedro)\b/.test(t)) return 'octahedron';
   if (/\b(toro|rosquinha)\b/.test(t)) return 'torus';
-  if (/\b([aá]tomo|mol[eé]cula)\b/.test(t)) return 'atom';
+  if (/\b([aá]tomo|n[uú]cleo|el[eé]trons)\b/.test(t)) return 'atom';
   return null;
 }
 
@@ -148,6 +130,20 @@ function cleanLatexInput(raw: string): string {
   return s;
 }
 
+const RichMarkdownBlock: React.FC<{
+  text: string;
+  className?: string;
+}> = ({ text, className = '' }) => {
+  const html = useMemo(() => renderRichMarkdownHtml(text), [text]);
+  if (!html) return null;
+  return (
+    <div
+      className={`text-[14px] leading-[1.6] text-slate-100 whitespace-normal break-words not-italic [&_p]:mb-2 [&_p:last-child]:mb-0 [&_strong]:text-cyan-200 [&_strong]:font-bold [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li]:my-1 [&_code]:bg-[#030815] [&_code]:px-1.5 [&_code]:py-0.5 [&_code]:rounded [&_code]:text-cyan-200 [&_img]:max-w-full [&_img]:rounded-[12px] ${className}`}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+};
+
 const KatexBlock: React.FC<{
   math: string;
   displayMode?: boolean;
@@ -156,29 +152,16 @@ const KatexBlock: React.FC<{
   const html = useMemo(() => {
     const cleaned = cleanLatexInput(math);
     if (!cleaned) return '';
-    try {
-      const katexHtml = katex.renderToString(cleaned, {
-        displayMode,
-        throwOnError: true,
-        strict: false,
-        output: 'html',
-      });
-      if (katexHtml && !katexHtml.includes('katex-error')) {
-        return katexHtml;
-      }
-    } catch {
-      // fallback para MathJax abaixo
-    }
-    return renderMathJaxSvgFallback(cleaned, displayMode);
+    return renderMathLatexToHtml(cleaned, displayMode);
   }, [math, displayMode]);
 
   if (!html) {
-    return <span className={`font-mono text-cyan-200 ${className}`}>{math}</span>;
+    return <span className={`font-mono text-cyan-200 not-italic break-words ${className}`}>{math}</span>;
   }
 
   return (
     <div
-      className={`overflow-x-auto sara-scroll text-cyan-100 [&_.katex]:text-inherit [&_svg]:max-w-full [&_svg]:h-auto ${
+      className={`overflow-x-auto sara-scroll text-cyan-100 not-italic leading-[1.6] [&_.katex]:text-inherit [&_.katex-display]:my-1 ${
         displayMode ? 'py-1' : 'inline-block align-middle'
       } ${className}`}
       dangerouslySetInnerHTML={{ __html: html }}
@@ -187,26 +170,49 @@ const KatexBlock: React.FC<{
 };
 
 const StageCalculationsPanel: React.FC<{
+  title?: string;
+  simpleExplanation?: string;
   formulas?: string[];
   steps?: JarvisMathStep[];
   finalAnswer?: string;
-}> = ({ formulas, steps, finalAnswer }) => {
+  studyTip?: string;
+}> = ({ title, simpleExplanation, formulas, steps, finalAnswer, studyTip }) => {
   const hasAny =
-    (formulas && formulas.length > 0) || (steps && steps.length > 0) || Boolean(finalAnswer);
+    Boolean(simpleExplanation) ||
+    (formulas && formulas.length > 0) ||
+    (steps && steps.length > 0) ||
+    Boolean(finalAnswer) ||
+    Boolean(studyTip);
   if (!hasAny) return null;
 
+  const normalizedSteps = ensureRichMathSteps({
+    title,
+    formulas,
+    steps,
+    finalAnswer,
+  });
+
   return (
-    <div className="space-y-3 pt-1">
-      {formulas && formulas.length > 0 && (
-        <div className="p-3.5 rounded-xl bg-[#071124] border border-cyan-500/30 space-y-2">
+    <div className="space-y-3.5 pt-1 not-italic">
+      {simpleExplanation && (
+        <div className="p-3.5 rounded-xl bg-[#071124] border border-cyan-500/25 space-y-1">
           <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300">
-            Fórmulas Aplicadas
+            Explicação Simples
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <RichMarkdownBlock text={simpleExplanation} />
+        </div>
+      )}
+
+      {formulas && formulas.length > 0 && (
+        <div className="p-3.5 rounded-xl bg-[#071124] border border-cyan-400/35 space-y-2">
+          <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300">
+            Fórmula Principal em Destaque
+          </div>
+          <div className="grid grid-cols-1 gap-2">
             {formulas.map((f, i) => (
               <div
                 key={i}
-                className="px-3 py-2 rounded-lg bg-[#030815] border border-cyan-500/25 text-base sm:text-lg"
+                className="px-3.5 py-2.5 rounded-lg bg-[#030815] border border-cyan-500/30 text-base sm:text-lg"
               >
                 <KatexBlock math={f} displayMode />
               </div>
@@ -215,27 +221,36 @@ const StageCalculationsPanel: React.FC<{
         </div>
       )}
 
-      {steps && steps.length > 0 && (
-        <div className="space-y-2">
+      {normalizedSteps.length > 0 && (
+        <div className="space-y-2.5">
           <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-rose-300 px-0.5">
-            Resolução Passo a Passo
+            Passo a Passo Numerado
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
-            {steps.map((st, idx) => (
+          <div className="grid grid-cols-1 gap-2.5">
+            {normalizedSteps.map((st, idx) => (
               <div
                 key={`${st.step}_${idx}`}
-                className="p-3 rounded-xl bg-[#060F20] border border-cyan-500/25 space-y-1.5"
+                className="p-3.5 rounded-xl bg-[#060F20] border border-cyan-500/25 space-y-2"
               >
-                <div className="text-[11px] font-bold text-rose-300 uppercase tracking-wider">
-                  {st.step || `Passo ${idx + 1}`}
-                </div>
-                {st.expression && (
-                  <div className="px-3 py-1.5 rounded-lg bg-[#030711] border border-cyan-500/30 text-sm sm:text-base">
-                    <KatexBlock math={st.expression} displayMode />
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 font-mono font-bold text-xs flex items-center justify-center shrink-0">
+                    {idx + 1}
+                  </span>
+                  <div className="text-xs font-bold text-rose-200 tracking-wide">
+                    {st.step || `Passo ${idx + 1}`}
                   </div>
-                )}
-                {st.explanation && (
-                  <p className="text-xs text-slate-200 leading-relaxed">{st.explanation}</p>
+                </div>
+                <RichMarkdownBlock text={st.explanation} className="text-[13px] text-slate-200" />
+                <div className="px-3 py-2 rounded-lg bg-[#030711] border border-cyan-500/30 text-sm sm:text-base">
+                  <KatexBlock math={st.expression} displayMode />
+                </div>
+                {st.partialResult && (
+                  <div className="px-3 py-1.5 rounded-lg bg-[#081A2E] border border-emerald-500/35 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="font-mono font-bold uppercase text-emerald-300">
+                      Resultado parcial:
+                    </span>
+                    <KatexBlock math={st.partialResult} />
+                  </div>
                 )}
               </div>
             ))}
@@ -244,13 +259,23 @@ const StageCalculationsPanel: React.FC<{
       )}
 
       {finalAnswer && (
-        <div className="p-4 rounded-xl bg-gradient-to-r from-cyan-500/20 to-rose-500/15 border border-cyan-400/55">
-          <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300">
+        <div className="p-4 rounded-xl bg-emerald-950/50 border border-emerald-400/60 space-y-1.5">
+          <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-emerald-300">
             Resultado Final
           </div>
-          <div className="mt-1.5 text-lg sm:text-xl font-extrabold text-white">
-            <KatexBlock math={finalAnswer} displayMode />
+          <div className="text-base sm:text-lg font-extrabold text-emerald-100 leading-[1.6] whitespace-normal break-words not-italic">
+            <KatexBlock math={finalAnswer} displayMode className="text-emerald-100" />
           </div>
+        </div>
+      )}
+
+      {studyTip && (
+        <div className="p-3.5 rounded-xl bg-[#0A1428] border border-amber-400/35 space-y-1">
+          <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-amber-300 flex items-center gap-1.5">
+            <Lightbulb className="w-3.5 h-3.5" />
+            <span>Dica de Estudo</span>
+          </div>
+          <RichMarkdownBlock text={studyTip} className="text-xs text-slate-200" />
         </div>
       )}
     </div>
@@ -1116,25 +1141,23 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
       <div ref={exportRootRef} className="flex-1 min-h-0 overflow-y-auto sara-scroll p-3.5">
         {content.kind === '3d' && (
           <div className="flex flex-col gap-3.5">
-            {content.subtitle && <p className="text-xs text-cyan-200/85">{content.subtitle}</p>}
-
-            <ThreeSceneStageView
+            <Sara3DDrawingStudio
               shape={content.shape}
               title={content.title}
+              subtitle={content.subtitle}
               dimensions={content.dimensions}
               unit={content.unit || 'cm'}
-              labelLines={content.labelLines}
-              autoRotateInitial={content.autoRotate ?? true}
             />
 
-            {content.description && (
-              <p className="text-xs text-slate-200 leading-relaxed">{content.description}</p>
-            )}
+            {content.description && <RichMarkdownBlock text={content.description} />}
 
             <StageCalculationsPanel
+              title={content.title}
+              simpleExplanation={content.simpleExplanation}
               formulas={content.formulas}
               steps={content.steps}
               finalAnswer={content.finalAnswer}
+              studyTip={content.studyTip}
             />
           </div>
         )}
@@ -1151,102 +1174,159 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
                 dangerouslySetInnerHTML={{ __html: svgValidation.html }}
               />
             ) : (
-              /* Auto-cura: se SVG vier vazio/inválido, materializa imediatamente em 3D real em vez de deixar caixa preta */
-              <ThreeSceneStageView
+              <Sara3DDrawingStudio
                 shape={svgFallback3DShape || 'cube'}
                 title={content.title}
                 {...extractDimensionsFromText(`${content.title} ${content.description || ''}`)}
               />
             )}
 
-            {content.description && (
-              <p className="text-xs text-slate-200 leading-relaxed">{content.description}</p>
-            )}
+            {content.description && <RichMarkdownBlock text={content.description} />}
 
             <StageCalculationsPanel
+              title={content.title}
+              simpleExplanation={content.simpleExplanation}
               formulas={content.formulas}
               steps={content.steps}
               finalAnswer={content.finalAnswer}
+              studyTip={content.studyTip}
             />
           </div>
         )}
 
-        {content.kind === 'math' && (
-          <div className="space-y-3">
-            {content.problem && (
-              <div className="p-3 rounded-xl bg-[#091428] border border-cyan-400/35">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300 mb-1">
-                  Enunciado
+        {content.kind === 'math' && (() => {
+          const mathSteps = ensureRichMathSteps({
+            title: content.title,
+            problem: content.problem,
+            formulas: content.formulas,
+            steps: content.steps,
+            finalAnswer: content.finalAnswer,
+          });
+          const mainFormulas =
+            content.formulas && content.formulas.length > 0
+              ? content.formulas
+              : content.problem
+              ? [content.problem]
+              : [];
+
+          return (
+            <div className="space-y-3.5 not-italic">
+              {/* 1. Título e Explicação Simples */}
+              <div className="p-3.5 rounded-xl bg-[#091428] border border-cyan-400/35 space-y-1.5">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300">
+                  1. Explicação Simples
                 </div>
-                <div className="text-sm font-semibold text-white">{content.problem}</div>
+                <RichMarkdownBlock
+                  text={
+                    content.simpleExplanation ||
+                    content.problem ||
+                    `Resolução didática passo a passo de ${content.title}.`
+                  }
+                />
+                {content.problem && content.simpleExplanation && (
+                  <div className="pt-1 text-xs text-slate-300 leading-[1.6]">
+                    <span className="font-semibold text-cyan-200">Enunciado: </span>
+                    <KatexBlock math={content.problem} />
+                  </div>
+                )}
               </div>
-            )}
 
-            {mathSvgValidation?.isRenderable && (
-              <div
-                className="w-full min-h-[220px] max-h-[300px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-3 overflow-hidden"
-                dangerouslySetInnerHTML={{ __html: mathSvgValidation.html }}
-              />
-            )}
+              {mathSvgValidation?.isRenderable && (
+                <div
+                  className="w-full min-h-[220px] max-h-[300px] rounded-xl bg-[#040914] border border-cyan-500/25 flex items-center justify-center p-3 overflow-hidden"
+                  dangerouslySetInnerHTML={{ __html: mathSvgValidation.html }}
+                />
+              )}
 
-            {content.formulas && content.formulas.length > 0 && (
-              <div className="p-3 rounded-xl bg-[#071124] border border-cyan-500/25 space-y-1.5">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
-                  Fórmulas Aplicadas
+              {/* 2. Fórmula Principal em Destaque */}
+              {mainFormulas.length > 0 && (
+                <div className="p-3.5 rounded-xl bg-[#071124] border border-cyan-400/35 space-y-2">
+                  <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300">
+                    2. Fórmula Principal em Destaque
+                  </div>
+                  {mainFormulas.map((f, i) => (
+                    <div
+                      key={i}
+                      className="px-3.5 py-2 rounded-lg bg-[#030815] border border-cyan-500/25 text-base sm:text-lg"
+                    >
+                      <KatexBlock math={f} displayMode />
+                    </div>
+                  ))}
                 </div>
-                {content.formulas.map((f, i) => (
+              )}
+
+              {/* 3. Passo a Passo Numerado (nunca vazio) */}
+              <div className="space-y-2.5">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-rose-300 px-0.5">
+                  3. Passo a Passo Numerado
+                </div>
+                {mathSteps.map((st, idx) => (
                   <div
-                    key={i}
-                    className="px-2.5 py-1 rounded-lg bg-[#030815] border border-cyan-500/20"
+                    key={`${st.step}_${idx}`}
+                    className="p-3.5 rounded-xl bg-[#060F20] border border-cyan-500/25 flex flex-col gap-2"
                   >
-                    <KatexBlock math={f} displayMode />
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 h-6 rounded-full bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 font-mono font-bold text-xs flex items-center justify-center shrink-0">
+                        {idx + 1}
+                      </span>
+                      <span className="text-xs font-bold text-rose-200 tracking-wide">
+                        {st.step || `Passo ${idx + 1}`}
+                      </span>
+                    </div>
+                    <RichMarkdownBlock text={st.explanation} className="text-[13px] text-slate-200" />
+                    <div className="px-3 py-2 rounded-lg bg-[#030711] border border-cyan-500/30">
+                      <KatexBlock math={st.expression} displayMode />
+                    </div>
+                    <div className="px-3 py-1.5 rounded-lg bg-[#081A2E] border border-emerald-500/35 flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-mono font-bold uppercase text-emerald-300">
+                        Resultado parcial:
+                      </span>
+                      <KatexBlock math={st.partialResult} />
+                    </div>
                   </div>
                 ))}
               </div>
-            )}
 
-            <div className="space-y-2">
-              {content.steps.map((st, idx) => (
-                <div
-                  key={`${st.step}_${idx}`}
-                  className="p-3 rounded-xl bg-[#060F20] border border-cyan-500/20 flex flex-col gap-1.5"
-                >
-                  <span className="text-[11px] font-bold text-rose-300 uppercase tracking-wider">
-                    {st.step || `Passo ${idx + 1}`}
-                  </span>
-                  {st.expression && (
-                    <div className="px-3 py-1.5 rounded-lg bg-[#030711] border border-cyan-500/30">
-                      <KatexBlock math={st.expression} displayMode />
-                    </div>
-                  )}
-                  <p className="text-xs text-slate-300 leading-relaxed">{st.explanation}</p>
+              {/* 4. Resultado Final em Card Verde */}
+              <div className="p-4 rounded-xl bg-emerald-950/50 border border-emerald-400/60 space-y-1.5">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-emerald-300">
+                  4. Resultado Final
                 </div>
-              ))}
-            </div>
+                <div className="text-base sm:text-lg font-extrabold text-emerald-100 leading-[1.6] whitespace-normal break-words not-italic">
+                  <KatexBlock math={content.finalAnswer || mainFormulas[0] || ''} displayMode className="text-emerald-100" />
+                </div>
+              </div>
 
-            <div className="p-3.5 rounded-xl bg-gradient-to-r from-cyan-500/20 to-rose-500/15 border border-cyan-400/50">
-              <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
-                Resultado Final
-              </div>
-              <div className="mt-1 text-base font-extrabold text-white">
-                <KatexBlock math={content.finalAnswer} displayMode />
-              </div>
-              {content.notes && <p className="text-xs text-slate-300 mt-1.5">{content.notes}</p>}
+              {/* 5. Dica de Estudo */}
+              {(content.studyTip || content.notes) && (
+                <div className="p-3.5 rounded-xl bg-[#0A1428] border border-amber-400/35 space-y-1">
+                  <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-amber-300 flex items-center gap-1.5">
+                    <Lightbulb className="w-3.5 h-3.5" />
+                    <span>5. Dica de Estudo</span>
+                  </div>
+                  <RichMarkdownBlock
+                    text={content.studyTip || content.notes || ''}
+                    className="text-xs text-slate-200"
+                  />
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {content.kind === 'explanation' && (
-          <div className="space-y-3.5">
+          <div className="space-y-3.5 not-italic">
             {(content.summary || (content.sections.length === 0 && !explanationSvgValidation?.isRenderable)) && (
               <div className="p-3.5 rounded-xl bg-[#08152C] border border-cyan-400/35">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300 mb-1">
-                  Síntese Visual
+                <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300 mb-1.5">
+                  Explicação Simples
                 </div>
-                <p className="text-xs sm:text-sm text-slate-100 leading-relaxed">
-                  {content.summary ||
-                    `Explicação estruturada sobre ${content.title}. Usa o botão Ler para ouvir em voz alta ou faz uma pergunta de seguimento.`}
-                </p>
+                <RichMarkdownBlock
+                  text={
+                    content.summary ||
+                    `Explicação estruturada sobre ${content.title}. Usa o botão Ler para ouvir em voz alta ou faz uma pergunta de seguimento.`
+                  }
+                />
               </div>
             )}
 
@@ -1258,9 +1338,9 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
             )}
 
             {content.formula && (
-              <div className="p-3 rounded-xl bg-[#061124] border border-cyan-400/30">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-rose-300 mb-1">
-                  Fórmula Principal
+              <div className="p-3.5 rounded-xl bg-[#061124] border border-cyan-400/35">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-cyan-300 mb-1">
+                  Fórmula Principal em Destaque
                 </div>
                 <KatexBlock math={content.formula} displayMode />
               </div>
@@ -1271,21 +1351,34 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
                 {content.sections.map((sec, idx) => (
                   <div
                     key={idx}
-                    className="p-3 rounded-xl bg-[#071124] border border-cyan-500/25 space-y-1"
+                    className="p-3.5 rounded-xl bg-[#071124] border border-cyan-500/25 space-y-1.5"
                   >
                     <div className="text-xs font-bold text-cyan-300">{sec.heading}</div>
-                    <p className="text-xs text-slate-300 leading-relaxed">{sec.body}</p>
+                    <RichMarkdownBlock text={sec.body} className="text-[13px] text-slate-200" />
                   </div>
                 ))}
               </div>
             )}
 
             {content.exampleBody && (
-              <div className="p-3.5 rounded-xl bg-gradient-to-r from-cyan-500/15 to-[#FF2A4B]/15 border border-cyan-400/40 space-y-1">
-                <div className="text-[10px] font-mono uppercase tracking-widest text-rose-300">
-                  {content.exampleTitle || 'Exemplo Prático'}
+              <div className="p-3.5 rounded-xl bg-emerald-950/50 border border-emerald-400/60 space-y-1.5">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-emerald-300">
+                  {content.exampleTitle || 'Resultado / Exemplo Prático'}
                 </div>
-                <p className="text-xs text-slate-100 leading-relaxed">{content.exampleBody}</p>
+                <RichMarkdownBlock
+                  text={content.exampleBody}
+                  className="text-sm text-emerald-100 leading-[1.6] whitespace-normal break-words not-italic"
+                />
+              </div>
+            )}
+
+            {content.studyTip && (
+              <div className="p-3.5 rounded-xl bg-[#0A1428] border border-amber-400/35 space-y-1">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-widest text-amber-300 flex items-center gap-1.5">
+                  <Lightbulb className="w-3.5 h-3.5" />
+                  <span>Dica de Estudo</span>
+                </div>
+                <RichMarkdownBlock text={content.studyTip} className="text-xs text-slate-200" />
               </div>
             )}
           </div>
@@ -1367,13 +1460,16 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
               )}
 
             {content.previewUrl && content.mimeType.startsWith('image/') && (
-              <div className="rounded-xl overflow-hidden border border-cyan-500/30 bg-[#040914] max-h-[260px] flex items-center justify-center">
+              <figure className="rounded-xl border border-cyan-500/30 bg-[#040914] p-2.5 space-y-2 flex flex-col items-center">
                 <img
                   src={content.previewUrl}
                   alt={content.title}
-                  className="max-h-[260px] object-contain"
+                  className="max-w-full max-h-[300px] rounded-[12px] object-contain"
                 />
-              </div>
+                <figcaption className="text-[11px] text-slate-300 text-center">
+                  {content.title}
+                </figcaption>
+              </figure>
             )}
             {content.previewUrl && content.mimeType === 'application/pdf' && (
               <div className="rounded-xl overflow-hidden border border-cyan-500/30 bg-[#040914] h-[360px]">

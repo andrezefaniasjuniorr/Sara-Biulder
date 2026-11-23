@@ -2,7 +2,7 @@ import JSZip from 'jszip';
 import type { ProjectFiles } from '../types/builder';
 import { buildPreviewSrcDoc, ensureDeployableIndexHtml } from './previewBuilder';
 
-export function buildStandaloneHtml(files: ProjectFiles, projectTitle = 'Projeto SARA BIULDER'): string {
+export function buildStandaloneHtml(files: ProjectFiles, projectTitle = 'Projeto Estúdio SARA'): string {
   return buildPreviewSrcDoc(files, { forDeploy: true, title: projectTitle });
 }
 
@@ -32,7 +32,7 @@ export async function downloadProjectZip(files: ProjectFiles, projectName: strin
   }
 
   if (!files['README.md']) {
-    zip.file('README.md', `# ${projectName}\nCriado na SARA BIULDER por Eletro-Jr.`);
+    zip.file('README.md', `# ${projectName}\nCriado na Estúdio SARA por Eletro-Jr.`);
   }
   if (!files['_redirects']) {
     zip.file('_redirects', '/* /index.html 200\n');

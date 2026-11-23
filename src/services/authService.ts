@@ -40,7 +40,7 @@ const ALERTS_KEY = 'sara_admin_alerts_v1';
 const ACTIVE_SESSION_KEY = 'sara_active_session_v1';
 
 const ACTIVITY_LABELS: Record<ActivityCategory, string> = {
-  builder: 'A usar Builder',
+  builder: 'A usar Estúdio SARA',
   chat: 'A conversar',
   music: 'A ouvir música',
   calc: 'Cálculos / Estudos',

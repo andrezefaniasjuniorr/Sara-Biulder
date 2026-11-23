@@ -423,7 +423,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
           />
           <div className="min-w-0">
             <h2 className="text-xs sm:text-sm font-bold tracking-wide text-white truncate">
-              Sara Biulder · {agentMode === 'automatic' ? 'Automático' : 'Manual'}
+              Estúdio SARA · {agentMode === 'automatic' ? 'Automático' : 'Manual'}
             </h2>
             <p className="text-[11px] font-mono tabular-nums text-cyan-300/80 truncate">
               {isSaraSpeaking
@@ -1200,7 +1200,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
             onKeyDown={handleComposerKeyDown}
             onPaste={handlePaste}
             placeholder={`Escreve ou fala com a Sara, ${isOwner ? 'Eletro-Jr' : callName}... (Enter envia, Shift+Enter quebra linha)`}
-            className="flex-1 min-w-0 bg-transparent text-xs sm:text-sm text-white placeholder-[#A1A1AA]/60 outline-none resize-none overflow-y-auto overflow-x-auto sara-scroll py-1.5 leading-5 max-h-[120px]"
+            className="flex-1 min-w-0 bg-transparent text-[15px] tracking-normal [word-spacing:normal] text-white placeholder-[#A1A1AA]/60 outline-none resize-none overflow-y-auto overflow-x-auto sara-scroll px-4 py-3 leading-5 max-h-[120px]"
           />
 
           <button

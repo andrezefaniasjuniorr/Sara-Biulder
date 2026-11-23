@@ -3,7 +3,7 @@ import {
   X,
   Database,
   KeyRound,
-  Github,
+  FolderGit2,
   Check,
   Loader2,
   LogOut,
@@ -12,7 +12,6 @@ import {
 import type { FirebaseUserProfile } from '../types/builder';
 import {
   criarConta,
-  firebaseConfig,
   loginEmail,
   loginGoogle,
   logout,
@@ -23,6 +22,7 @@ import {
   getSavedGeminiKey,
   saveGeminiKey,
 } from '../services/saraAiService';
+import { toSafeCoreOfflineMessage } from '../utils/timeAgendaService';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -31,25 +31,37 @@ interface SettingsModalProps {
   onNotify: (msg: string) => void;
 }
 
+const MASKED_SECRET = '••••••••';
+
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   firebaseUser,
   onClose,
   onNotify,
 }) => {
-  const [geminiKey, setGeminiKey] = useState(() => getSavedGeminiKey());
-  const [githubToken, setGithubToken] = useState(() => {
+  const [hasCoreKey, setHasCoreKey] = useState(() => Boolean(getSavedGeminiKey()));
+  const [coreKeyInput, setCoreKeyInput] = useState(() => (getSavedGeminiKey() ? MASKED_SECRET : ''));
+  const [coreKeyTouched, setCoreKeyTouched] = useState(false);
+
+  const [hasVaultKey, setHasVaultKey] = useState(() => {
     try {
-      return localStorage.getItem('GITHUB_TOKEN') || '';
+      return Boolean(localStorage.getItem('GITHUB_TOKEN'));
+    } catch {
+      return false;
+    }
+  });
+  const [vaultKeyInput, setVaultKeyInput] = useState(() => {
+    try {
+      return localStorage.getItem('GITHUB_TOKEN') ? MASKED_SECRET : '';
     } catch {
       return '';
     }
   });
+  const [vaultKeyTouched, setVaultKeyTouched] = useState(false);
   const [savedNotice, setSavedNotice] = useState('');
 
-  // Firebase test & auth state
-  const [fbTesting, setFbTesting] = useState(false);
-  const [fbStatus, setFbStatus] = useState<{ ok: boolean; label: string; detail: string } | null>(null);
+  const [coreTesting, setCoreTesting] = useState(false);
+  const [coreStatus, setCoreStatus] = useState<{ ok: boolean; label: string; detail: string } | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
@@ -62,17 +74,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleSaveKeys = (e: React.FormEvent) => {
     e.preventDefault();
-    saveGeminiKey(geminiKey);
-    try {
-      if (githubToken.trim()) {
-        localStorage.setItem('GITHUB_TOKEN', githubToken.trim());
-      } else {
-        localStorage.removeItem('GITHUB_TOKEN');
-      }
-    } catch {
-      // ignore
+    if (coreKeyTouched) {
+      const cleanCore = coreKeyInput.trim();
+      saveGeminiKey(cleanCore);
+      setHasCoreKey(Boolean(cleanCore));
+      setCoreKeyInput(cleanCore ? MASKED_SECRET : '');
+      setCoreKeyTouched(false);
     }
-    setSavedNotice('Configurações guardadas no navegador.');
+
+    if (vaultKeyTouched) {
+      const cleanVault = vaultKeyInput.trim();
+      try {
+        if (cleanVault) {
+          localStorage.setItem('GITHUB_TOKEN', cleanVault);
+        } else {
+          localStorage.removeItem('GITHUB_TOKEN');
+        }
+      } catch {
+        // ignore
+      }
+      setHasVaultKey(Boolean(cleanVault));
+      setVaultKeyInput(cleanVault ? MASKED_SECRET : '');
+      setVaultKeyTouched(false);
+    }
+
+    setSavedNotice('Configurações guardadas na Memória da SARA.');
     onNotify('Configurações guardadas com sucesso.');
     setTimeout(() => setSavedNotice(''), 2500);
   };
@@ -84,22 +110,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const content = await file.text();
       const extracted = extractApiKeyFromTxtContent(content);
       if (extracted) {
-        setGeminiKey(extracted);
         saveGeminiKey(extracted);
-        setSavedNotice('Chave Gemini extraída do TXT e guardada em localStorage.');
+        setHasCoreKey(true);
+        setCoreKeyInput(MASKED_SECRET);
+        setCoreKeyTouched(false);
+        setSavedNotice('Chave do Núcleo carregada e protegida na Memória da SARA.');
       } else {
-        setSavedNotice('TXT acoplado! Nenhuma chave explícita encontrada no TXT — a usar a IA integrada do Builder.');
+        setSavedNotice('Ficheiro acoplado. O Motor Inteligente integrado continua ativo.');
       }
     } finally {
       e.target.value = '';
     }
   };
 
-  const handleTestFirebase = async () => {
-    setFbTesting(true);
+  const handleTestCore = async () => {
+    setCoreTesting(true);
     const res = await testarConexaoFirebase();
-    setFbStatus(res);
-    setFbTesting(false);
+    setCoreStatus(
+      res.ok
+        ? res
+        : {
+            ok: false,
+            label: 'Núcleo Offline',
+            detail: 'Núcleo offline. A tentar reconectar...',
+          }
+    );
+    setCoreTesting(false);
   };
 
   const handleGoogleLogin = async () => {
@@ -107,9 +143,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setAuthBusy(true);
     try {
       const u = await loginGoogle();
-      onNotify(`Bem-vindo, ${u.displayName || 'Eletro-Jr'}! Ligado ao Firebase.`);
+      onNotify(`Bem-vindo, ${u.displayName || 'Eletro-Jr'}! Ligado ao Núcleo SARA.`);
     } catch (err: any) {
-      setAuthError(err?.message || 'Não foi possível entrar com Google.');
+      setAuthError(toSafeCoreOfflineMessage(err?.message));
     } finally {
       setAuthBusy(false);
     }
@@ -123,14 +159,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       if (authMode === 'login') {
         await loginEmail(email.trim(), password);
-        onNotify('Sessão iniciada no Firebase sara-biulder.');
+        onNotify('Sessão iniciada no Núcleo SARA.');
       } else {
         await criarConta(email.trim(), password, 'Eletro-Jr');
-        onNotify('Conta criada em sara_usuarios.');
+        onNotify('Conta registada no Núcleo SARA.');
       }
       setPassword('');
     } catch (err: any) {
-      setAuthError(err?.message || 'Erro de autenticação Firebase.');
+      setAuthError(toSafeCoreOfflineMessage(err?.message));
     } finally {
       setAuthBusy(false);
     }
@@ -138,7 +174,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleLogout = async () => {
     await logout();
-    onNotify('Sessão Firebase terminada.');
+    onNotify('Sessão do Núcleo terminada.');
   };
 
   return (
@@ -147,7 +183,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="px-5 py-4 border-b border-[#1F1F2E] flex items-center justify-between gap-4 shrink-0">
           <div>
             <h2 className="text-base font-bold text-white">Configurações do Sistema</h2>
-            <p className="text-xs text-[#A1A1AA]">Firebase sara-biulder, Motor IA Duplo e GitHub Token</p>
+            <p className="text-xs text-[#A1A1AA]">Núcleo SARA, Motor Inteligente e Cofre de Projetos</p>
           </div>
           <button
             type="button"
@@ -160,38 +196,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         <div className="p-5 overflow-y-auto space-y-5 sara-scroll">
-          {/* 1. Firebase Real sara-biulder */}
+          {/* 1. Núcleo SARA */}
           <div className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] space-y-3">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="flex items-center gap-2">
                 <Database className="w-4 h-4 text-[#3B82F6]" />
-                <span className="text-sm font-bold text-white">Firebase Real: {firebaseConfig.projectId}</span>
+                <span className="text-sm font-bold text-white">Núcleo SARA</span>
               </div>
               <button
                 type="button"
-                onClick={handleTestFirebase}
-                disabled={fbTesting}
+                onClick={handleTestCore}
+                disabled={coreTesting}
                 className="px-3 py-1.5 rounded-lg bg-[#12121A] border border-[#1F1F2E] hover:border-[#3B82F6] text-xs font-semibold text-white flex items-center gap-1.5 cursor-pointer"
               >
-                {fbTesting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>Testar Conexão Firebase</span>
+                {coreTesting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Testar Ligação do Núcleo</span>
               </button>
             </div>
 
-            {fbStatus && (
+            {coreStatus && (
               <div
                 className={`px-3 py-2 rounded-lg border text-xs ${
-                  fbStatus.ok
+                  coreStatus.ok
                     ? 'bg-emerald-950/30 border-emerald-500/40 text-emerald-300'
                     : 'bg-rose-950/30 border-rose-500/40 text-rose-300'
                 }`}
               >
-                <div className="font-bold">{fbStatus.label}</div>
-                <div className="opacity-85 mt-0.5">{fbStatus.detail}</div>
+                <div className="font-bold">{coreStatus.label}</div>
+                <div className="opacity-85 mt-0.5">{coreStatus.detail}</div>
               </div>
             )}
 
-            {/* Auth Firebase */}
+            {/* Sessão do Núcleo */}
             <div className="pt-2 border-t border-[#1F1F2E]">
               {firebaseUser ? (
                 <div className="flex items-center justify-between gap-3">
@@ -213,14 +249,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               ) : (
                 <div className="space-y-2.5">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-[#A1A1AA]">Autenticação Firebase (Email ou Google)</span>
+                    <span className="text-xs text-[#A1A1AA]">Acesso Sincronizado do Núcleo SARA</span>
                     <button
                       type="button"
                       onClick={handleGoogleLogin}
                       disabled={authBusy}
                       className="px-3 py-1.5 rounded-lg bg-white text-[#0A0A0F] font-semibold text-xs hover:bg-slate-200 transition cursor-pointer"
                     >
-                      Entrar com Google
+                      Acesso Rápido
                     </button>
                   </div>
                   <form onSubmit={handleEmailAuth} className="grid sm:grid-cols-3 gap-2">
@@ -261,13 +297,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </div>
 
-          {/* 2. IA do Builder + Chave Gemini do TXT + GitHub Token */}
+          {/* 2. Motor Inteligente + Chave do Núcleo */}
           <form onSubmit={handleSaveKeys} className="space-y-4">
             <div className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] space-y-3">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="flex items-center gap-2">
                   <KeyRound className="w-4 h-4 text-[#8B5CF6]" />
-                  <span className="text-sm font-bold text-white">IA do Builder + Chave TXT</span>
+                  <span className="text-sm font-bold text-white">Motor Inteligente</span>
                 </div>
                 <input
                   ref={txtFileRef}
@@ -282,34 +318,54 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="px-2.5 py-1 rounded-lg bg-[#12121A] border border-[#1F1F2E] hover:border-[#3B82F6]/40 text-xs text-white flex items-center gap-1.5 cursor-pointer"
                 >
                   <FileText className="w-3.5 h-3.5 text-[#3B82F6]" />
-                  <span>Ler chave de um .TXT</span>
+                  <span>Importar Chave (.TXT)</span>
                 </button>
               </div>
               <p className="text-[11px] text-[#A1A1AA] leading-relaxed">
-                O motor padrão do Builder (<strong>gemini-4-hydrogen</strong>) já está ativo automaticamente no servidor. Se quiseres acoplar também uma chave Gemini do teu ficheiro TXT (guardada em <code className="text-white">localStorage["GEMINI_API_KEY"]</code>), cola abaixo:
+                O Motor Inteligente do Estúdio SARA está ativo em segundo plano. Podes acoplar uma Chave do Núcleo pessoal abaixo (sempre mascarada na Memória da SARA).
               </p>
               <input
                 type="password"
-                value={geminiKey}
-                onChange={(e) => setGeminiKey(e.target.value)}
-                placeholder="Opcional: AIza... (chave do teu TXT)"
+                value={coreKeyInput}
+                onFocus={() => {
+                  if (!coreKeyTouched && coreKeyInput === MASKED_SECRET) {
+                    setCoreKeyInput('');
+                    setCoreKeyTouched(true);
+                  }
+                }}
+                onChange={(e) => {
+                  setCoreKeyTouched(true);
+                  setCoreKeyInput(e.target.value);
+                }}
+                placeholder={hasCoreKey ? '••••••••' : 'Chave do Núcleo (opcional)'}
+                autoComplete="new-password"
                 className="w-full bg-[#12121A] border border-[#1F1F2E] focus:border-[#8B5CF6] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
               />
             </div>
 
             <div className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] space-y-2.5">
               <div className="flex items-center gap-2">
-                <Github className="w-4 h-4 text-white" />
-                <span className="text-sm font-bold text-white">GitHub Personal Access Token</span>
+                <FolderGit2 className="w-4 h-4 text-white" />
+                <span className="text-sm font-bold text-white">Cofre de Projetos</span>
               </div>
               <p className="text-[11px] text-[#A1A1AA]">
-                Fica guardado apenas no teu navegador (localStorage) e nunca é exibido em texto claro. Necessário para criar repositórios e fazer Push direto.
+                Guardada de forma privada na Memória da SARA e sempre mascarada. Necessária para sincronizar e guardar repositórios no Cofre de Projetos.
               </p>
               <input
                 type="password"
-                value={githubToken}
-                onChange={(e) => setGithubToken(e.target.value)}
-                placeholder="ghp_... ou github_pat_..."
+                value={vaultKeyInput}
+                onFocus={() => {
+                  if (!vaultKeyTouched && vaultKeyInput === MASKED_SECRET) {
+                    setVaultKeyInput('');
+                    setVaultKeyTouched(true);
+                  }
+                }}
+                onChange={(e) => {
+                  setVaultKeyTouched(true);
+                  setVaultKeyInput(e.target.value);
+                }}
+                placeholder={hasVaultKey ? '••••••••' : 'Chave do Cofre (••••••••)'}
+                autoComplete="new-password"
                 className="w-full bg-[#12121A] border border-[#1F1F2E] focus:border-[#3B82F6] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
               />
             </div>

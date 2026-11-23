@@ -90,8 +90,7 @@ export async function onRequestPost(context) {
           clearTimeout(connectTimeoutId);
 
           if (!resp.ok || !resp.body) {
-            const errText = await resp.text().catch(() => '');
-            const err = new Error(`Gemini HTTP ${resp.status}: ${errText.slice(0, 180)}`);
+            const err = new Error(`Motor HTTP ${resp.status}`);
             err.status = resp.status;
             throw err;
           }

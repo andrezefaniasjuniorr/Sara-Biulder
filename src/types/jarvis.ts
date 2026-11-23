@@ -83,6 +83,7 @@ export interface JarvisMathStep {
   step: string;
   expression: string;
   explanation: string;
+  partialResult?: string;
 }
 
 export interface JarvisExplanationSection {
@@ -100,7 +101,12 @@ export type Jarvis3DShape =
   | 'prism'
   | 'torus'
   | 'octahedron'
-  | 'atom';
+  | 'atom'
+  | 'car'
+  | 'molecule'
+  | 'vectors'
+  | 'chart3d'
+  | 'cartesian';
 
 export type JarvisStageContent =
   | {
@@ -113,6 +119,8 @@ export type JarvisStageContent =
       unit?: string;
       labelLines?: string[];
       description?: string;
+      simpleExplanation?: string;
+      studyTip?: string;
       formulas?: string[];
       steps?: JarvisMathStep[];
       finalAnswer?: string;
@@ -125,6 +133,8 @@ export type JarvisStageContent =
       subtitle?: string;
       svgCode: string;
       description?: string;
+      simpleExplanation?: string;
+      studyTip?: string;
       formulas?: string[];
       steps?: JarvisMathStep[];
       finalAnswer?: string;
@@ -134,11 +144,13 @@ export type JarvisStageContent =
       kind: 'math';
       title: string;
       problem?: string;
+      simpleExplanation?: string;
       svgCode?: string;
       formulas?: string[];
       steps: JarvisMathStep[];
       finalAnswer: string;
       notes?: string;
+      studyTip?: string;
     }
   | {
       id: string;
@@ -146,11 +158,13 @@ export type JarvisStageContent =
       title: string;
       subtitle?: string;
       summary: string;
+      simpleExplanation?: string;
       visualSvg?: string;
       formula?: string;
       sections: JarvisExplanationSection[];
       exampleTitle?: string;
       exampleBody?: string;
+      studyTip?: string;
     }
   | {
       id: string;
@@ -362,6 +376,8 @@ export interface JarvisActionPayload {
   visualSvg?: string;
   description?: string;
   problem?: string;
+  simpleExplanation?: string;
+  studyTip?: string;
   formula?: string;
   formulas?: string[];
   steps?: JarvisMathStep[];

@@ -183,7 +183,7 @@ function escapeHtmlAttr(value: string): string {
  * (.html, .css, .js, .jsx, .ts, .tsx, .py, .json, .svg) + bibliotecas profissionais de gráficos & 3D.
  */
 export function buildPreviewSrcDoc(files: ProjectFiles, options: PreviewBuildOptions = {}): string {
-  const { forDeploy = false, title = 'Projeto SARA BIULDER' } = options;
+  const { forDeploy = false, title = 'Projeto Estúdio SARA' } = options;
   const entries = Object.entries(files || {});
   const htmlEntry =
     files['index.html'] !== undefined
@@ -621,7 +621,7 @@ export function buildPreviewSrcDoc(files: ProjectFiles, options: PreviewBuildOpt
  * - Se usar .jsx/.tsx/.ts/.py ou não tiver <!doctype>, gera o documento compilado completo.
  * - Se for HTML/CSS/JS com <!doctype>, preserva a estrutura multi-ficheiro e injeta CDNs em falta + Lucide auto-init.
  */
-export function ensureDeployableIndexHtml(files: ProjectFiles, projectTitle = 'Projeto SARA BIULDER'): string {
+export function ensureDeployableIndexHtml(files: ProjectFiles, projectTitle = 'Projeto Estúdio SARA'): string {
   const entries = Object.entries(files || {});
   const rawIndex = files['index.html'] || '';
   const hasBabelFiles = entries.some(

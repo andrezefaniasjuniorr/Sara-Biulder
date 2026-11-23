@@ -584,10 +584,10 @@ export function getWorkspaceSwitchSpeech(target: 'jarvis' | 'builder', projectNa
   if (target === 'builder') {
     return pickNonRepeating([
       projectName && projectName !== 'Novo Projeto'
-        ? `Entrei no Builder com ${projectName}. Que queres construir ou ajustar agora?`
-        : 'Builder aberto. Diz-me o que vamos construir.',
-      'Cá estamos no Builder. Pronta para pôr as mãos no código.',
-      'Mudei para o Builder. Podes acompanhar tudo por aqui.',
+        ? `Entrei no Estúdio SARA com ${projectName}. Que queres construir ou ajustar agora?`
+        : 'Estúdio SARA aberto. Diz-me o que vamos construir.',
+      'Cá estamos no Estúdio SARA. Pronta para pôr as mãos no código.',
+      'Mudei para o Estúdio SARA. Podes acompanhar tudo por aqui.',
     ]);
   }
   return pickNonRepeating([
@@ -600,20 +600,20 @@ export function getWorkspaceSwitchSpeech(target: 'jarvis' | 'builder', projectNa
 export function getBackgroundBuildAckSpeech(goal: string): string {
   const shortTopic = goal.trim().slice(0, 48);
   return pickNonRepeating([
-    `Boa ideia! Já pus o Builder a construir isso em segundo plano (${shortTopic}) enquanto continuamos a conversar aqui.`,
-    `Aceite! O Builder já arrancou em segundo plano para montar esse projeto — fico contigo aqui no Assistente e aviso assim que terminar.`,
-    `Bora lá! Deixei o Builder a trabalhar em segundo plano nesse pedido. Podes continuar a falar comigo normalmente.`,
+    `Boa ideia! Já pus o Estúdio SARA a construir isso em segundo plano (${shortTopic}) enquanto continuamos a conversar aqui.`,
+    `Aceite! O Estúdio SARA já arrancou em segundo plano para montar esse projeto — fico contigo aqui no Assistente e aviso assim que terminar.`,
+    `Bora lá! Deixei o Estúdio SARA a trabalhar em segundo plano nesse pedido. Podes continuar a falar comigo normalmente.`,
   ]);
 }
 
 export function getBackgroundBuildDoneSpeech(projectName: string, isOwner = false): string {
   const opts = [
-    `Terminei! O projeto ${projectName} já está pronto no Builder — queres ver?`,
+    `Terminei! O projeto ${projectName} já está pronto no Estúdio SARA — queres ver?`,
     `Missão cumprida em segundo plano: ${projectName} está concluído e testado. Queres dar uma olhadela?`,
   ];
   if (isOwner) {
     opts.push(
-      `Chefe, o trabalho no Builder ficou pronto (${projectName}). Queres abrir para ver como ficou?`
+      `Chefe, o trabalho no Estúdio SARA ficou pronto (${projectName}). Queres abrir para ver como ficou?`
     );
   }
   return pickNonRepeating(opts);
@@ -865,7 +865,7 @@ export function reconstructDistortedVoiceInput(
       lower
     )
   ) {
-    reconstructed = `No projeto atual do Builder, ${cleaned.replace(/^sara[,\s]+/i, '')}`;
+    reconstructed = `No projeto atual do Estúdio SARA, ${cleaned.replace(/^sara[,\s]+/i, '')}`;
   } else if (
     (effectiveDomain === 'electricity' ||
       (context?.recentUserUtterances || []).some((u) => inferDomainFromText(u) === 'electricity')) &&

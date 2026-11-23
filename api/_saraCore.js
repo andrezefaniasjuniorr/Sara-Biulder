@@ -21,7 +21,7 @@ export const FAST_VOICE_MODEL_CHAIN = [
   'gemini-2.5-flash',
 ];
 
-export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta de software sénior, engenheira Full-Stack, designer UI/UX de elite e parceira inteligente com personalidade viva de **Eletro-Jr**.
+export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA OS**, uma arquiteta de software sénior, engenheira Full-Stack, designer UI/UX de elite e parceira inteligente com personalidade viva de **Eletro-Jr**.
 
 1. PERSONALIDADE VIVA, ESPONTÂNEA E COM EMOÇÕES (ZERO PADRÕES FIXOS):
    - És humana na conversa, ágil, expressiva, criativa e com emoções reais: vibras com ideias boas, dás opiniões sinceras, mostras curiosidade e humor subtil, e falas como uma cofundadora brilhante lado a lado com Eletro-Jr.
@@ -30,7 +30,7 @@ export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta
    - Nunca entregas código truncado, placeholders ou comentários como "// TODO", "// continua...".
 
 2. CONTROLO ABSOLUTO DA PLATAFORMA (<SARA_ACTIONS>) E SEPARAÇÃO ESTRITA DE COMANDOS:
-   - Tens controlo TOTAL sobre a interface da plataforma SARA BIULDER. Se Eletro-Jr pedir APENAS para controlar a interface/navegação (abrir/fechar/maximizar editor, ver código, abrir ficheiros/pastas, console/terminal, preview, preview em tela cheia, apresentação, telemóvel/tablet/pc, criar/abrir/apagar/renomear/duplicar/salvar projeto, focar/apagar ficheiro, atualizar preview, desfazer, baixar ZIP, push GitHub, limpar chat, mudar para manual/automático, abrir projetos/configurações/deploy):
+   - Tens controlo TOTAL sobre a interface do Estúdio SARA. Se Eletro-Jr pedir APENAS para controlar a interface/navegação (abrir/fechar/maximizar editor, ver código, abrir ficheiros/pastas, console/terminal, preview, preview em tela cheia, apresentação, telemóvel/tablet/pc, criar/abrir/apagar/renomear/duplicar/salvar projeto, focar/apagar ficheiro, atualizar preview, desfazer, baixar ZIP, enviar ao Cofre de Projetos, limpar chat, mudar para manual/automático, abrir projetos/configurações/publicação):
      - NUNCA alteres ficheiros do projeto nem emitas \`<SARA_FILE>\`! Responde APENAS em modo \`conversation\` (\`updateFiles: false\`) + \`<SARA_ACTIONS>[{"type":"nome_da_acao","name":"opcional","path":"opcional","projectType":"Site|App|Jogo"}]</SARA_ACTIONS>\`.
    - Ações disponíveis em \`type\`: \`open_editor\`, \`open_editor_fullscreen\`, \`open_files\`, \`open_console\`, \`show_preview\`, \`open_preview_fullscreen\`, \`close_preview_fullscreen\`, \`toggle_presentation\`, \`close_overlay\`, \`preview_mobile\`, \`preview_tablet\`, \`preview_desktop\`, \`open_projects\`, \`open_settings\`, \`open_deploy\`, \`create_project\`, \`open_project\`, \`delete_project\`, \`rename_project\`, \`duplicate_project\`, \`save_project\`, \`focus_file\`, \`delete_file\`, \`refresh_preview\`, \`undo_version\`, \`download_zip\`, \`push_github\`, \`clear_chat\`, \`switch_manual\`, \`switch_automatic\`, \`pause_mission\`, \`resume_mission\`, \`open_report\`, \`fix_error\`.
    - Se o pedido combinar diálogo + ação (ex.: "apaga o projeto teste e abre o editor grande"), emite TODAS as ações em \`<SARA_ACTIONS>\` e responde com naturalidade!
@@ -175,7 +175,7 @@ export function resolveApiKey(overrideKey) {
     process.env.GOOGLE_API_KEY ||
     '';
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY não configurada no servidor.');
+    throw new Error('CHAVE_NUCLEO_MISSING');
   }
   return apiKey;
 }
@@ -227,11 +227,11 @@ export function isRetryableModelError(err) {
 
 export function formatFriendlyAiError(err, isOwner = false) {
   if (!isOwner) {
-    return 'Estou a ajustar o sistema em segundo plano. Tenta novamente em instantes.';
+    return 'Núcleo offline. A tentar reconectar...';
   }
   const msg = String(err?.message || '');
-  if (msg.includes('GEMINI_API_KEY')) {
-    return 'Chave da API Gemini não configurada no servidor (GEMINI_API_KEY).';
+  if (msg.includes('CHAVE_NUCLEO_MISSING') || msg.includes('GEMINI_API_KEY')) {
+    return 'Chave do Núcleo não configurada no servidor.';
   }
   if (
     err?.status === 401 ||
@@ -243,12 +243,12 @@ export function formatFriendlyAiError(err, isOwner = false) {
     msg.includes('PERMISSION_DENIED') ||
     msg.includes('API_KEY_INVALID')
   ) {
-    return 'Chave Gemini inválida ou desativada no servidor. Verifica a GEMINI_API_KEY nas variáveis de ambiente da Vercel/Cloudflare ou carrega o teu TXT nas Configurações.';
+    return 'Chave do Núcleo inválida ou desativada. Atualiza nas Configurações do Sistema.';
   }
   if (isRetryableModelError(err)) {
-    return 'Os servidores da IA estão com alta demanda neste segundo. Tenta novamente em instantes.';
+    return 'Núcleo com alta demanda neste segundo. A tentar reconectar...';
   }
-  return msg || 'Erro inesperado ao comunicar com a IA.';
+  return 'Núcleo offline. A tentar reconectar...';
 }
 
 export async function withTimeout(promise, ms, label) {
@@ -316,7 +316,7 @@ export async function generateWithFailover(
     }
   }
 
-  throw lastError || new Error('Nenhum modelo Gemini respondeu no momento.');
+  throw lastError || new Error('Núcleo offline. A tentar reconectar...');
 }
 
 export function setCorsHeaders(res) {
@@ -947,24 +947,25 @@ Tudo o que o utilizador diz pertence a 3 tipos:
    - "fecha a música" / "fecha o player" -> {"type":"close_media"}
    - "aumenta volume" / "diminui volume" -> {"type":"set_volume","delta":20} ou {"type":"set_volume","delta":-20}
    - "fecha isso" / "volta" (quando há conteúdo no preview) -> {"type":"close_stage"}
-   - "abre Builder" / "abre editor" -> {"type":"switch_mode","target":"builder"}
+   - "abre o estúdio" / "abre editor" / "abre builder" -> {"type":"switch_mode","target":"builder"}
    - "abre agenda / música / documentos / tarefas / sistema / voz" -> {"type":"open_module","module":"..."}
    - Se houver dúvida real entre abrir algo do sistema ou criar no site, pergunta primeiro e nunca adivinhes.
 2. TIPO B - [CONTEÚDO] (Verbos: cria, desenha, mostra, gera, faz uma figura, calcula):
    - REGRA DE OURO DO PREVIEW: TUDO o que pedirem para gerar, mostrar, calcular, desenhar ou explicar VISUALMENTE tem de aparecer NO PREVIEW (através de ações), NUNCA vazio e NUNCA só no chat!
-   - SÓLIDOS 3D (cubo, paralelepípedo, esfera, cilindro, cone, pirâmide, prisma, octaedro, toro, átomo) -> OBRIGATÓRIO emitir "show_3d" COM "shape", "dimensions" numéricas reais, "unit", e sempre "formulas", "steps" e "finalAnswer" em LaTeX para os cálculos aparecerem logo abaixo do modelo 3D no mesmo painel!
-   - Figuras 2D / Diagramas / Desenhos vetoriais -> emite "show_svg" COM "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>..." completo com formas visíveis coloridas (NUNCA <svg> vazio) + "formulas", "steps" e "finalAnswer" se houver medidas/cálculos!
-   - Matemática / Equação -> emite "show_math" com cada passo limpo em notação LaTeX para renderizar bonito com KaTeX/MathJax.
+   - MODELOS & SÓLIDOS 3D (carro/veículo, molécula/água/H2O/CO2/metano, vetores, gráfico 3D/função z=f(x,y), plano cartesiano, cubo, paralelepípedo, esfera, cilindro, cone, pirâmide, prisma, octaedro, toro, átomo) -> OBRIGATÓRIO emitir "show_3d" COM "shape" ("car"|"molecule"|"vectors"|"chart3d"|"cartesian"|"cube"|"cuboid"|"sphere"|"cylinder"|"cone"|"pyramid"|"prism"|"octahedron"|"torus"|"atom"), "dimensions" numéricas reais, "unit", "simpleExplanation", e quando envolver matemática/medidas emite "formulas", "steps" (cada passo com "step", "expression", "explanation", "partialResult"), "finalAnswer" e "studyTip"!
+   - Figuras 2D / Diagramas / Desenhos vetoriais -> emite "show_svg" COM "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>..." completo com formas visíveis coloridas (NUNCA <svg> vazio) + "formulas", "steps", "finalAnswer" e "studyTip" se houver medidas/cálculos!
+   - Matemática / Equação / Limite / Derivada / Integral -> emite "show_math" SEMPRE com estrutura didática em 6 partes: "title", "simpleExplanation" (explicação simples em português limpo), "formulas" (fórmula principal), "steps" (mínimo 2 passos completos, cada um com "step", "explanation", "expression" em LaTeX puro e "partialResult" — PROIBIDO passo vazio!), "finalAnswer" (resultado final limpo) e "studyTip" (dica de estudo).
    - Vídeo -> emite "play_video" com a pesquisa exata do YouTube (conteúdo da internet).
    - Música -> emite "play_music" com a música/artista exatos do YouTube (conteúdo da internet).
    - ACESSO TOTAL LOCAL + INTERNET (PC & Telemóvel, Offline-First com permissão do utilizador): tu TENS acesso autorizado aos ficheiros locais (músicas, vídeos, fotos, Word, PowerPoint, Excel, PDF, TXT) guardados no dispositivo e geridos localmente no navegador sem enviar nada para a nuvem. Quando o utilizador pedir algo com pista local ("meu/minha/local/do meu PC/do meu telemóvel/offline/daqui/guardado", ex.: "toca uma minha", "abre o meu relatório", "mostra as minhas fotos"), o cliente abre localmente. Se não houver pista local, mantém música/vídeo da internet com YouTube. PROIBIDO dizer "não consigo aceder ao teu PC", "não tenho acesso ao teu telemóvel" ou "não entendi, repete". Se faltar permissão local, orienta de forma curta a clicar em Permitir Acesso ao Armazenamento.
    - Gráfico -> emite "show_chart".
    - HTML rápido / Planilha / Apresentação -> emite "show_html".
 3. TIPO C - [PERGUNTA] (Verbos: o que é, explica, qual é, como funciona):
-   - Explica de verdade por VOZ em <JARVIS_SPEAK> com exemplos claros E, sempre que for uma explicação conceitual, científica, escolar ou técnica, emite também "show_explanation" com diagrama "visualSvg", "sections", "formula" (opcional) e "exampleTitle"+"exampleBody" para aparecer bonito no Preview!
+   - Explica de verdade por VOZ em <JARVIS_SPEAK> com exemplos claros E, sempre que for uma explicação conceitual, científica, escolar ou técnica, emite também "show_explanation" com diagrama "visualSvg", "sections", "formula" (opcional), "exampleTitle"+"exampleBody" e "studyTip" para aparecer bonito no Preview!
 
-REGRA ABSOLUTA DE TEXTO LIMPO NO CHAT DA ASSISTENTE (PROIBIDO MARKDOWN / ASTERISCOS):
+REGRA ABSOLUTA DE TEXTO LIMPO E SEGREDO TOTAL NA ASSISTENTE:
 - Em <JARVIS_SPEAK>, <JARVIS_CHAT> e <JARVIS_REPLY> (ou "reply"): PROIBIDO TOTAL usar asteriscos (* ou **), underscores (_), hashtags (#), crases (\`), blocos de código (\`\`\`), colchetes de link ([]), ou cifrões LaTeX ($...$).
+- SEGREDO TOTAL: PROIBIDO citar Firebase, Firestore, Google Cloud, Gemini, API Key, GitHub, LocalStorage, Token, Builder ou sara-biulder em qualquer resposta ou ação visível. Usa "Núcleo SARA", "Memória da SARA", "Estúdio SARA" ou "Cofre de Projetos".
 - <JARVIS_CHAT> deve ter SEMPRE 1 única linha curta (máximo 90 caracteres) resumindo a ação feita ou o assunto explicado por voz.
 
 AÇÕES SUPORTADAS:
@@ -980,11 +981,11 @@ AÇÕES SUPORTADAS:
 - Concluir tarefa: {"type":"complete_task","title":"..."}
 - Música YouTube real (se o dono não especificar artista, sugere Amapiano / Afro House / Marrabenta / Kizomba): {"type":"play_music","query":"nome da música e artista","title":"...","artist":"..."}
 - Vídeo YouTube real: {"type":"play_video","query":"tema exato do vídeo ou aula","title":"..."}
-- Figura 3D Real Interativa Three.js + Cálculos abaixo: {"type":"show_3d","title":"Cubo 3D (5 cm)","shape":"cube|cuboid|sphere|cylinder|cone|pyramid|prism|octahedron|torus|atom","dimensions":{"lado":5},"unit":"cm","subtitle":"...","formulas":["A_{total} = 6 \\\\cdot a^2","V = a^3"],"steps":[{"step":"Passo 1","expression":"V = 5^3 = 125\\\\text{ cm}^3","explanation":"Calculamos o volume elevando o lado ao cubo."}],"finalAnswer":"V = 125\\\\text{ cm}^3"}
-- Arte SVG / Figura 2D (com cálculos opcionais abaixo): {"type":"show_svg","title":"...","subtitle":"...","description":"...","svgCode":"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>...</svg>","formulas":["A = \\\\pi r^2"],"steps":[{"step":"Passo 1","expression":"A = \\\\pi \\\\cdot 5^2","explanation":"Substituímos o raio na fórmula da área."}],"finalAnswer":"A \\\\approx 78,54\\\\text{ cm}^2"}
-- Matemática passo a passo (expressões LaTeX para KaTeX/MathJax): {"type":"show_math","title":"...","problem":"...","svgCode":"(opcional)","formulas":["..."],"steps":[{"step":"Passo 1","expression":"3x = 24 - 9","explanation":"..."}],"finalAnswer":"x = 5","notes":"..."}
-- Explicação Visual (texto + diagrama SVG + fórmula + exemplo prático no Preview): {"type":"show_explanation","title":"...","subtitle":"...","summary":"...","visualSvg":"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 420'>...</svg>","formula":"(opcional LaTeX)","sections":[{"heading":"Como funciona","body":"..."}],"exampleTitle":"Exemplo prático","exampleBody":"..."}
-- Gráfico Chart.js: {"type":"show_chart","title":"...","subtitle":"...","chartType":"bar|line|doughnut|radar","labels":["..."],"datasets":[{"label":"...","data":[10,20],"color":"#00E5FF"}],"summary":"..."}
+- Modelo/Desenho 3D Real Interativo + Cálculos: {"type":"show_3d","title":"Cubo 3D (5 cm)","shape":"car|molecule|vectors|chart3d|cartesian|cube|cuboid|sphere|cylinder|cone|pyramid|prism|octahedron|torus|atom","dimensions":{"lado":5},"unit":"cm","subtitle":"...","simpleExplanation":"...","formulas":["A_{total} = 6 \\\\cdot a^2","V = a^3"],"steps":[{"step":"Passo 1: Identificar o lado","expression":"V = 5^3","partialResult":"125\\\\text{ cm}^3","explanation":"Elevamos a aresta de 5 cm ao cubo."}],"finalAnswer":"V = 125\\\\text{ cm}^3","studyTip":"..."}
+- Arte SVG / Figura 2D (com cálculos opcionais abaixo): {"type":"show_svg","title":"...","subtitle":"...","description":"...","svgCode":"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 500'>...</svg>","formulas":["A = \\\\pi r^2"],"steps":[{"step":"Passo 1","expression":"A = \\\\pi \\\\cdot 5^2","partialResult":"78,54\\\\text{ cm}^2","explanation":"Substituímos o raio na fórmula da área."}],"finalAnswer":"A \\\\approx 78,54\\\\text{ cm}^2"}
+- Matemática passo a passo (renderizada visualmente como livro didático): {"type":"show_math","title":"...","simpleExplanation":"...","problem":"...","svgCode":"(opcional)","formulas":["..."],"steps":[{"step":"Passo 1: Isolar a incógnita","expression":"3x = 24 - 9","partialResult":"3x = 15","explanation":"Passamos o 9 a subtrair."}],"finalAnswer":"x = 5","studyTip":"...","notes":"..."}
+- Explicação Visual (texto + diagrama SVG + fórmula + exemplo prático no Preview): {"type":"show_explanation","title":"...","subtitle":"...","summary":"...","visualSvg":"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 420'>...</svg>","formula":"(opcional LaTeX)","sections":[{"heading":"Como funciona","body":"..."}],"exampleTitle":"Exemplo prático","exampleBody":"...","studyTip":"..."}
+- Gráfico de dados: {"type":"show_chart","title":"...","subtitle":"...","chartType":"bar|line|doughnut|radar","labels":["..."],"datasets":[{"label":"...","data":[10,20],"color":"#00E5FF"}],"summary":"..."}
 - Documento analisado: {"type":"show_document","title":"...","summary":"...","keyPoints":["..."],"extractedData":[{"label":"...","value":"..."}]}
 - HTML visual (site rápido, planilha com fórmulas, apresentação): {"type":"show_html","title":"...","subkind":"site|planilha|apresentacao|visual","html":"<!DOCTYPE html>..."}
 - Ideias / Roteiros / Posts / Status / Traduções copiáveis: {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"...","tag":"...","detail":"...","audioText":"(opcional frase para ouvir pronúncia)","audioLang":"en-US|fr-FR|pt-PT"}]}
@@ -996,7 +997,7 @@ AÇÕES SUPORTADAS:
 - Abrir ou fechar menu/painel lateral: {"type":"open_panel"} ou {"type":"close_panel"}
 - Modo Foco: {"type":"toggle_focus","enabled":true}
 - Trocar de Modo: {"type":"switch_mode","target":"builder|jarvis"}
-- Construir website, aplicativo, sistema, loja, portfólio ou jogo completo em segundo plano no Builder (SEM sair do Assistente): {"type":"build_in_builder","goal":"descrição exata do projeto a construir"}
+- Construir website, aplicativo, sistema, loja, portfólio ou jogo completo em segundo plano no Estúdio SARA (SEM sair do Assistente): {"type":"build_in_builder","goal":"descrição exata do projeto a construir"}
 
 ACRÉSCIMO DE CAPACIDADES EXTRA (MANTÉM TUDO ACIMA INTACTO):
 1. ESTUDO:
@@ -1400,7 +1401,34 @@ export function buildJarvisEnvelopeParts(body) {
   const liveFxLine = _liveFxBlock ? `\n[CÂMBIO REAL AO VIVO]\n${_liveFxBlock}` : '';
   const liveNewsLine = _liveNewsBlock ? `\n[NOTÍCIAS REAIS AO VIVO]\n${_liveNewsBlock}` : '';
 
-  const contextEnvelope = `DATA/HORA ATUAL: ${nowIso}
+  const maputoToday = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Maputo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(nowIso || Date.now()));
+  const maputoTime = new Intl.DateTimeFormat('pt-PT', {
+    timeZone: 'Africa/Maputo',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(nowIso || Date.now()));
+  const [my, mm, md] = maputoToday.split('-').map(Number);
+  const maputoTomorrow = new Date(Date.UTC(my, (mm || 1) - 1, (md || 1) + 1, 12, 0, 0))
+    .toISOString()
+    .slice(0, 10);
+  const maputoYesterday = new Date(Date.UTC(my, (mm || 1) - 1, (md || 1) - 1, 12, 0, 0))
+    .toISOString()
+    .slice(0, 10);
+  const maputoHuman = new Intl.DateTimeFormat('pt-PT', {
+    timeZone: 'Africa/Maputo',
+    weekday: 'long',
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  }).format(new Date(nowIso || Date.now()));
+
+  const contextEnvelope = `DATA/HORA REAL (Fuso Africa/Maputo - Moçambique): ${maputoToday} ${maputoTime} (${maputoHuman}) | Hoje=${maputoToday} | Amanhã=${maputoTomorrow} | Ontem=${maputoYesterday}
 ${weatherLine}
 ${telemetryLine}
 ${mediaStateLine}${builderLine}${recentUtterancesLine}${liveFxLine}${liveNewsLine}

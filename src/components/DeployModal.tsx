@@ -71,7 +71,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({
     if (!token) {
       setPushResult({
         ok: false,
-        text: 'Nenhum GitHub Token configurado. Clica em "Configurar Token" para colar o teu token.',
+        text: 'Nenhuma Chave do Cofre configurada. Clica em "Configurar Chave" nas Configurações.',
       });
       return;
     }
@@ -89,14 +89,14 @@ export const DeployModal: React.FC<DeployModalProps> = ({
 
       setPushResult({
         ok: true,
-        text: `Código enviado com sucesso para ${result.owner}/${result.repo} (${result.fileCount} ficheiros)!`,
+        text: `Código enviado com sucesso para o Cofre de Projetos (${result.owner}/${result.repo} • ${result.fileCount} ficheiros)!`,
         url: result.repoUrl,
       });
-      onNotify(`Repositório atualizado no GitHub: ${result.owner}/${result.repo}`);
-    } catch (err: any) {
+      onNotify(`Cofre de Projetos atualizado: ${result.owner}/${result.repo}`);
+    } catch {
       setPushResult({
         ok: false,
-        text: err?.message || 'Erro ao fazer Push para o GitHub.',
+        text: 'Núcleo offline. A tentar reconectar...',
       });
     } finally {
       setPushing(false);
@@ -110,7 +110,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({
       <div className="w-full max-w-2xl max-h-[88vh] bg-[#12121A] border border-[#1F1F2E] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         <div className="px-5 py-4 border-b border-[#1F1F2E] flex items-center justify-between gap-4 shrink-0">
           <div>
-            <h2 className="text-base font-bold text-white">Exportar, GitHub & Publicação</h2>
+            <h2 className="text-base font-bold text-white">Exportar, Cofre de Projetos &amp; Publicação</h2>
             <p className="text-xs text-[#A1A1AA]">Projeto: {projectName}</p>
           </div>
           <button
@@ -148,7 +148,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
                   <Github className="w-4 h-4 text-white" />
-                  <span className="text-sm font-bold text-white">Push Direto para GitHub</span>
+                  <span className="text-sm font-bold text-white">Guardar no Cofre de Projetos</span>
                 </div>
                 {!hasToken && (
                   <button
@@ -159,18 +159,17 @@ export const DeployModal: React.FC<DeployModalProps> = ({
                     }}
                     className="text-xs text-[#3B82F6] hover:underline cursor-pointer"
                   >
-                    Configurar Token
+                    Configurar Chave
                   </button>
                 )}
               </div>
 
               {!hasToken && (
                 <div className="p-3 rounded-lg bg-[#12121A] border border-amber-500/30 text-xs text-amber-200 space-y-1">
-                  <div className="font-semibold">Como gerar o teu GitHub Token:</div>
+                  <div className="font-semibold">Configuração do Cofre de Projetos:</div>
                   <ol className="list-decimal pl-4 space-y-0.5 text-[11px] text-[#A1A1AA]">
-                    <li>Entra em GitHub → Settings → Developer settings → Personal access tokens (Tokens classic).</li>
-                    <li>Clica em "Generate new token (classic)", marca a permissão <strong>repo</strong> e gera o token.</li>
-                    <li>Cola em <strong>Configurações → GitHub Token</strong> (fica salvo apenas no teu navegador).</li>
+                    <li>Gera uma chave pessoal de acesso de repositório com permissão de escrita.</li>
+                    <li>Cola em <strong>Configurações do Sistema → Cofre de Projetos</strong> (guardada de forma privada na Memória da SARA).</li>
                   </ol>
                 </div>
               )}
@@ -180,7 +179,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({
                   type="text"
                   value={repoName}
                   onChange={(e) => setRepoName(e.target.value)}
-                  placeholder="Nome do repositório (ex: minha-app)"
+                  placeholder="Nome do cofre / projeto (ex: minha-app)"
                   className="flex-1 bg-[#12121A] border border-[#1F1F2E] focus:border-[#3B82F6] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
                 />
                 <label className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#12121A] border border-[#1F1F2E] text-xs text-[#A1A1AA] cursor-pointer">
@@ -197,7 +196,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({
                   className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] text-white text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 whitespace-nowrap"
                 >
                   {pushing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Github className="w-3.5 h-3.5" />}
-                  <span>Push GitHub</span>
+                  <span>Enviar ao Cofre</span>
                 </button>
               </div>
 
@@ -229,7 +228,7 @@ export const DeployModal: React.FC<DeployModalProps> = ({
             >
               <div className="flex items-center gap-2">
                 <Cloud className="w-4 h-4 text-[#3B82F6]" />
-                <span className="text-sm font-bold text-white">Instruções Cloudflare Pages (Grátis & Rápido)</span>
+                <span className="text-sm font-bold text-white">Guia de Publicação Web</span>
               </div>
               <span className="text-xs text-[#3B82F6]">
                 {showCloudflareGuide ? 'Ocultar' : 'Ver passo a passo'}
@@ -238,17 +237,15 @@ export const DeployModal: React.FC<DeployModalProps> = ({
 
             {showCloudflareGuide && (
               <ol className="list-decimal pl-5 space-y-1.5 text-xs text-[#A1A1AA] pt-2 border-t border-[#1F1F2E]">
-                <li>Faz login em <strong>dash.cloudflare.com</strong> e abre <strong>Workers & Pages → Create → Pages</strong>.</li>
                 <li>
-                  <strong>Sites gerados aqui (GitHub):</strong> Liga o repositório criado com <em>Push GitHub</em>. Framework preset: <strong>None</strong>, Build command: vazio, Output directory: <strong>/</strong> (já inclui <code>_redirects</code>).
+                  <strong>Publicação por Cofre:</strong> Liga o projeto enviado através de <em>Enviar ao Cofre</em> com pasta de saída <strong>/</strong>.
                 </li>
                 <li>
-                  <strong>App SARA BIULDER (Vite):</strong> Build command: <code>npm run build</code>, Output directory: <strong>dist</strong>.
+                  <strong>Estúdio SARA:</strong> Compilação com <code>npm run build</code> e pasta de saída <strong>dist</strong>.
                 </li>
                 <li>
-                  <strong>Upload direto via ZIP:</strong> Clica em <strong>Baixar ZIP Completo</strong> acima, extrai a pasta e arrasta para <em>Upload assets</em> no Cloudflare Pages.
+                  <strong>Upload direto via ZIP:</strong> Clica em <strong>Baixar ZIP Completo</strong> acima, extrai a pasta e publica no teu alojamento web.
                 </li>
-                <li>Em segundos terás o teu link <code>.pages.dev</code> no ar com SSL grátis em Moçambique!</li>
               </ol>
             )}
           </div>

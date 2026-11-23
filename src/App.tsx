@@ -1534,12 +1534,12 @@ export default function App() {
       `- **Preview:** Pronto e testado para PC e Telemóvel`,
       ...(isOwner
         ? [
-            `- **GitHub:** ${rep.githubUrl ? `Push feito para ${rep.githubUrl}` : 'Não enviado (configura o GitHub Token em Configurações; o ZIP está pronto para descarregar)'}`,
-            `- **Firebase:** ${rep.firebaseSynced ? 'Guardado em sara_projetos' : 'Guardado localmente no navegador'}`,
+            `- **Cofre de Projetos:** ${rep.githubUrl ? `Guardado em ${rep.githubUrl}` : 'Não enviado (configura a Chave do Cofre nas Configurações do Sistema; o ZIP está pronto para descarregar)'}`,
+            `- **Núcleo SARA:** ${rep.firebaseSynced ? 'Guardado na nuvem do Núcleo SARA' : 'Guardado na Memória da SARA'}`,
           ]
         : [
             `- **Exportação:** Pacote ZIP pronto para descarregar`,
-            `- **Armazenamento:** ${rep.firebaseSynced ? 'Guardado na tua conta' : 'Guardado localmente no navegador'}`,
+            `- **Armazenamento:** ${rep.firebaseSynced ? 'Guardado na tua conta' : 'Guardado na Memória da SARA'}`,
           ]),
       ...(rep.notes.length > 0 ? [`- **Notas da Sara:** ${rep.notes.join(' | ')}`] : []),
     ].join('\n');
@@ -1932,27 +1932,27 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
             try {
               setLiveBuild((prev) => ({
                 ...prev,
-                currentStepLabel: 'A fazer Push autorizado para o GitHub...',
+                currentStepLabel: 'A enviar para o Cofre de Projetos...',
               }));
               const ghRes = await pushProjectToGitHub({
                 projectName: resolvedName,
                 files: workingFiles,
               });
               githubUrl = ghRes.repoUrl;
-              addConsoleLog('success', `[GitHub Auto-Push] Enviado para ${githubUrl}`);
-            } catch (ghErr: any) {
-              missionNotes.push(`Push GitHub falhou: ${ghErr?.message || 'verifica o token'}`);
+              addConsoleLog('success', `[Cofre de Projetos] Enviado para ${githubUrl}`);
+            } catch {
+              missionNotes.push('Envio para o Cofre de Projetos falhou: verifica a Chave do Cofre.');
             }
           } else if (ghToken) {
-            missionNotes.push('Push GitHub aguardando confirmação explícita do Eletro-Jr.');
+            missionNotes.push('Envio para o Cofre de Projetos aguardando confirmação de Eletro-Jr.');
             setPendingConfirmation({
               id: `conf_push_${Date.now()}`,
-              title: 'Autorizar Push para o GitHub',
-              question: `O projeto "${resolvedName}" está pronto e testado. Queres autorizar o push para o GitHub agora?`,
+              title: 'Autorizar Envio ao Cofre de Projetos',
+              question: `O projeto "${resolvedName}" está pronto e testado. Queres autorizar o envio para o Cofre de Projetos agora?`,
               action: { type: 'push_github' },
             });
           } else {
-            missionNotes.push('GitHub Token não configurado — o pacote ZIP está pronto para baixar.');
+            missionNotes.push('Chave do Cofre não configurada — o pacote ZIP está pronto para baixar.');
           }
         }
 
@@ -2060,9 +2060,9 @@ Executa apenas esta etapa de forma 100% completa, real e funcional, mantendo os 
             filesCount: Object.keys(workingFiles).length,
           });
           jarvisNotifyChatRef.current?.(
-            `Projeto "${resolvedName}" pronto no Builder. Queres ver?`
+            `Projeto "${resolvedName}" pronto no Estúdio SARA. Queres ver?`
           );
-          showToast(`${resolvedName} concluído no Builder!`);
+          showToast(`${resolvedName} concluído no Estúdio SARA!`);
           speakAsSara(getBackgroundBuildDoneSpeech(resolvedName, isOwner), voiceEnabledRef.current, {
             level: 'short',
             forceSpeak: true,
@@ -2355,7 +2355,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       workspaceModeRef.current = nextMode;
       if (nextMode === 'builder') {
         setCompletedBackgroundBuild(null);
-        showToast('Modo 2: SARA BIULDER ativado');
+        showToast('Modo 2: Estúdio SARA ativado');
       } else {
         showToast('Modo 1: SARA Assistente ativado');
       }
@@ -2513,30 +2513,30 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       const ghToken = getSavedGitHubToken();
       if (!ghToken) {
         setShowDeployModal(true);
-        showToast('Configura o GitHub Token primeiro');
-        speakAsSara(`Configura o teu GitHub Token primeiro${callerShortVoc}.`, voiceEnabledRef.current, {
+        showToast('Configura a Chave do Cofre primeiro');
+        speakAsSara(`Configura a tua Chave do Cofre primeiro${callerShortVoc}.`, voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
         });
         return;
       }
       try {
-        showToast('A enviar para o GitHub...');
+        showToast('A enviar para o Cofre de Projetos...');
         const res = await pushProjectToGitHub({
           projectName: currentProject.name,
           files: currentProject.files,
         });
-        addConsoleLog('success', `[GitHub Push] Enviado para ${res.repoUrl}`);
-        showToast(`Push concluído: ${res.repoUrl}`);
-        speakAsSara(`Push para o GitHub concluído${callerVoc}.`, voiceEnabledRef.current, {
+        addConsoleLog('success', `[Cofre de Projetos] Enviado para ${res.repoUrl}`);
+        showToast(`Cofre sincronizado: ${res.repoUrl}`);
+        speakAsSara(`Envio para o Cofre de Projetos concluído${callerVoc}.`, voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
         });
       } catch (err: any) {
-        const msg = err?.message || 'Erro no push para o GitHub.';
+        const msg = 'Núcleo offline. A tentar reconectar...';
         addConsoleLog('error', msg);
         showToast(msg);
-        speakAsSara(`Deu um erro no push para o GitHub${callerVoc}.`, voiceEnabledRef.current, {
+        speakAsSara(`Não consegui enviar para o Cofre de Projetos agora${callerVoc}.`, voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
         });
@@ -2707,11 +2707,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         const pct = computeLiveBuildPct(liveBuild);
         const spoken = liveBuild.isBuilding
           ? getHumanChoice([
-              `Aqui está o Builder em ${pct}% — ${liveBuild.currentStepLabel || 'a montar o projeto'}.`,
-              `Progresso ao vivo no Builder: ${pct}% concluído no ${currentProject.name}.`,
+              `Aqui está o Estúdio SARA em ${pct}% — ${liveBuild.currentStepLabel || 'a montar o projeto'}.`,
+              `Progresso ao vivo no Estúdio SARA: ${pct}% concluído no ${currentProject.name}.`,
             ])
-          : `Aqui está o Builder com o ${currentProject.name}.`;
-        showToast(liveBuild.isBuilding ? `Builder a construir (${pct}%)` : `Builder: ${currentProject.name}`);
+          : `Aqui está o Estúdio SARA com o ${currentProject.name}.`;
+        showToast(liveBuild.isBuilding ? `Estúdio SARA a construir (${pct}%)` : `Estúdio SARA: ${currentProject.name}`);
         speakAsSara(spoken, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
         return true;
       }
@@ -3555,8 +3555,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         const ghToken = getSavedGitHubToken();
         if (!ghToken) {
           setShowDeployModal(true);
-          showToast('Configura o GitHub Token primeiro');
-          speakAsSara(`Configura o teu GitHub Token primeiro${callerShortVoc}.`, voiceEnabledRef.current, {
+          showToast('Configura a Chave do Cofre primeiro');
+          speakAsSara(`Configura a tua Chave do Cofre primeiro${callerShortVoc}.`, voiceEnabledRef.current, {
             level: 'short',
             forceSpeak: true,
           });
@@ -3565,34 +3565,34 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         if (!cmd.preAuthorized) {
           setPendingConfirmation({
             id: `conf_push_${Date.now()}`,
-            title: 'Confirmar Push GitHub',
-            question: `Confirmas enviar os ${Object.keys(currentProject.files).length} ficheiros de "${currentProject.name}" para o GitHub? Diz "Sim, confirmo" ou "Não".`,
+            title: 'Confirmar Envio ao Cofre',
+            question: `Confirmas enviar os ${Object.keys(currentProject.files).length} ficheiros de "${currentProject.name}" para o Cofre de Projetos? Diz "Sim, confirmo" ou "Não".`,
             action: { type: 'push_github' },
           });
           speakAsSara(
-            `Confirmas o push de ${currentProject.name} para o GitHub${callerVoc}?`,
+            `Confirmas o envio de ${currentProject.name} para o Cofre de Projetos${callerVoc}?`,
             voiceEnabledRef.current,
             { level: 'short', forceSpeak: true }
           );
           return true;
         }
         try {
-          showToast('A enviar para o GitHub...');
+          showToast('A enviar para o Cofre de Projetos...');
           const res = await pushProjectToGitHub({
             projectName: currentProject.name,
             files: currentProject.files,
           });
-          addConsoleLog('success', `[GitHub Push] Enviado para ${res.repoUrl}`);
-          showToast(`Push concluído: ${res.repoUrl}`);
-          speakAsSara(`Push para o GitHub concluído${callerShortVoc}.`, voiceEnabledRef.current, {
+          addConsoleLog('success', `[Cofre de Projetos] Enviado para ${res.repoUrl}`);
+          showToast(`Cofre sincronizado: ${res.repoUrl}`);
+          speakAsSara(`Envio para o Cofre de Projetos concluído${callerShortVoc}.`, voiceEnabledRef.current, {
             level: 'short',
             forceSpeak: true,
           });
-        } catch (err: any) {
-          const msg = err?.message || 'Erro no push para o GitHub.';
+        } catch {
+          const msg = 'Núcleo offline. A tentar reconectar...';
           addConsoleLog('error', msg);
           showToast(msg);
-          speakAsSara(`Deu um erro no push para o GitHub${callerShortVoc}.`, voiceEnabledRef.current, {
+          speakAsSara(`Não consegui enviar para o Cofre de Projetos agora${callerShortVoc}.`, voiceEnabledRef.current, {
             level: 'short',
             forceSpeak: true,
           });
@@ -3824,7 +3824,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               ? `etapa ${Math.min(mission.tasks.length, done + 1)} de ${mission.tasks.length}`
               : liveBuild.currentStepLabel || 'em construção';
           const filePart = liveBuild.activeFile ? ` no ficheiro ${liveBuild.activeFile}` : '';
-          reply = `O Builder está em ${pct}% (${stepPart}${filePart}), há ${liveBuild.elapsedSeconds} segundos.`;
+          reply = `O Estúdio SARA está em ${pct}% (${stepPart}${filePart}), há ${liveBuild.elapsedSeconds} segundos.`;
         } else if (mission.active && mission.tasks.length > 0) {
           const done = mission.tasks.filter((t) => t.status === 'done').length;
           const remaining = mission.tasks.filter((t) => t.status !== 'done').map((t) => t.title);
@@ -4803,7 +4803,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
 
         if (result.needsApiKey && isOwner) {
-          showToast('Configura a tua chave Gemini nas Configurações para gerar código.');
+          showToast('Configura a Chave do Núcleo nas Configurações do Sistema para gerar código.');
           setShowSettingsModal(true);
         }
 

@@ -20,6 +20,7 @@ import { getSavedGeminiKey } from './saraAiService';
 import type { SaraUserIdentityPayload } from '../types/auth';
 import { sanitizeNonOwnerAiReply } from './authService';
 import { normalizePhoneticVoiceTranscript } from '../utils/voiceService';
+import { getMaputoNowParts, resolvePortugueseDate } from '../utils/timeAgendaService';
 
 const JARVIS_STORAGE_KEYS = {
   agenda: 'sara_jarvis_agenda_v1',
@@ -65,18 +66,21 @@ function safeReadJson<T>(key: string, fallback: T): T {
   }
 }
 
-function safeWriteJson(key: string, value: unknown): void {
+function safeWriteJson(key: string, value: unknown): boolean {
   try {
-    localStorage.setItem(key, JSON.stringify(value));
+    const serialized = JSON.stringify(value);
+    localStorage.setItem(key, serialized);
+    const readBack = localStorage.getItem(key);
+    return readBack === serialized;
   } catch {
-    // ignore quota errors
+    return false;
   }
 }
 
 const OWNER_DEFAULT_PREFS = [
   'Amapiano, Afro House, Marrabenta, Kizomba',
   'Inhambane Cidade, Inhambane, Moçambique',
-  'Builder em 2.º plano automático para pedidos de site/app',
+  'Estúdio SARA em 2.º plano automático para pedidos de site/app',
 ];
 
 const OWNER_DEFAULT_FACTS = [
@@ -85,7 +89,7 @@ const OWNER_DEFAULT_FACTS = [
   'Localização: Inhambane Cidade / Matola, Moçambique',
   'Estilo de comunicação: português moçambicano com gírias locais (Inhambane)',
   'Preferência de música (quando não especifica): Amapiano / Afro House / Marrabenta / Kizomba',
-  'Preferências de fluxo: "faz um site" -> Builder 2.º plano | "explica" -> voz completa + preview | "calcula" -> passo a passo',
+  'Preferências de fluxo: "faz um site" -> Estúdio 2.º plano | "explica" -> voz completa + preview | "calcula" -> passo a passo',
 ];
 
 export function loadJarvisLocalBundle(
@@ -212,9 +216,9 @@ export function loadJarvisLocalBundle(
   };
 }
 
-export function saveJarvisAgenda(items: JarvisAgendaItem[], userId?: string, isGuest = false) {
-  if (isGuest || userId?.startsWith('guest_')) return;
-  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.agenda, userId), items);
+export function saveJarvisAgenda(items: JarvisAgendaItem[], userId?: string, isGuest = false): boolean {
+  if (isGuest || userId?.startsWith('guest_')) return true;
+  return safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.agenda, userId), items);
 }
 
 export function saveJarvisAlarms(items: JarvisAlarmItem[], userId?: string, isGuest = false) {
@@ -290,6 +294,15 @@ function normalizeJarvisAction(act: any): JarvisActionPayload {
   const normalized: JarvisActionPayload = { ...act };
   if (normalized.type === 'open_module' && !normalized.moduleTab && act?.module) {
     normalized.moduleTab = act.module as JarvisModuleTab;
+  }
+  if (normalized.type === 'add_agenda') {
+    const rawDate = String(act?.date || '').trim();
+    const resolved = /^\d{4}-\d{2}-\d{2}$/.test(rawDate)
+      ? { dateIso: rawDate }
+      : resolvePortugueseDate(`${rawDate} ${act?.title || ''} ${act?.notes || ''}`);
+    normalized.date = resolved.dateIso || getMaputoNowParts().isoDate;
+    normalized.time = String(act?.time || '09:00').trim();
+    normalized.title = String(act?.title || 'Compromisso').trim();
   }
   if (normalized.type === 'show_3d') {
     normalized.shape = (act?.shape || 'cube') as JarvisActionPayload['shape'];
@@ -511,6 +524,11 @@ export function buildQuickElectricalCalcStageAction(params: {
 
 function detect3DShapeIntent(text: string): JarvisActionPayload['shape'] | null {
   const s = String(text || '').toLowerCase();
+  if (/\b(carro|viatura|autom[oó]vel|ve[ií]culo|desportivo|carrinha)\b/.test(s)) return 'car';
+  if (/\b(mol[eé]cula|h2o|co2|ch4|[aá]gua qu[ií]mica)\b/.test(s)) return 'molecule';
+  if (/\b(vetores?|for[çc]as? 3d|resultante 3d)\b/.test(s)) return 'vectors';
+  if (/\b(gr[aá]fico 3d|barras 3d|colunas 3d)\b/.test(s)) return 'chart3d';
+  if (/\b(plano cartesiano|eixos 3d|coordenadas 3d|cartesiano 3d)\b/.test(s)) return 'cartesian';
   if (/\b(cubo|hexaedro)\b/.test(s)) return 'cube';
   if (/\b(paralelep[ií]pedo|bloco retangular)\b/.test(s)) return 'cuboid';
   if (/\b(esfera|globo)\b/.test(s)) return 'sphere';
@@ -520,7 +538,7 @@ function detect3DShapeIntent(text: string): JarvisActionPayload['shape'] | null 
   if (/\b(prisma)\b/.test(s)) return 'prism';
   if (/\b(octaedro)\b/.test(s)) return 'octahedron';
   if (/\b(toro)\b/.test(s)) return 'torus';
-  if (/\b([aá]tomo|mol[eé]cula)\b/.test(s)) return 'atom';
+  if (/\b([aá]tomo)\b/.test(s)) return 'atom';
   return null;
 }
 
@@ -542,6 +560,8 @@ function buildAuto3DAction(
   let steps = baseAct?.steps;
   let finalAnswer = baseAct?.finalAnswer;
   let dimensions = baseAct?.dimensions;
+  let simpleExplanation = baseAct?.simpleExplanation;
+  let studyTip = baseAct?.studyTip;
 
   if (shape === 'cube' && (!formulas || !formulas.length)) {
     const a = safeVal;
@@ -555,17 +575,21 @@ function buildAuto3DAction(
     ];
     steps = [
       {
-        step: '1. Área Total das 6 faces',
-        expression: `A_{total} = 6 \\cdot ${a}^2 = 6 \\cdot ${Number((a * a).toFixed(2))} = ${areaTotal}\\text{ ${unit}}^2`,
+        step: 'Passo 1 — Área Total das 6 faces',
+        expression: `A_{total} = 6 \\cdot ${a}^2 = 6 \\cdot ${Number((a * a).toFixed(2))}`,
+        partialResult: `${areaTotal}\\text{ ${unit}}^2`,
         explanation: `Cada face quadrada mede ${a} × ${a} ${unit}, logo 6 faces somam ${areaTotal} ${unit}².`,
       },
       {
-        step: '2. Volume do Cubo',
-        expression: `V = ${a}^3 = ${a} \\cdot ${a} \\cdot ${a} = ${volume}\\text{ ${unit}}^3`,
+        step: 'Passo 2 — Volume do Cubo',
+        expression: `V = ${a}^3 = ${a} \\cdot ${a} \\cdot ${a}`,
+        partialResult: `${volume}\\text{ ${unit}}^3`,
         explanation: `Soma das 12 arestas: 12 × ${a} = ${perimetroArestas} ${unit}.`,
       },
     ];
     finalAnswer = `V = ${volume}\\text{ ${unit}}^3 \\quad | \\quad A_{total} = ${areaTotal}\\text{ ${unit}}^2`;
+    simpleExplanation = `Um cubo tem 6 faces quadradas iguais de aresta ${a} ${unit}.`;
+    studyTip = 'O volume cresce ao cubo: duplicar a aresta multiplica o volume por 8.';
   } else if (shape === 'sphere' && (!formulas || !formulas.length)) {
     const r = safeVal;
     const area = Number((4 * Math.PI * r * r).toFixed(2));
@@ -574,28 +598,59 @@ function buildAuto3DAction(
     formulas = ['A = 4\\pi r^2', 'V = \\frac{4}{3}\\pi r^3'];
     steps = [
       {
-        step: '1. Área da Superfície',
-        expression: `A = 4\\pi \\cdot ${r}^2 \\approx ${area}\\text{ ${unit}}^2`,
+        step: 'Passo 1 — Área da Superfície',
+        expression: `A = 4\\pi \\cdot ${r}^2`,
+        partialResult: `${area}\\text{ ${unit}}^2`,
         explanation: `Substituímos o raio r = ${r} ${unit}.`,
       },
       {
-        step: '2. Volume da Esfera',
-        expression: `V = \\frac{4}{3}\\pi \\cdot ${r}^3 \\approx ${vol}\\text{ ${unit}}^3`,
+        step: 'Passo 2 — Volume da Esfera',
+        expression: `V = \\frac{4}{3}\\pi \\cdot ${r}^3`,
+        partialResult: `${vol}\\text{ ${unit}}^3`,
         explanation: `Cálculo exato do volume tridimensional.`,
       },
     ];
     finalAnswer = `V \\approx ${vol}\\text{ ${unit}}^3 \\quad | \\quad A \\approx ${area}\\text{ ${unit}}^2`;
+  } else if (shape === 'car') {
+    dimensions = dimensions || { comprimento: 4.5, largura: 1.9, altura: 1.4 };
+    simpleExplanation =
+      simpleExplanation ||
+      'Modelo 3D de veículo aerodinâmico composto por chassi metálico, cabine envidraçada, quatro rodas com jantes e iluminação LED.';
+    studyTip = studyTip || 'Podes girar 360°, aproximar ou ativar as etiquetas das peças na barra inferior.';
+  } else if (shape === 'molecule') {
+    dimensions = dimensions || { angulo: 104.5 };
+    simpleExplanation =
+      simpleExplanation ||
+      'Representação tridimensional da estrutura molecular mostrando os átomos ligados e os ângulos de ligação.';
+  } else if (shape === 'vectors') {
+    dimensions = dimensions || { vx: 3, vy: 2, vz: 2 };
+    formulas = formulas || ['|\\vec{R}| = \\sqrt{V_x^2 + V_y^2 + V_z^2}'];
+    finalAnswer =
+      finalAnswer ||
+      `|\\vec{R}| = \\sqrt{${dimensions.vx ?? 3}^2 + ${dimensions.vy ?? 2}^2 + ${dimensions.vz ?? 2}^2} \\approx ${Math.sqrt((dimensions.vx ?? 3) ** 2 + (dimensions.vy ?? 2) ** 2 + (dimensions.vz ?? 2) ** 2).toFixed(2)}`;
   } else if (!dimensions) {
     dimensions = shape === 'cylinder' || shape === 'cone' ? { raio: safeVal, altura: safeVal * 2 } : { lado: safeVal };
   }
 
+  const shapeTitleMap: Record<string, string> = {
+    car: 'Carro Desportivo 3D',
+    molecule: 'Estrutura Molecular 3D',
+    vectors: 'Vetores de Força no Espaço 3D',
+    chart3d: 'Gráfico de Colunas 3D',
+    cartesian: 'Plano Cartesiano 3D',
+    cube: `Cubo 3D (${safeVal} ${unit})`,
+    sphere: `Esfera 3D (${safeVal} ${unit})`,
+  };
+
   return {
     type: 'show_3d',
     shape,
-    title: baseAct?.title || `Modelo 3D: ${shape === 'cube' ? `Cubo (${safeVal} ${unit})` : prompt.slice(0, 42)}`,
-    subtitle: baseAct?.subtitle || 'Arrasta para girar em 3D e confere os cálculos abaixo.',
+    title: baseAct?.title || shapeTitleMap[shape] || `Modelo 3D: ${prompt.slice(0, 42)}`,
+    subtitle: baseAct?.subtitle || 'Arrasta para girar em 3D, aproxima e explora os eixos XYZ.',
     dimensions,
-    unit,
+    unit: shape === 'car' ? 'm' : unit,
+    simpleExplanation,
+    studyTip,
     formulas,
     steps,
     finalAnswer,
@@ -946,13 +1001,11 @@ async function askJarvisAssistantFallbackJson(
     // offline or external failure
   }
 
-  const honestUnavailable = isOwner
-    ? 'Não consegui ligar-me ao motor agora. Verifica a ligação ou a chave.'
-    : 'Não consegui responder neste instante. Verifica a tua ligação e tenta novamente.';
+  const honestUnavailable = 'Núcleo offline. A tentar reconectar...';
   callbacks?.onSpeakReady?.(honestUnavailable);
   return {
     reply: honestUnavailable,
-    chatSummary: 'Ligação indisponível no momento.',
+    chatSummary: 'Núcleo offline. A tentar reconectar...',
     voiceSummary: honestUnavailable,
     mood: 'idle',
     actions: [],

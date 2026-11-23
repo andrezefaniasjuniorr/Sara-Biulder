@@ -2,7 +2,7 @@ import type { ProjectFiles, ProjectRecord } from '../types/builder';
 
 export const EMPTY_PROJECT_FILES: ProjectFiles = {
   'index.html': '',
-  'README.md': '# Novo Projeto\n\nCriado na **SARA BIULDER** por **Eletro-Jr**.',
+  'README.md': '# Novo Projeto\n\nCriado no **Estúdio SARA** por **Eletro-Jr**.',
 };
 
 export function createStarterProject(

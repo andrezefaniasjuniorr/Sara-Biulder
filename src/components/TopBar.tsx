@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Volume2,
   VolumeX,
@@ -22,6 +22,7 @@ import {
 import type { AgentMode, FirebaseUserProfile, VoiceLevel } from '../types/builder';
 import type { WorkspaceMode } from '../types/jarvis';
 import type { SaraSession } from '../types/auth';
+import { getMaputoNowParts } from '../utils/timeAgendaService';
 
 interface TopBarProps {
   session: SaraSession;
@@ -99,6 +100,14 @@ export const TopBar: React.FC<TopBarProps> = ({
   const isJarvis = workspaceMode === 'jarvis';
   const isOwner = Boolean(session?.isOwner);
 
+  const [maputoHeaderClock, setMaputoHeaderClock] = useState(() => getMaputoNowParts().shortHeaderText);
+  useEffect(() => {
+    const refreshClock = () => setMaputoHeaderClock(getMaputoNowParts().shortHeaderText);
+    refreshClock();
+    const t = setInterval(refreshClock, 15000);
+    return () => clearInterval(t);
+  }, []);
+
   return (
     <header
       className={`h-14 shrink-0 px-2.5 sm:px-4 flex items-center justify-between gap-2 overflow-x-auto sara-scroll border-b transition-colors ${
@@ -119,7 +128,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 ? 'bg-gradient-to-r from-[#00E5FF]/25 to-[#FF2A4B]/20 border-[#00E5FF] text-cyan-100 shadow-[0_0_16px_rgba(0,229,255,0.3)]'
                 : 'bg-[#071124] border-cyan-500/45 text-cyan-300 hover:border-[#00E5FF] hover:text-white'
             }`}
-            title="Abrir / fechar Painel de Módulos, Builder e Configurações"
+            title="Abrir / fechar Painel de Módulos, Estúdio SARA e Configurações"
           >
             {isJarvisPanelOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
             <span>PAINEL</span>
@@ -180,7 +189,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 : 'bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6]'
             }`}
           >
-            {isJarvis ? 'SARA JARVIS' : 'SARA BIULDER'}
+            {isJarvis ? 'SARA OS' : 'ESTÚDIO SARA'}
           </span>
           {!isJarvis && (
             <>
@@ -192,23 +201,23 @@ export const TopBar: React.FC<TopBarProps> = ({
           )}
           {isOwner && isSyncingFirebase && (
             <span className="hidden xl:inline-flex items-center gap-1 text-[10px] font-mono text-cyan-300/90 px-1.5 py-0.5 rounded bg-cyan-500/10 border border-cyan-500/25">
-              Cloud Sync
+              Núcleo Sync
             </span>
           )}
         </div>
 
-        {/* Interruptor de modo na barra apenas no Modo Builder (no JARVIS fica limpo dentro de [☰ PAINEL]) */}
+        {/* Interruptor de modo na barra apenas no Estúdio SARA (no Assistente fica limpo dentro de [☰ PAINEL]) */}
         {!isJarvis && (
           <div
             className="flex items-center bg-[#060B16] p-1 rounded-xl border border-cyan-500/40 shadow-[0_0_14px_rgba(0,229,255,0.16)] shrink-0 ml-1"
             role="group"
-            aria-label="Alternar entre Assistente JARVIS e Builder"
+            aria-label="Alternar entre Assistente e Estúdio SARA"
           >
             <button
               type="button"
               onClick={() => onChangeWorkspaceMode('jarvis')}
               className="px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap text-slate-400 hover:text-white border border-transparent"
-              title="Modo 1 — Assistente Pessoal SARA JARVIS"
+              title="Modo 1 — Assistente Pessoal SARA OS"
             >
               <Sparkles className="w-3.5 h-3.5 text-[#00E5FF]" />
               <span>ASSISTENTE</span>
@@ -217,10 +226,10 @@ export const TopBar: React.FC<TopBarProps> = ({
               type="button"
               onClick={() => onChangeWorkspaceMode('builder')}
               className="px-2.5 sm:px-3 py-1.5 rounded-lg text-[11px] font-extrabold flex items-center gap-1.5 transition cursor-pointer whitespace-nowrap bg-gradient-to-r from-[#3B82F6]/30 to-[#8B5CF6]/30 border border-[#3B82F6]/70 text-blue-200 shadow-[0_0_14px_rgba(59,130,246,0.28)]"
-              title="Modo 2 — Construtor IDE SARA BIULDER"
+              title="Modo 2 — Estúdio SARA"
             >
               <Hammer className="w-3.5 h-3.5 text-[#8B5CF6]" />
-              <span>BUILDER</span>
+              <span>ESTÚDIO SARA</span>
             </button>
           </div>
         )}
@@ -280,9 +289,9 @@ export const TopBar: React.FC<TopBarProps> = ({
           </button>
         </div>
       ) : (
-        <div className="hidden md:flex items-center gap-2 px-3.5 py-1 rounded-xl bg-[#071124] border border-cyan-500/30 text-[11px] font-mono tracking-wider text-cyan-300 shrink-0">
-          <Sparkles className="w-3.5 h-3.5 text-[#00E5FF]" />
-          <span>STARK HUD // ASSISTENTE PESSOAL</span>
+        <div className="hidden md:flex items-center gap-2.5 px-3.5 py-1 rounded-xl bg-[#071124] border border-cyan-500/30 text-[11px] font-mono tracking-wide text-cyan-200 shrink-0 whitespace-nowrap tabular-nums">
+          <Clock className="w-3.5 h-3.5 text-[#00E5FF]" />
+          <span>{maputoHeaderClock}</span>
         </div>
       )}
 

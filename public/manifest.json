@@ -1,8 +1,8 @@
 {
   "id": "/",
-  "name": "SARA BIULDER",
-  "short_name": "SARA BIULDER",
-  "description": "Construtor inteligente de sites, apps e jogos de Eletro-Jr.",
+  "name": "SARA OS",
+  "short_name": "SARA OS",
+  "description": "Assistente inteligente e Estúdio SARA de Eletro-Jr.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

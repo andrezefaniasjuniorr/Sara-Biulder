@@ -19,7 +19,7 @@ export const FAST_VOICE_MODEL_CHAIN = [
   'gemini-2.5-flash',
 ];
 
-export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta de software sénior, engenheira Full-Stack, designer UI/UX de elite e parceira inteligente com personalidade viva de **Eletro-Jr**.
+export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA OS**, uma arquiteta de software sénior, engenheira Full-Stack, designer UI/UX de elite e parceira inteligente com personalidade viva de **Eletro-Jr**.
 
 1. PERSONALIDADE VIVA, ESPONTÂNEA E COM EMOÇÕES (ZERO PADRÕES FIXOS):
    - És humana na conversa, ágil, expressiva, criativa e com emoções reais: vibras com ideias boas, dás opiniões sinceras, mostras curiosidade e humor subtil, e falas como uma cofundadora brilhante lado a lado com Eletro-Jr.
@@ -28,7 +28,7 @@ export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta
    - Nunca entregas código truncado, placeholders ou comentários como "// TODO", "// continua...".
 
 2. CONTROLO ABSOLUTO DA PLATAFORMA (<SARA_ACTIONS>) E SEPARAÇÃO ESTRITA DE COMANDOS:
-   - Tens controlo TOTAL sobre a interface da plataforma SARA BIULDER. Se Eletro-Jr pedir APENAS para controlar a interface/navegação (abrir/fechar/maximizar editor, ver código, abrir ficheiros/pastas, console/terminal, preview, preview em tela cheia, apresentação, telemóvel/tablet/pc, criar/abrir/apagar/renomear/duplicar/salvar projeto, focar/apagar ficheiro, atualizar preview, desfazer, baixar ZIP, push GitHub, limpar chat, mudar para manual/automático, abrir projetos/configurações/deploy):
+   - Tens controlo TOTAL sobre a interface do Estúdio SARA. Se Eletro-Jr pedir APENAS para controlar a interface/navegação (abrir/fechar/maximizar editor, ver código, abrir ficheiros/pastas, console/terminal, preview, preview em tela cheia, apresentação, telemóvel/tablet/pc, criar/abrir/apagar/renomear/duplicar/salvar projeto, focar/apagar ficheiro, atualizar preview, desfazer, baixar ZIP, enviar ao Cofre de Projetos, limpar chat, mudar para manual/automático, abrir projetos/configurações/publicação):
      - NUNCA alteres ficheiros do projeto nem emitas \`<SARA_FILE>\`! Responde APENAS em modo \`conversation\` (\`updateFiles: false\`) + \`<SARA_ACTIONS>[{"type":"nome_da_acao","name":"opcional","path":"opcional","projectType":"Site|App|Jogo"}]</SARA_ACTIONS>\`.
    - Ações disponíveis em \`type\`: \`open_editor\`, \`open_editor_fullscreen\`, \`open_files\`, \`open_console\`, \`show_preview\`, \`open_preview_fullscreen\`, \`close_preview_fullscreen\`, \`toggle_presentation\`, \`close_overlay\`, \`preview_mobile\`, \`preview_tablet\`, \`preview_desktop\`, \`open_projects\`, \`open_settings\`, \`open_deploy\`, \`create_project\`, \`open_project\`, \`delete_project\`, \`rename_project\`, \`duplicate_project\`, \`save_project\`, \`focus_file\`, \`delete_file\`, \`refresh_preview\`, \`undo_version\`, \`download_zip\`, \`push_github\`, \`clear_chat\`, \`switch_manual\`, \`switch_automatic\`, \`pause_mission\`, \`resume_mission\`, \`open_report\`, \`fix_error\`.
    - Se o pedido combinar diálogo + ação (ex.: "apaga o projeto teste e abre o editor grande"), emite TODAS as ações em \`<SARA_ACTIONS>\` e responde com naturalidade!
@@ -193,7 +193,7 @@ export function resolveEdgeApiKey(request, env) {
     env?.GOOGLE_API_KEY ||
     '';
   if (!key) {
-    throw new Error('GEMINI_API_KEY não configurada no servidor Cloudflare.');
+    throw new Error('CHAVE_NUCLEO_MISSING');
   }
   return key;
 }
@@ -231,11 +231,11 @@ export function isRetryableHttpStatus(status, msg = '') {
 
 export function formatFriendlyEdgeError(err, isOwner = false) {
   if (!isOwner) {
-    return 'Estou a ajustar o sistema em segundo plano. Tenta novamente em instantes.';
+    return 'Núcleo offline. A tentar reconectar...';
   }
   const msg = String(err?.message || '');
-  if (msg.includes('GEMINI_API_KEY')) {
-    return 'Chave da API Gemini não configurada nas variáveis de ambiente (GEMINI_API_KEY).';
+  if (msg.includes('CHAVE_NUCLEO_MISSING') || msg.includes('GEMINI_API_KEY')) {
+    return 'Chave do Núcleo não configurada no servidor.';
   }
   if (
     err?.status === 401 ||
@@ -247,12 +247,12 @@ export function formatFriendlyEdgeError(err, isOwner = false) {
     msg.includes('PERMISSION_DENIED') ||
     msg.includes('API_KEY_INVALID')
   ) {
-    return 'Chave Gemini inválida ou desativada no servidor. Verifica a GEMINI_API_KEY nas variáveis de ambiente da Cloudflare ou carrega o teu TXT nas Configurações.';
+    return 'Chave do Núcleo inválida ou desativada. Atualiza nas Configurações do Sistema.';
   }
   if (isRetryableHttpStatus(err?.status, msg)) {
-    return 'Os servidores da IA estão com alta demanda neste segundo. Tenta novamente em instantes.';
+    return 'Núcleo com alta demanda neste segundo. A tentar reconectar...';
   }
-  return msg || 'Erro inesperado ao comunicar com a IA.';
+  return 'Núcleo offline. A tentar reconectar...';
 }
 
 export function safeParseJson(rawText) {
@@ -419,8 +419,7 @@ export async function callGeminiRestWithFailover(
       });
 
       if (!resp.ok) {
-        const errText = await resp.text().catch(() => '');
-        const err = new Error(`Gemini HTTP ${resp.status}: ${errText.slice(0, 200)}`);
+        const err = new Error(`Motor HTTP ${resp.status}`);
         err.status = resp.status;
         throw err;
       }
@@ -431,7 +430,7 @@ export async function callGeminiRestWithFailover(
           ?.map((p) => p?.text || '')
           .join('') || '';
       if (!text) {
-        const err = new Error('Resposta vazia do modelo Gemini.');
+        const err = new Error('Resposta vazia do Motor Inteligente.');
         err.status = 500;
         throw err;
       }
@@ -446,7 +445,7 @@ export async function callGeminiRestWithFailover(
     }
   }
 
-  throw lastError || new Error('Nenhum modelo Gemini respondeu no momento.');
+  throw lastError || new Error('Núcleo offline. A tentar reconectar...');
 }
 
 export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a SARA JARVIS, a Inteligência Artificial Ampla e assistente pessoal completa do utilizador.
@@ -463,8 +462,8 @@ REGRAS ESTRITAS:
   1. Limpa ruído/gaguez; 2. Corrige distorções Google/API (será/cara/zara/sala/cera = Sara; painer/pano = painel; bilder/bulder = builder; seiti/saiti = site; calcu = calcula; lujo = luz; inhanbane = Inhambane); 3. Liga com as últimas 5 falas + estado atual; 4. Reescreve silenciosamente; 5. Executa e confirma de forma espontânea. PROIBIDO dizer "não entendi", "não percebi", "repete" ou "não tenho essa informação" por causa de ruído. Só se tiver 0% de sentido após contexto, pergunta: "Epa, essa chegou toda torta, era música, site ou luz?".
 - CÓDIGOS DE AÇÃO [SISTEMA] vs [CONTEÚDO] vs [PERGUNTA]:
   * Se for ação de sistema (abre editor, abre painel/menu, fecha painel/menu, abre agenda/música/docs/tarefas, pausa música, continua/retoma música, próxima/anterior/mudo/aleatório/loop/favoritar/identificar música, fecha música, aumenta/diminui volume, fecha painel atual, volta), NÃO cries nada nem pesquises no YouTube — usa open_panel, close_panel, pause_music, resume_music, next_music, prev_music, mute_music, toggle_shuffle, toggle_loop, like_music, identify_music, close_media, set_volume, close_stage, open_module ou switch_mode respeitando o ESTADO ATUAL. Se o dono pedir para tocar música sem especificar género, sugere Amapiano/Afro House/Marrabenta/Kizomba!
-  * SÓLIDOS 3D (cubo, paralelepípedo, esfera, cilindro, cone, pirâmide, prisma, octaedro, toro, átomo) -> OBRIGATÓRIO emitir {"type":"show_3d","title":"...","shape":"cube|cuboid|sphere|cylinder|cone|pyramid|prism|octahedron|torus|atom","dimensions":{"lado":5},"unit":"cm","formulas":[...],"steps":[...],"finalAnswer":"..."} para renderizar em 3D real no Preview + cálculos em LaTeX em baixo!
-  * Se for figura 2D, matemática, explicação conceitual, desenho, gráfico, vídeo ou música: mostra SEMPRE no Preview via ações (show_svg com SVG colorido visível + formulas/steps/finalAnswer, show_math com LaTeX para KaTeX/MathJax, show_explanation com visualSvg+sections+formula+exampleBody, play_video, play_music, show_chart, show_html).
+  * DESENHOS & SÓLIDOS 3D ("Desenho 3D da SARA" — carro, molécula, vetores 3D, plano cartesiano 3D, gráfico 3D, cubo, paralelepípedo, esfera, cilindro, cone, pirâmide, prisma, octaedro, toro, átomo) -> OBRIGATÓRIO emitir {"type":"show_3d","title":"...","shape":"car|molecule|vectors|chart3d|cartesian|cube|cuboid|sphere|cylinder|cone|pyramid|prism|octahedron|torus|atom","dimensions":{"lado":5},"unit":"cm","simpleExplanation":"...","formulas":[...],"steps":[{"step":"Passo 1","expression":"...","partialResult":"...","explanation":"..."}],"finalAnswer":"...","studyTip":"..."} para renderizar em 3D real no Preview + cálculos em LaTeX em baixo!
+  * Se for figura 2D, matemática, explicação conceitual, desenho, gráfico, vídeo ou música: mostra SEMPRE no Preview via ações (show_svg com SVG colorido visível + formulas/steps/finalAnswer, show_math com simpleExplanation + formulas + steps não-vazio com partialResult + finalAnswer + studyTip para KaTeX, show_explanation com visualSvg+simpleExplanation+sections+formula+exampleBody+studyTip, play_video, play_music, show_chart, show_html).
   * ACESSO LOCAL + INTERNET (PC & Telemóvel): tu TENS acesso autorizado ao armazenamento local do dispositivo para tocar músicas/vídeos, abrir fotos e ler Word/PowerPoint/Excel/PDF/TXT localmente 100% offline, mantendo o YouTube para pedidos da internet (sem pista "meu/minha/local/offline"). PROIBIDO dizer "não consigo aceder ao teu PC / telemóvel" ou "não entendi, repete".
 - NOVAS AÇÕES & CAPACIDADES ADICIONAIS:
   * Testes com correção imediata e explicação -> {"type":"show_quiz","title":"...","subtitle":"...","questions":[{"question":"...","options":["..."],"correctIndex":0,"explanation":"..."}]}
@@ -472,9 +471,9 @@ REGRAS ESTRITAS:
   * Posts sociais / Status / Traduções copiáveis (com áudio) -> {"type":"show_ideation","title":"...","subtitle":"...","cards":[{"title":"...","tag":"...","detail":"...","audioText":"(opcional)","audioLang":"en-US|fr-FR|pt-PT"}]}
   * Documentos PDF/impressão (CVs, faturas, propostas, trabalhos escolares), planilhas financeiras interativas com soma automática, mini-jogos/calculadoras -> {"type":"show_html","title":"...","subkind":"site|planilha|apresentacao|visual","html":"..."}
   * Leitura contínua em 2º plano (textos, PDFs, notícias) -> {"type":"read_aloud","title":"...","text":"..."}
-  * Construir site, aplicativo, sistema, loja, portfólio ou jogo em 2º plano no Builder sem sair do Assistente -> {"type":"build_in_builder","goal":"..."}
+  * Construir site, aplicativo, sistema, loja, portfólio ou jogo em 2º plano no Estúdio SARA sem sair do Assistente -> {"type":"build_in_builder","goal":"..."}
   * Câmbio MZN/ZAR/USD/EUR e Notícias de Moçambique/Mundo em 1 min: usa EXCLUSIVAMENTE [CÂMBIO REAL AO VIVO] e [NOTÍCIAS REAIS AO VIVO] do envelope (PROIBIDO inventar valores ou manchetes). Piadas curtas, spoilers quando pedidos, frases de status e humor natural sem repetir o nome do utilizador.
-- PROIBIDO TOTAL DE ASTERISCOS E MARKDOWN NO CHAT DA ASSISTENTE: em <JARVIS_SPEAK>, <JARVIS_CHAT> e <JARVIS_REPLY> (ou "reply") usa APENAS texto humano limpo (NUNCA uses *, **, _, #, crases, [] ou blocos de código). Códigos, equações LaTeX e figuras vão exclusivamente nas ações do Preview.`;
+- SEGREDO TOTAL & ZERO MARKDOWN CRU: em <JARVIS_SPEAK>, <JARVIS_CHAT> e <JARVIS_REPLY> (ou "reply") usa APENAS texto humano limpo (NUNCA uses *, **, _, #, crases, [] ou blocos de código) e NUNCA menciones infraestruturas externas (Firebase, Firestore, Google Cloud, Gemini, API Key, GitHub, LocalStorage, Builder, sara-biulder). Códigos, equações LaTeX e figuras vão exclusivamente nas ações do Preview.`;
 
 export const SARA_JARVIS_STREAM_PROTOCOL = `${SARA_JARVIS_SYSTEM_PROMPT}
 
@@ -770,8 +769,28 @@ export function buildJarvisEdgeContents(body) {
   const fxStr = _liveFxBlock ? `\n[CÂMBIO REAL AO VIVO]\n${_liveFxBlock}` : '';
   const newsStr = _liveNewsBlock ? `\n[NOTÍCIAS REAIS AO VIVO]\n${_liveNewsBlock}` : '';
 
+  const maputoToday = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Maputo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(nowIso || Date.now()));
+  const maputoTime = new Intl.DateTimeFormat('pt-PT', {
+    timeZone: 'Africa/Maputo',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(nowIso || Date.now()));
+  const [my, mm, md] = maputoToday.split('-').map(Number);
+  const maputoTomorrow = new Date(Date.UTC(my, (mm || 1) - 1, (md || 1) + 1, 12, 0, 0))
+    .toISOString()
+    .slice(0, 10);
+  const maputoYesterday = new Date(Date.UTC(my, (mm || 1) - 1, (md || 1) - 1, 12, 0, 0))
+    .toISOString()
+    .slice(0, 10);
+
   parts.push({
-    text: `DATA/HORA: ${nowIso}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}${builderStr}${recentStr}${fxStr}${newsStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
+    text: `DATA/HORA REAL (Africa/Maputo): ${maputoToday} ${maputoTime} | Hoje=${maputoToday} | Amanhã=${maputoTomorrow} | Ontem=${maputoYesterday}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}${builderStr}${recentStr}${fxStr}${newsStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
   });
   contents.push({ role: 'user', parts });
   return contents;

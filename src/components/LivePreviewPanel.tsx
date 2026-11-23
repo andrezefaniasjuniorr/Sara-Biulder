@@ -187,17 +187,17 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
             type="button"
             onClick={onPushGitHub}
             className="px-2.5 py-1.5 rounded-lg bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#8B5CF6]/50 text-xs font-medium flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
-            title="Enviar código para o GitHub"
+            title="Guardar no Cofre de Projetos"
           >
             <Github className="w-3.5 h-3.5" />
-            <span className="hidden xl:inline">Push GitHub</span>
+            <span className="hidden xl:inline">Cofre de Projetos</span>
           </button>
 
           <button
             type="button"
             onClick={onPublish}
             className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] text-white text-xs font-semibold flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
-            title="Publicar na Web / Cloudflare"
+            title="Publicar na Web"
           >
             <Globe className="w-3.5 h-3.5" />
             <span>Publicar</span>
