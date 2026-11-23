@@ -19,6 +19,7 @@ import type {
 import { getSavedGeminiKey } from './saraAiService';
 import type { SaraUserIdentityPayload } from '../types/auth';
 import { sanitizeNonOwnerAiReply } from './authService';
+import { normalizePhoneticVoiceTranscript } from '../utils/voiceService';
 
 const JARVIS_STORAGE_KEYS = {
   agenda: 'sara_jarvis_agenda_v1',
@@ -72,16 +73,56 @@ function safeWriteJson(key: string, value: unknown): void {
   }
 }
 
+const OWNER_DEFAULT_PREFS = [
+  'Amapiano, Afro House, Marrabenta, Kizomba',
+  'Inhambane Cidade, Inhambane, Moçambique',
+  'Builder em 2.º plano automático para pedidos de site/app',
+];
+
+const OWNER_DEFAULT_FACTS = [
+  'Criador e Dono: Eletro-Jr (Eletro-Júnior), 24 anos',
+  'Área técnica: estudante de Eletricidade Industrial no IICEM',
+  'Localização: Inhambane Cidade / Matola, Moçambique',
+  'Estilo de comunicação: português moçambicano com gírias locais (Inhambane)',
+  'Preferência de música (quando não especifica): Amapiano / Afro House / Marrabenta / Kizomba',
+  'Preferências de fluxo: "faz um site" -> Builder 2.º plano | "explica" -> voz completa + preview | "calcula" -> passo a passo',
+];
+
 export function loadJarvisLocalBundle(
   userId?: string,
   callName?: string,
-  isGuest = false
+  isGuest = false,
+  isOwner = false
 ) {
-  const defaultMemory: JarvisMemoryState = {
-    userName: callName || DEFAULT_JARVIS_MEMORY.userName,
-    preferences: ['Inhambane Cidade, Inhambane, Moçambique'],
-    facts: ['Localização base: Inhambane Cidade, Inhambane, Moçambique'],
-  };
+  const defaultMemory: JarvisMemoryState = isOwner && !isGuest
+    ? {
+        userName: callName || 'Eletro-Júnior',
+        preferences: OWNER_DEFAULT_PREFS,
+        facts: OWNER_DEFAULT_FACTS,
+        likedTracks: [],
+        smartDevices: {
+          luz: false,
+          ventoinha: false,
+          ac: false,
+          porta: 'trancada',
+          tomada: true,
+        },
+        lastDomain: 'general',
+      }
+    : {
+        userName: callName || DEFAULT_JARVIS_MEMORY.userName,
+        preferences: ['Inhambane Cidade, Inhambane, Moçambique'],
+        facts: ['Localização base: Inhambane Cidade, Inhambane, Moçambique'],
+        likedTracks: [],
+        smartDevices: {
+          luz: false,
+          ventoinha: false,
+          ac: false,
+          porta: 'trancada',
+          tomada: true,
+        },
+        lastDomain: 'general',
+      };
 
   if (isGuest || (userId && userId.startsWith('guest_'))) {
     return {
@@ -121,17 +162,30 @@ export function loadJarvisLocalBundle(
     scopedJarvisKey(JARVIS_STORAGE_KEYS.memory, userId),
     defaultMemory
   );
-  const cleanedFacts = (rawMem?.facts || []).filter(
-    (f) => !/\b(luanda|angola|matola)\b/i.test(f)
+  const cleanedFacts = (rawMem?.facts || []).filter((f) =>
+    isOwner ? !/\b(luanda|angola)\b/i.test(f) : !/\b(luanda|angola|matola|iicem|24 anos)\b/i.test(f)
   );
+  const mergedOwnerFacts =
+    isOwner && !isGuest
+      ? Array.from(new Set([...OWNER_DEFAULT_FACTS, ...cleanedFacts])).slice(-25)
+      : cleanedFacts.length > 0
+      ? cleanedFacts
+      : defaultMemory.facts;
+
   const memory: JarvisMemoryState = {
     userName: callName || rawMem?.userName || defaultMemory.userName,
-    preferences: rawMem?.preferences || defaultMemory.preferences,
-    facts: cleanedFacts.length > 0 ? cleanedFacts : defaultMemory.facts,
+    preferences:
+      rawMem?.preferences && rawMem.preferences.length > 0
+        ? rawMem.preferences
+        : defaultMemory.preferences,
+    facts: mergedOwnerFacts,
     lastRoutineGreetingDate: rawMem?.lastRoutineGreetingDate,
     lastVisitDate: rawMem?.lastVisitDate,
     lastActiveProjectName: rawMem?.lastActiveProjectName,
     lastTopic: rawMem?.lastTopic,
+    likedTracks: Array.isArray(rawMem?.likedTracks) ? rawMem.likedTracks : [],
+    smartDevices: rawMem?.smartDevices || defaultMemory.smartDevices,
+    lastDomain: rawMem?.lastDomain || 'general',
   };
 
   // Remove eventual cache antigo de Luanda/Angola/Matola
@@ -294,7 +348,8 @@ function normalizeJarvisAction(act: any): JarvisActionPayload {
  * que devem correr em segundo plano no Builder sem sair do Modo Assistente.
  */
 export function isFullBuilderAppRequest(prompt: string): boolean {
-  const lower = String(prompt || '')
+  const normalized = normalizePhoneticVoiceTranscript(String(prompt || ''));
+  const lower = normalized
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -319,6 +374,139 @@ export function isFullBuilderAppRequest(prompt: string): boolean {
   return /\b(faz|fazer|cria|criar|constroi|construir|desenvolve|desenvolver|monta|montar|gera|gerar)\s+(um|uma)?\s*(novo\s+|nova\s+)?(site|website|web\s*site|pagina\s+web|landing\s*page|loja(\s+online|\s+virtual|\s+de\s+vendas)?|e-?commerce|site\s+de\s+vendas|aplicativo|app(\s+web|\s+mobile)?|aplicacao|sistema(\s+web|\s+de\s+\w+)?|plataforma|portal|portfolio|jogo|game|dashboard\s+completo)\b/i.test(
     lower
   );
+}
+
+export function buildQuickElectricalCalcStageAction(params: {
+  voltage?: number;
+  current?: number;
+  resistance?: number;
+  power?: number;
+  reconstructed?: string;
+}): {
+  action: JarvisActionPayload;
+  voiceReply: string;
+  chatSummary: string;
+} {
+  let V = params.voltage;
+  let I = params.current;
+  let R = params.resistance;
+  let P = params.power;
+
+  const fmt = (n: number) => (Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toString().replace('.', ','));
+
+  if (V !== undefined && I !== undefined) {
+    P = V * I;
+    R = I > 0 ? V / I : undefined;
+    const kw = P / 1000;
+    const suggestedBreaker = I <= 10 ? 10 : I <= 16 ? 16 : I <= 20 ? 20 : I <= 25 ? 25 : I <= 32 ? 32 : I <= 40 ? 40 : 63;
+    const suggestedCable = I <= 15 ? '1,5 mm²' : I <= 21 ? '2,5 mm²' : I <= 28 ? '4 mm²' : I <= 36 ? '6 mm²' : '10 mm²';
+
+    return {
+      action: {
+        type: 'show_math',
+        title: `Cálculo Elétrico: ${fmt(V)} V × ${fmt(I)} A`,
+        problem: `Dados: Tensão V = ${fmt(V)} V e Corrente I = ${fmt(I)} A`,
+        formulas: ['P = V \\cdot I', 'R = \\frac{V}{I}'],
+        steps: [
+          {
+            step: '1. Potência Ativa (P)',
+            expression: `P = ${V} \\cdot ${I} = ${Number(P.toFixed(2))}\\text{ W} = ${Number(kw.toFixed(2))}\\text{ kW}`,
+            explanation: `Multiplicamos ${fmt(V)} volts por ${fmt(I)} amperes para obter ${fmt(P)} watts (${fmt(kw)} kW).`,
+          },
+          ...(R !== undefined
+            ? [
+                {
+                  step: '2. Resistência Equivalente (Lei de Ohm)',
+                  expression: `R = \\frac{${V}}{${I}} = ${Number(R.toFixed(2))}\\,\\Omega`,
+                  explanation: `Pela Lei de Ohm, a resistência da carga é ${fmt(R)} ohms.`,
+                },
+              ]
+            : []),
+          {
+            step: '3. Dimensionamento de Proteção Sugerido',
+            expression: `\\text{Disjuntor } \\ge ${suggestedBreaker}\\text{ A} \\quad | \\quad \\text{Cabo } \\ge \\text{${suggestedCable}}`,
+            explanation: `Referência prática para circuito monofásico em cobre (verificar distância e queda de tensão).`,
+          },
+        ],
+        finalAnswer: `P = ${fmt(P)}\\text{ W} (${fmt(kw)}\\text{ kW}) \\quad | \\quad R = ${R !== undefined ? fmt(R) : '--'}\\,\\Omega`,
+        notes: `Calculado com base na Lei de Ohm e Potência Elétrica. ${params.reconstructed || ''}`.trim(),
+      },
+      voiceReply: `${fmt(V)} volts vezes ${fmt(I)} amperes dá ${fmt(P)} watts, ou ${fmt(kw)} quilowatts, com resistência de ${R !== undefined ? fmt(R) : 'zero'} ohms. Já deixei os passos no preview.`,
+      chatSummary: `Cálculo elétrico: ${fmt(V)}V × ${fmt(I)}A = ${fmt(P)}W (${fmt(kw)}kW).`,
+    };
+  }
+
+  if (V !== undefined && R !== undefined && R > 0) {
+    I = V / R;
+    P = V * I;
+    return {
+      action: {
+        type: 'show_math',
+        title: `Lei de Ohm: ${fmt(V)} V / ${fmt(R)} Ω`,
+        problem: `Dados: Tensão V = ${fmt(V)} V e Resistência R = ${fmt(R)} Ω`,
+        formulas: ['I = \\frac{V}{R}', 'P = V \\cdot I'],
+        steps: [
+          {
+            step: '1. Corrente Elétrica (I)',
+            expression: `I = \\frac{${V}}{${R}} = ${Number(I.toFixed(2))}\\text{ A}`,
+            explanation: `Dividimos a tensão pela resistência para achar ${fmt(I)} amperes.`,
+          },
+          {
+            step: '2. Potência Dissipada (P)',
+            expression: `P = ${V} \\cdot ${Number(I.toFixed(2))} = ${Number(P.toFixed(2))}\\text{ W}`,
+            explanation: `A carga consome ${fmt(P)} watts.`,
+          },
+        ],
+        finalAnswer: `I = ${fmt(I)}\\text{ A} \\quad | \\quad P = ${fmt(P)}\\text{ W}`,
+      },
+      voiceReply: `Com ${fmt(V)} volts e ${fmt(R)} ohms, a corrente é ${fmt(I)} amperes e a potência dá ${fmt(P)} watts.`,
+      chatSummary: `Lei de Ohm: ${fmt(V)}V / ${fmt(R)}Ω = ${fmt(I)}A (${fmt(P)}W).`,
+    };
+  }
+
+  if (P !== undefined && V !== undefined && V > 0) {
+    I = P / V;
+    R = I > 0 ? V / I : undefined;
+    return {
+      action: {
+        type: 'show_math',
+        title: `Corrente Elétrica: ${fmt(P)} W em ${fmt(V)} V`,
+        problem: `Dados: Potência P = ${fmt(P)} W e Tensão V = ${fmt(V)} V`,
+        formulas: ['I = \\frac{P}{V}', 'R = \\frac{V}{I}'],
+        steps: [
+          {
+            step: '1. Corrente (I)',
+            expression: `I = \\frac{${P}}{${V}} = ${Number(I.toFixed(2))}\\text{ A}`,
+            explanation: `Dividindo a potência pela tensão obtemos ${fmt(I)} amperes.`,
+          },
+          ...(R !== undefined
+            ? [
+                {
+                  step: '2. Resistência (R)',
+                  expression: `R = \\frac{${V}}{${Number(I.toFixed(2))}} = ${Number(R.toFixed(2))}\\,\\Omega`,
+                  explanation: `Impedância equivalente aproximada.`,
+                },
+              ]
+            : []),
+        ],
+        finalAnswer: `I = ${fmt(I)}\\text{ A}`,
+      },
+      voiceReply: `${fmt(P)} watts a ${fmt(V)} volts puxa ${fmt(I)} amperes.`,
+      chatSummary: `Corrente: ${fmt(P)}W / ${fmt(V)}V = ${fmt(I)}A.`,
+    };
+  }
+
+  return {
+    action: {
+      type: 'show_math',
+      title: 'Lei de Ohm e Potência Elétrica',
+      formulas: ['V = R \\cdot I', 'P = V \\cdot I'],
+      steps: [],
+      finalAnswer: 'P = V \\cdot I',
+    },
+    voiceReply: 'Qual é a tensão e a corrente para eu calcular?',
+    chatSummary: 'Fórmulas elétricas no preview.',
+  };
 }
 
 function detect3DShapeIntent(text: string): JarvisActionPayload['shape'] | null {
@@ -546,6 +734,8 @@ export async function askJarvisAssistantStream(
     activeDocument?: JarvisDocumentItem | null;
     builderContext?: JarvisBuilderContext | null;
     userIdentity?: SaraUserIdentityPayload | null;
+    recentUserUtterances?: string[];
+    lastDomain?: string;
   },
   callbacks?: JarvisStreamCallbacks
 ): Promise<JarvisAssistantResponse> {
@@ -566,6 +756,8 @@ export async function askJarvisAssistantStream(
     mediaState: params.mediaState || null,
     builderContext: params.builderContext || null,
     userIdentity: params.userIdentity || null,
+    recentUserUtterances: params.recentUserUtterances?.slice(-5) || [],
+    lastDomain: params.lastDomain || params.memory?.lastDomain || 'general',
     documentAttachment: params.documentAttachment
       ? {
           name: params.documentAttachment.name,
@@ -781,6 +973,8 @@ export async function askJarvisAssistant(params: {
   activeDocument?: JarvisDocumentItem | null;
   builderContext?: JarvisBuilderContext | null;
   userIdentity?: SaraUserIdentityPayload | null;
+  recentUserUtterances?: string[];
+  lastDomain?: string;
 }): Promise<JarvisAssistantResponse> {
   return askJarvisAssistantStream(params);
 }

@@ -33,8 +33,11 @@ export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA BIULDER**, uma arquiteta
    - Ações disponíveis em \`type\`: \`open_editor\`, \`open_editor_fullscreen\`, \`open_files\`, \`open_console\`, \`show_preview\`, \`open_preview_fullscreen\`, \`close_preview_fullscreen\`, \`toggle_presentation\`, \`close_overlay\`, \`preview_mobile\`, \`preview_tablet\`, \`preview_desktop\`, \`open_projects\`, \`open_settings\`, \`open_deploy\`, \`create_project\`, \`open_project\`, \`delete_project\`, \`rename_project\`, \`duplicate_project\`, \`save_project\`, \`focus_file\`, \`delete_file\`, \`refresh_preview\`, \`undo_version\`, \`download_zip\`, \`push_github\`, \`clear_chat\`, \`switch_manual\`, \`switch_automatic\`, \`pause_mission\`, \`resume_mission\`, \`open_report\`, \`fix_error\`.
    - Se o pedido combinar diálogo + ação (ex.: "apaga o projeto teste e abre o editor grande"), emite TODAS as ações em \`<SARA_ACTIONS>\` e responde com naturalidade!
 
-3. ENTENDIMENTO INTELIGENTE E DISAMBIGUAÇÃO FONÉTICA:
-   - Os pedidos por voz podem ter pequenas falhas fonéticas. Interpreta sempre pela intenção lógica no contexto do projeto e ecrã atuais.
+3. ENTENDIMENTO INTELIGENTE, DETETIVE DE VOZ E RECONSTRUÇÃO SILENCIOSA (5 PASSOS):
+   - A voz do utilizador passa pelo SpeechRecognition do Google e API, podendo chegar com letras trocadas, palavras cortadas, gírias moçambicanas ou sem verbo (ex.: "será abre bilder", "faz seiti vendas", "calcu 220 10").
+   - PROIBIDO dizeres "não entendi", "não percebi" ou "repete" por causa de distorção! Age como DETETIVE em silêncio: limpa o ruído, corrige erros fonéticos, liga com as últimas 5 falas e o projeto/ecrã atual, reescreve na cabeça e executa direto.
+   - PROIBIDO TOTAL de frases robóticas como "já vou", "a processar", "vou fazer isso agora", "estou a preparar".
+   - Só se a frase tiver 0% de sentido mesmo após verificar contexto, pergunta espontaneamente: "Epa, essa chegou toda torta, era música, site ou luz?".
 
 4. DESIGN VISUAL MODERNO DE ELITE, GRÁFICOS PROFISSIONAIS E MULTI-LINGUAGEM:
    - Cria interfaces com estética contemporânea de nível de estúdio: equilíbrio cromático 60-30-10, contraste limpo (nunca blocos genéricos de néon exagerado ou cartões aninhados sem função), tipografia expressiva (\`Outfit\`, \`Plus Jakarta Sans\`, \`DM Sans\`, \`Playfair Display\`, \`JetBrains Mono\` com \`tabular-nums\` para KPIs/tabelas), hierarquia visual clara e layout 100% responsivo (PC, Tablet e Telemóvel).
@@ -100,7 +103,13 @@ export function buildIdentityAndSecrecyInstruction(userIdentity) {
   const identityRule = isOwner
     ? `\n\n[IDENTIDADE DO UTILIZADOR ATUAL — DONO & ADMIN MÁXIMO]:
 - Estás a falar diretamente com o teu criador e dono único: Eletro-Júnior (Eletro-Jr / Senhor Júnior / chefe).
-- Mantém a proximidade, calor humano e parceria total de cofundadora com Eletro-Júnior.`
+- Mantém a proximidade, calor humano e parceria total de cofundadora com Eletro-Júnior.
+- MEMÓRIA PERSISTENTE DO DONO (USO EXCLUSIVO COM O DONO — NUNCA PARTILHAR COM TERCEIROS):
+  * Identidade: Eletro-Jr, 24 anos, Moçambique (Inhambane Cidade / Matola).
+  * Área técnica: estudante de Eletricidade Industrial no IICEM — domina tensão, corrente, potência, Lei de Ohm, disjuntores, secção de cabos, motores mono/trifásicos e EDM.
+  * Comunicação: fala português moçambicano rápido com gírias locais (Inhambane: maningue, bué, bazar, fixa, tá-se bem, tá a bater, cena, papo, matrecar). Responde à altura com naturalidade.
+  * Música preferida (quando não especificar género/artista): Amapiano, Afro House, Marrabenta e Kizomba.
+  * Preferências de fluxo: "faz um site/app/loja/jogo" -> Builder em 2.º plano | "explica" -> voz completa + preview | "calcula" -> passo a passo com fórmula e resultado.`
     : `\n\n[IDENTIDADE DO UTILIZADOR ATUAL — UTILIZADOR COMUM / CONVIDADO]:
 - O utilizador atual chama-se "${callName}".
 - PROIBIDO ABSOLUTO chamar este utilizador de "Eletro-Jr", "Eletro-Júnior", "Senhor Júnior" ou "chefe". Se usares nome, usa apenas "${callName}".
@@ -220,7 +229,10 @@ export function isRetryableHttpStatus(status, msg = '') {
   );
 }
 
-export function formatFriendlyEdgeError(err) {
+export function formatFriendlyEdgeError(err, isOwner = false) {
+  if (!isOwner) {
+    return 'Estou a ajustar o sistema em segundo plano. Tenta novamente em instantes.';
+  }
   const msg = String(err?.message || '');
   if (msg.includes('GEMINI_API_KEY')) {
     return 'Chave da API Gemini não configurada nas variáveis de ambiente (GEMINI_API_KEY).';
@@ -446,11 +458,14 @@ REGRAS ESTRITAS:
 - Localização real: Inhambane Cidade, Inhambane, Moçambique (ou coordenadas enviadas). PROIBIDO citar Luanda, Angola ou Matola como cidade do utilizador.
 - ZERO dados falsos/inventados: se não conseguires buscar clima ou média real, informa que está indisponível.
 - 3 níveis de explicação: simples (criança de 10 anos com metáfora), médio (claro e prático com exemplo), complexo/técnico (professor universitário com equações).
-- Entende gírias de Moçambique (txilar, bazar, mambo, cena, kamba, bué, fixe, maningue).
+- Entende gírias de Moçambique/Inhambane (ya, pá, maningue, bué, bazar, curtir, bater, fixe, nice, top, dope, tá a bater, tipo, estás a ver, jura, sério, epa, ih, deixa lá, tá-se bem, vou bazar, não tá a dar, chama, bora, papo, cena, gajo, gaja, comboio, matrecar, txilar, mambo, kamba) e vocabulário completo de Eletricidade Industrial (tensão V, corrente A, potência W/kW/kVA, resistência Ohms, Lei de Ohm, queda de tensão, secção de cabo, disjuntor, fusível, contactor, relé, motor mono/trifásico, 220V/380V/230V/400V, curto-circuito, apagão, sobrecarga, aterramento, fase, neutro, quadro elétrico, inversor, painel solar, multímetro, alicate amperímetro, fator de potência, kWh, EDM).
+- DETETIVE DE VOZ & RECONSTRUÇÃO SILENCIOSA (5 PASSOS):
+  1. Limpa ruído/gaguez; 2. Corrige distorções Google/API (será/cara/zara/sala/cera = Sara; painer/pano = painel; bilder/bulder = builder; seiti/saiti = site; calcu = calcula; lujo = luz; inhanbane = Inhambane); 3. Liga com as últimas 5 falas + estado atual; 4. Reescreve silenciosamente; 5. Executa e confirma de forma espontânea. PROIBIDO dizer "não entendi", "não percebi", "repete" ou "não tenho essa informação" por causa de ruído. Só se tiver 0% de sentido após contexto, pergunta: "Epa, essa chegou toda torta, era música, site ou luz?".
 - CÓDIGOS DE AÇÃO [SISTEMA] vs [CONTEÚDO] vs [PERGUNTA]:
-  * Se for ação de sistema (abre editor, abre painel/menu, fecha painel/menu, abre agenda/música/docs/tarefas, pausa música, continua/retoma música, fecha música, aumenta/diminui volume, fecha painel atual, volta), NÃO cries nada nem pesquises no YouTube — usa open_panel, close_panel, pause_music, resume_music, close_media, set_volume, close_stage, open_module ou switch_mode respeitando o ESTADO ATUAL.
+  * Se for ação de sistema (abre editor, abre painel/menu, fecha painel/menu, abre agenda/música/docs/tarefas, pausa música, continua/retoma música, próxima/anterior/mudo/aleatório/loop/favoritar/identificar música, fecha música, aumenta/diminui volume, fecha painel atual, volta), NÃO cries nada nem pesquises no YouTube — usa open_panel, close_panel, pause_music, resume_music, next_music, prev_music, mute_music, toggle_shuffle, toggle_loop, like_music, identify_music, close_media, set_volume, close_stage, open_module ou switch_mode respeitando o ESTADO ATUAL. Se o dono pedir para tocar música sem especificar género, sugere Amapiano/Afro House/Marrabenta/Kizomba!
   * SÓLIDOS 3D (cubo, paralelepípedo, esfera, cilindro, cone, pirâmide, prisma, octaedro, toro, átomo) -> OBRIGATÓRIO emitir {"type":"show_3d","title":"...","shape":"cube|cuboid|sphere|cylinder|cone|pyramid|prism|octahedron|torus|atom","dimensions":{"lado":5},"unit":"cm","formulas":[...],"steps":[...],"finalAnswer":"..."} para renderizar em 3D real no Preview + cálculos em LaTeX em baixo!
   * Se for figura 2D, matemática, explicação conceitual, desenho, gráfico, vídeo ou música: mostra SEMPRE no Preview via ações (show_svg com SVG colorido visível + formulas/steps/finalAnswer, show_math com LaTeX para KaTeX/MathJax, show_explanation com visualSvg+sections+formula+exampleBody, play_video, play_music, show_chart, show_html).
+  * ACESSO LOCAL + INTERNET (PC & Telemóvel): tu TENS acesso autorizado ao armazenamento local do dispositivo para tocar músicas/vídeos, abrir fotos e ler Word/PowerPoint/Excel/PDF/TXT localmente 100% offline, mantendo o YouTube para pedidos da internet (sem pista "meu/minha/local/offline"). PROIBIDO dizer "não consigo aceder ao teu PC / telemóvel" ou "não entendi, repete".
 - NOVAS AÇÕES & CAPACIDADES ADICIONAIS:
   * Testes com correção imediata e explicação -> {"type":"show_quiz","title":"...","subtitle":"...","questions":[{"question":"...","options":["..."],"correctIndex":0,"explanation":"..."}]}
   * Flashcards interativos -> {"type":"show_flashcards","title":"...","subtitle":"...","cards":[{"front":"...","back":"...","hint":"...","lang":"pt-PT|en-US|fr-FR"}]}
@@ -686,6 +701,8 @@ export function buildJarvisEdgeContents(body) {
     telemetry = null,
     mediaState = null,
     builderContext = null,
+    recentUserUtterances = [],
+    lastDomain = 'general',
     _liveFxBlock = null,
     _liveNewsBlock = null,
     documentAttachment = null,
@@ -734,7 +751,7 @@ export function buildJarvisEdgeContents(body) {
     : '';
   const mediaStr = mediaState
     ? mediaState.hasActiveMedia
-      ? `PLAYER ATIVO: ${mediaState.mediaKind} "${mediaState.mediaTitle}" (${mediaState.isPaused ? 'PAUSADO' : 'A TOCAR'}, vol ${mediaState.volume ?? 80}%)`
+      ? `PLAYER ATIVO: ${mediaState.mediaKind} "${mediaState.mediaTitle}"${mediaState.mediaArtist ? ` (${mediaState.mediaArtist})` : ''} (${mediaState.isPaused ? 'PAUSADO' : 'A TOCAR'}, vol ${mediaState.volume ?? 80}%, mudo=${Boolean(mediaState.isMuted)}, shuffle=${Boolean(mediaState.isShuffled)}, loop=${Boolean(mediaState.isLooped)})`
       : mediaState.activeStageKind
       ? `PREVIEW ATIVO: ${mediaState.activeStageKind} "${mediaState.activeStageTitle || ''}"`
       : 'PREVIEW LIMPO'
@@ -746,11 +763,15 @@ export function buildJarvisEdgeContents(body) {
           : ''
       }`
     : '';
+  const recentStr =
+    Array.isArray(recentUserUtterances) && recentUserUtterances.length > 0
+      ? `\nÚLTIMAS 5 FALAS (DOMÍNIO=${lastDomain || 'general'}): ${recentUserUtterances.slice(-5).join(' | ')}`
+      : '';
   const fxStr = _liveFxBlock ? `\n[CÂMBIO REAL AO VIVO]\n${_liveFxBlock}` : '';
   const newsStr = _liveNewsBlock ? `\n[NOTÍCIAS REAIS AO VIVO]\n${_liveNewsBlock}` : '';
 
   parts.push({
-    text: `DATA/HORA: ${nowIso}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}${builderStr}${fxStr}${newsStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
+    text: `DATA/HORA: ${nowIso}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}${builderStr}${recentStr}${fxStr}${newsStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
   });
   contents.push({ role: 'user', parts });
   return contents;

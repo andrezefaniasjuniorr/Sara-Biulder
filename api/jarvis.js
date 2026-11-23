@@ -39,8 +39,9 @@ export default async function handler(req, res) {
     return res.status(200).json(result);
   } catch (err) {
     console.error('Erro /api/jarvis:', err);
+    const isOwner = Boolean(req.body?.userIdentity?.isOwner);
     return res.status(err?.status === 403 ? 403 : 500).json({
-      error: formatFriendlyAiError(err),
+      error: formatFriendlyAiError(err, isOwner),
     });
   }
 }

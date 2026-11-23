@@ -1105,7 +1105,7 @@ export function evaluateNonOwnerGuard(
       };
     }
     if (
-      /(onde\s+(ele\s+)?(mora|vive|esta|fica)|cidade|bairro|endereco|escola|telefone|whatsapp|telemovel|numero|email|e-mail|instagram|facebook|tiktok|familia|pai|mae|irmao)/i.test(
+      /(onde\s+(ele\s+)?(mora|vive|esta|fica|estuda)|cidade|bairro|endereco|escola|instituto|faculdade|telefone|whatsapp|telemovel|numero|email|e-mail|instagram|facebook|tiktok|familia|pai|mae|irmao)/i.test(
         lower
       )
     ) {

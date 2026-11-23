@@ -518,7 +518,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
               {isSaraSpeaking
                 ? 'Voz em 2.º plano · Sara a responder em áudio'
                 : isVoiceProcessing
-                ? 'Voz em 2.º plano · A processar comando...'
+                ? 'Voz em 2.º plano · A executar comando...'
                 : 'Voz em 2.º plano · Escuta ativa'}
             </span>
           </div>

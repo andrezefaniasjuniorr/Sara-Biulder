@@ -23,6 +23,7 @@ import {
   EyeOff,
   FileText,
   Focus,
+  FolderOpen,
   Globe,
   Hammer,
   HardDrive,
@@ -60,6 +61,7 @@ import type {
   JarvisAlarmItem,
   JarvisConversationEntry,
   JarvisDocumentItem,
+  JarvisDomainTopic,
   JarvisHeadMood,
   JarvisHudLiveFeed,
   JarvisMediaStateContext,
@@ -74,6 +76,7 @@ import type {
 } from '../../types/jarvis';
 import {
   askJarvisAssistantStream,
+  buildQuickElectricalCalcStageAction,
   DEFAULT_JARVIS_MEMORY,
   fetchLiveHudFeed,
   fetchLiveWeather,
@@ -105,9 +108,12 @@ import type {
 import {
   getBackgroundBuildAckSpeech,
   getVoiceReadingStatus,
+  inferDomainFromText,
   interruptSaraAndListen,
+  isSaraCallMode,
   parseVoiceCommand,
   pauseVoiceReading,
+  reconstructDistortedVoiceInput,
   resumeVoiceReading,
   speakAsSara,
   startVoiceReading,
@@ -116,8 +122,24 @@ import {
   type VoiceCommandAction,
   type VoiceReadingStatus,
 } from '../../utils/voiceService';
+import {
+  buildLocalTrackFromFile,
+  createLocalBlobUrl,
+  indexSelectedFileList,
+  isMobileDevice,
+  parseLocalDocumentForReader,
+  reconnectStoredDirectoryHandle,
+  requestDirectoryPermissionAndIndex,
+  restoreLocalLibrary,
+  revokeLocalStorageAccess,
+  searchLocalFiles,
+  supportsDirectoryPicker,
+  triggerDeviceOfficeAppAttempt,
+} from '../../services/localMediaService';
+import type { LocalDeviceFile } from '../../types/jarvis';
 import { SaraJarvisHead } from './SaraJarvisHead';
 import { JarvisStageRenderer } from './JarvisStageRenderer';
+import type { LocalFullscreenSignal, LocalSeekSignal } from './LocalMediaStageView';
 
 interface JarvisWorkspaceProps {
   session: SaraSession;
@@ -128,6 +150,7 @@ interface JarvisWorkspaceProps {
   isListening: boolean;
   isSaraSpeaking: boolean;
   isSaraSilenced: boolean;
+  isCallMode?: boolean;
   firebaseUserUid?: string;
   activeBuilderProjectName?: string;
   activeBuilderFiles?: string[];
@@ -155,6 +178,44 @@ interface JarvisWorkspaceProps {
     close: () => void;
     adjustVolume: (delta: number) => number;
     closeStage: () => void;
+    next: () => void;
+    prev: () => void;
+    toggleMute: () => boolean;
+    toggleShuffle: () => boolean;
+    toggleLoop: () => boolean;
+    likeCurrent: () => { liked: boolean; title?: string };
+    identifyCurrent: () => { title?: string; artist?: string } | null;
+    playGenreOrQuery: (query: string) => Promise<void>;
+    applySmartHome: (payload: {
+      device: 'luz' | 'ventoinha' | 'ac' | 'porta' | 'tomada' | 'modo';
+      state: 'on' | 'off' | 'scene';
+      room?: string;
+      sceneName?: string;
+    }) => void;
+    showElectricCalc: (params: {
+      voltage?: number;
+      current?: number;
+      resistance?: number;
+      power?: number;
+      reconstructed?: string;
+    }) => string;
+    seekBy: (seconds: number) => void;
+    setFullscreen: (enabled: boolean) => void;
+    playLocalMedia: (opts: {
+      kind: 'music' | 'video' | 'image' | 'audio' | 'any';
+      query?: string;
+      folderOrDate?: string;
+    }) => Promise<string>;
+    openLocalDocument: (opts: {
+      docCategory: 'pdf' | 'word' | 'ppt' | 'excel' | 'recent' | 'any';
+      query?: string;
+    }) => Promise<string>;
+    filterLocalLibrary: (opts: {
+      filter: 'all' | 'pdfs' | 'videos' | 'music' | 'images' | 'documents' | 'recents' | 'favorites';
+      query?: string;
+    }) => string;
+    switchMediaSource: (source: 'internet' | 'local') => string;
+    requestLocalPermission: () => void;
   } | null>;
   externalCommandRef: React.MutableRefObject<
     ((promptText: string, source?: 'voice' | 'text') => Promise<void>) | null
@@ -276,6 +337,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   isListening,
   isSaraSpeaking,
   isSaraSilenced,
+  isCallMode = false,
   activeBuilderProjectName,
   activeBuilderFiles,
   liveBuild,
@@ -300,8 +362,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   externalContinueRef,
 }) => {
   const initialBundle = useMemo(
-    () => loadJarvisLocalBundle(session.userId, session.callName, session.isGuest),
-    [session.userId, session.callName, session.isGuest]
+    () =>
+      loadJarvisLocalBundle(
+        session.userId,
+        session.callName,
+        session.isGuest,
+        session.isOwner
+      ),
+    [session.userId, session.callName, session.isGuest, session.isOwner]
   );
   const [activeModule, setActiveModule] = useState<JarvisModuleTab>('voz');
   const [readingStatus, setReadingStatus] = useState<VoiceReadingStatus>(() =>
@@ -328,6 +396,31 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const [mediaPaused, setMediaPaused] = useState(false);
   const [mediaVolume, setMediaVolume] = useState(80);
   const mediaVolumeRef = useRef(80);
+  const volumeBeforeMuteRef = useRef(80);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isShuffled, setIsShuffled] = useState(false);
+  const [isLooped, setIsLooped] = useState(false);
+
+  // Acesso Total Local (100% no dispositivo, offline-ready, só com permissão)
+  const [localFiles, setLocalFiles] = useState<LocalDeviceFile[]>([]);
+  const [localHasPermission, setLocalHasPermission] = useState(false);
+  const [localNeedsReconnect, setLocalNeedsReconnect] = useState(false);
+  const [localFolderLabel, setLocalFolderLabel] = useState('');
+  const [localIsMobile] = useState(() => isMobileDevice());
+  const [localSeekSignal, setLocalSeekSignal] = useState<LocalSeekSignal | null>(null);
+  const [localFullscreenSignal, setLocalFullscreenSignal] = useState<LocalFullscreenSignal | null>(null);
+  const localDirInputRef = useRef<HTMLInputElement | null>(null);
+  const localCatInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingLocalCommandRef = useRef<(() => Promise<void>) | null>(null);
+  const prevOnlineRef = useRef<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
+
+  const recentUserUtterancesRef = useRef<string[]>(
+    initialBundle.conversation
+      .filter((c) => c.sender === 'user')
+      .slice(-5)
+      .map((c) => c.text)
+  );
+  const lastDomainRef = useRef<JarvisDomainTopic>(initialBundle.memory.lastDomain || 'general');
   const [mood, setMood] = useState<JarvisHeadMood>('idle');
   const [isThinking, setIsThinking] = useState(false);
   const [streamingReply, setStreamingReply] = useState<string | null>(null);
@@ -520,18 +613,60 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     mediaVolumeRef.current = mediaVolume;
   }, [mediaVolume]);
 
+  const localFavoritesSet = useMemo(
+    () => new Set<string>(memory.localFavorites || []),
+    [memory.localFavorites]
+  );
+
+  // Hidrata biblioteca local autorizada no navegador (zero nuvem)
+  useEffect(() => {
+    let active = true;
+    restoreLocalLibrary(session.userId, session.isGuest)
+      .then((snap) => {
+        if (!active) return;
+        setLocalHasPermission(snap.hasPermission);
+        setLocalNeedsReconnect(snap.needsReconnect);
+        setLocalFolderLabel(snap.folderLabel);
+        setLocalFiles(snap.files);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [session.userId, session.isGuest]);
+
   const currentMediaState = useMemo<JarvisMediaStateContext>(() => {
     const isMedia = stageContent?.kind === 'music' || stageContent?.kind === 'video';
+    const currentTrackId = isMedia ? stageContent.track?.id : undefined;
+    const isLiked = Boolean(
+      (currentTrackId && memory.likedTracks?.some((tr) => tr.id === currentTrackId)) ||
+        (currentTrackId && localFavoritesSet.has(currentTrackId))
+    );
     return {
       hasActiveMedia: isMedia,
       mediaKind: isMedia ? stageContent.kind : undefined,
+      mediaSource: isMedia ? stageContent.track?.source : undefined,
       mediaTitle: isMedia ? stageContent.title : undefined,
+      mediaArtist: isMedia ? stageContent.track?.artist : undefined,
       isPaused: isMedia ? mediaPaused : false,
       volume: mediaVolume,
+      isMuted,
+      isShuffled,
+      isLooped,
+      isLiked,
       activeStageKind: stageContent?.kind,
       activeStageTitle: stageContent?.title,
     };
-  }, [stageContent, mediaPaused, mediaVolume]);
+  }, [
+    stageContent,
+    mediaPaused,
+    mediaVolume,
+    isMuted,
+    isShuffled,
+    isLooped,
+    memory.likedTracks,
+    localFavoritesSet,
+  ]);
 
   useEffect(() => {
     setMusicElapsedSec(0);
@@ -564,6 +699,590 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     onStageStateChange?.(currentMediaState);
   }, [currentMediaState, onStageStateChange]);
 
+  const markLocalFileOpened = useCallback((file: LocalDeviceFile) => {
+    const nowIso = new Date().toISOString();
+    setLocalFiles((prev) =>
+      prev.map((f) => (f.id === file.id ? { ...f, lastOpenedAt: nowIso } : f))
+    );
+    setMemory((prev) => {
+      const nextRecents = [
+        {
+          id: file.id,
+          name: file.name,
+          relativePath: file.relativePath,
+          kind: file.kind,
+          lastOpenedAt: nowIso,
+        },
+        ...(prev.localRecents || []).filter((r) => r.id !== file.id),
+      ].slice(0, 30);
+      return { ...prev, localRecents: nextRecents };
+    });
+  }, []);
+
+  const toggleLocalFavoriteInternal = useCallback((fileOrPath: LocalDeviceFile | string) => {
+    const key = typeof fileOrPath === 'string' ? fileOrPath : fileOrPath.relativePath;
+    const idKey = typeof fileOrPath === 'string' ? fileOrPath : fileOrPath.id;
+    let added = false;
+    setMemory((prev) => {
+      const curr = new Set(prev.localFavorites || []);
+      if (curr.has(key) || curr.has(idKey)) {
+        curr.delete(key);
+        curr.delete(idKey);
+        added = false;
+      } else {
+        curr.add(key);
+        if (idKey !== key) curr.add(idKey);
+        added = true;
+      }
+      return { ...prev, localFavorites: Array.from(curr).slice(0, 120) };
+    });
+    return added;
+  }, []);
+
+  const openLocalFileOnStage = useCallback(
+    async (file: LocalDeviceFile, fallbackFilesPool?: LocalDeviceFile[]): Promise<string> => {
+      if (file.kind === 'music' || file.kind === 'audio' || file.kind === 'video') {
+        const track = await buildLocalTrackFromFile(session.userId, file);
+        if (!track) {
+          onNotify('Não foi possível abrir este ficheiro.');
+          return 'Não foi possível abrir este ficheiro.';
+        }
+        markLocalFileOpened(file);
+        setMediaPaused(false);
+        setStageContent({
+          id: `stg_local_${file.kind}_${file.id}_${Date.now()}`,
+          kind: file.kind === 'video' ? 'video' : 'music',
+          title: track.title,
+          track,
+        });
+        return `A reproduzir ${track.title}.`;
+      }
+
+      if (file.kind === 'image') {
+        const pool = (fallbackFilesPool || localFiles).filter((f) => f.kind === 'image');
+        const list = pool.length > 0 ? pool : [file];
+        const items: Array<{
+          id: string;
+          name: string;
+          url: string;
+          folderPath: string;
+          lastModified: number;
+          size: number;
+          relativePath: string;
+        }> = [];
+        for (const img of list.slice(0, 80)) {
+          const url = await createLocalBlobUrl(session.userId, img.id);
+          if (url) {
+            items.push({
+              id: img.id,
+              name: img.name,
+              url,
+              folderPath: img.folderPath,
+              lastModified: img.lastModified,
+              size: img.size,
+              relativePath: img.relativePath,
+            });
+          }
+        }
+        if (items.length === 0) {
+          onNotify('Não foi possível abrir este ficheiro.');
+          return 'Não foi possível abrir este ficheiro.';
+        }
+        markLocalFileOpened(file);
+        const activeIdx = Math.max(
+          0,
+          items.findIndex((i) => i.id === file.id)
+        );
+        setStageContent({
+          id: `stg_local_gallery_${Date.now()}`,
+          kind: 'local_gallery',
+          title: `Galeria Local (${items.length})`,
+          items,
+          activeIndex: activeIdx,
+        });
+        return `A mostrar ${items.length} foto${items.length > 1 ? 's' : ''} locais.`;
+      }
+
+      if (file.kind === 'document') {
+        const parsed = await parseLocalDocumentForReader(session.userId, file);
+        if (!parsed) {
+          onNotify('Não foi possível abrir este ficheiro.');
+          return 'Não foi possível abrir este ficheiro.';
+        }
+        markLocalFileOpened(file);
+        setStageContent({
+          id: `stg_local_doc_${file.id}_${Date.now()}`,
+          kind: 'document',
+          title: parsed.title,
+          mimeType: parsed.mimeType,
+          summary: parsed.summary,
+          keyPoints: parsed.keyPoints,
+          extractedData: parsed.extractedData,
+          previewUrl: parsed.previewUrl,
+          rawText: parsed.rawText,
+          formattedHtml: parsed.formattedHtml,
+          slides: parsed.slides,
+          sheets: parsed.sheets,
+          fileExtension: parsed.fileExtension,
+          fileSizeBytes: parsed.fileSizeBytes,
+          lastOpenedAt: parsed.lastOpenedAt,
+          relativePath: parsed.relativePath,
+          isLocalDeviceFile: true,
+          localFileId: file.id,
+        });
+        return `Abri ${file.name} no leitor.`;
+      }
+
+      onNotify('Não foi possível abrir este ficheiro.');
+      return 'Não foi possível abrir este ficheiro.';
+    },
+    [localFiles, markLocalFileOpened, onNotify, session.userId]
+  );
+
+  const openLocalPermissionPromptStage = useCallback(
+    (
+      filter: 'all' | 'music' | 'video' | 'image' | 'document' | 'pdfs' | 'recents' | 'favorites' = 'all',
+      subtitle?: string
+    ) => {
+      setStageContent({
+        id: `stg_local_perm_${Date.now()}`,
+        kind: 'local_browser',
+        title: 'Armazenamento Local Privado',
+        subtitle: subtitle || 'Autoriza uma pasta uma vez para acederes offline no teu dispositivo.',
+        filter,
+        needsPermission: true,
+        items: [],
+      });
+    },
+    []
+  );
+
+  const grantLocalPermissionInternal = useCallback(
+    async (category: 'all' | 'music' | 'video' | 'document' | 'image' = 'all') => {
+      if (!localIsMobile && category === 'all' && supportsDirectoryPicker()) {
+        const snap = await requestDirectoryPermissionAndIndex(session.userId, session.isGuest);
+        if (snap) {
+          setLocalHasPermission(snap.hasPermission);
+          setLocalNeedsReconnect(false);
+          setLocalFolderLabel(snap.folderLabel);
+          setLocalFiles(snap.files);
+          onNotify(`Pasta local ligada: ${snap.files.length} ficheiros indexados.`);
+          if (pendingLocalCommandRef.current) {
+            const run = pendingLocalCommandRef.current;
+            pendingLocalCommandRef.current = null;
+            await run();
+          } else {
+            setStageContent({
+              id: `stg_local_browser_${Date.now()}`,
+              kind: 'local_browser',
+              title: `Biblioteca Local · ${snap.folderLabel}`,
+              filter: 'all',
+              items: snap.files,
+            });
+          }
+          return;
+        }
+      }
+
+      // Fallback para celular / Safari / categorias específicas
+      if (category === 'all' && localDirInputRef.current) {
+        localDirInputRef.current.click();
+        return;
+      }
+      if (localCatInputRef.current) {
+        const acceptMap: Record<string, string> = {
+          all: 'audio/*,video/*,image/*,.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv',
+          music: '.mp3,.wav,.m4a,.ogg,.flac,.aac,.opus,audio/*',
+          video: '.mp4,.mkv,.mov,.avi,.webm,video/*',
+          image: '.jpg,.jpeg,.png,.webp,.gif,image/*',
+          document: '.pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.md',
+        };
+        localCatInputRef.current.accept = acceptMap[category] || acceptMap.all;
+        localCatInputRef.current.click();
+      }
+    },
+    [localIsMobile, onNotify, session.isGuest, session.userId]
+  );
+
+  const reconnectLocalPermissionInternal = useCallback(async () => {
+    const snap = await reconnectStoredDirectoryHandle(session.userId);
+    if (!snap) {
+      await grantLocalPermissionInternal('all');
+      return;
+    }
+    setLocalHasPermission(snap.hasPermission);
+    setLocalNeedsReconnect(false);
+    setLocalFolderLabel(snap.folderLabel);
+    setLocalFiles(snap.files);
+    onNotify(`Acesso local reativado: ${snap.files.length} ficheiros.`);
+    if (pendingLocalCommandRef.current) {
+      const run = pendingLocalCommandRef.current;
+      pendingLocalCommandRef.current = null;
+      await run();
+    } else {
+      setStageContent({
+        id: `stg_local_browser_${Date.now()}`,
+        kind: 'local_browser',
+        title: `Biblioteca Local · ${snap.folderLabel}`,
+        filter: 'all',
+        items: snap.files,
+      });
+    }
+  }, [grantLocalPermissionInternal, onNotify, session.userId]);
+
+  const handleLocalFileInputChange = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>, folderHint?: string) => {
+      const list = e.target.files;
+      if (!list || list.length === 0) return;
+      const snap = await indexSelectedFileList(list, session.userId, session.isGuest, folderHint);
+      e.target.value = '';
+      setLocalHasPermission(snap.hasPermission);
+      setLocalNeedsReconnect(false);
+      setLocalFolderLabel(snap.folderLabel);
+      setLocalFiles(snap.files);
+      onNotify(`Armazenamento local pronto (${snap.files.length} ficheiros).`);
+      if (pendingLocalCommandRef.current) {
+        const run = pendingLocalCommandRef.current;
+        pendingLocalCommandRef.current = null;
+        await run();
+      } else if (snap.files.length > 0) {
+        setStageContent({
+          id: `stg_local_browser_${Date.now()}`,
+          kind: 'local_browser',
+          title: `Biblioteca Local · ${snap.folderLabel}`,
+          filter: 'all',
+          items: snap.files,
+        });
+      }
+    },
+    [onNotify, session.isGuest, session.userId]
+  );
+
+  const playGenreOrQueryInternal = useCallback(
+    async (query: string) => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        onNotify('Ligação à internet indisponível.');
+        return;
+      }
+      const q = query.trim() || (session.isOwner ? 'Amapiano Afro House mix' : 'Afro House chill mix');
+      const tr = await searchYouTubeTrack(q, 'music');
+      if (!tr || !tr.videoId) {
+        onNotify('Não consegui encontrar essa música no YouTube agora.');
+        return;
+      }
+      setPlaylist((prev) => [tr, ...prev.filter((p) => p.id !== tr.id)]);
+      setCurrentTrackIndex(0);
+      setMediaPaused(false);
+      setStageContent({
+        id: `stg_music_${Date.now()}`,
+        kind: 'music',
+        title: tr.title,
+        track: tr,
+      });
+    },
+    [onNotify, session.isOwner]
+  );
+
+  const playNextTrackInternal = useCallback(() => {
+    if (stageContent?.kind === 'local_gallery' && stageContent.items.length > 0) {
+      const nextIdx = (stageContent.activeIndex + 1) % stageContent.items.length;
+      setStageContent({ ...stageContent, activeIndex: nextIdx });
+      return;
+    }
+
+    if (
+      (stageContent?.kind === 'music' || stageContent?.kind === 'video') &&
+      stageContent.track.source === 'local'
+    ) {
+      const isVid = stageContent.kind === 'video';
+      const localPool = localFiles.filter((f) =>
+        isVid ? f.kind === 'video' : f.kind === 'music' || f.kind === 'audio'
+      );
+      if (localPool.length === 0) return;
+      const curIdx = Math.max(
+        0,
+        localPool.findIndex((f) => f.id === stageContent.track.localFileId)
+      );
+      let nextIdx = (curIdx + 1) % localPool.length;
+      if (isShuffled && localPool.length > 1) {
+        nextIdx = Math.floor(Math.random() * localPool.length);
+        if (nextIdx === curIdx) nextIdx = (curIdx + 1) % localPool.length;
+      } else if (isLooped) {
+        nextIdx = curIdx;
+      }
+      void openLocalFileOnStage(localPool[nextIdx], localPool);
+      return;
+    }
+
+    if (playlist.length === 0) {
+      void playGenreOrQueryInternal(session.isOwner ? 'Amapiano Afro House mix' : 'Afro House mix');
+      return;
+    }
+    let nextIdx = (currentTrackIndex + 1) % playlist.length;
+    if (isShuffled && playlist.length > 1) {
+      let randIdx = Math.floor(Math.random() * playlist.length);
+      if (randIdx === currentTrackIndex) {
+        randIdx = (currentTrackIndex + 1) % playlist.length;
+      }
+      nextIdx = randIdx;
+    } else if (isLooped) {
+      nextIdx = currentTrackIndex;
+    }
+    const nextTrack = playlist[nextIdx];
+    if (!nextTrack) return;
+    setCurrentTrackIndex(nextIdx);
+    setMediaPaused(false);
+    setStageContent({
+      id: `stg_music_${nextTrack.id}_${Date.now()}`,
+      kind: 'music',
+      title: nextTrack.title,
+      track: nextTrack,
+    });
+  }, [
+    stageContent,
+    localFiles,
+    openLocalFileOnStage,
+    playlist,
+    currentTrackIndex,
+    isShuffled,
+    isLooped,
+    playGenreOrQueryInternal,
+    session.isOwner,
+  ]);
+
+  const playPrevTrackInternal = useCallback(() => {
+    if (stageContent?.kind === 'local_gallery' && stageContent.items.length > 0) {
+      const prevIdx =
+        (stageContent.activeIndex - 1 + stageContent.items.length) % stageContent.items.length;
+      setStageContent({ ...stageContent, activeIndex: prevIdx });
+      return;
+    }
+
+    if (
+      (stageContent?.kind === 'music' || stageContent?.kind === 'video') &&
+      stageContent.track.source === 'local'
+    ) {
+      const isVid = stageContent.kind === 'video';
+      const localPool = localFiles.filter((f) =>
+        isVid ? f.kind === 'video' : f.kind === 'music' || f.kind === 'audio'
+      );
+      if (localPool.length === 0) return;
+      const curIdx = Math.max(
+        0,
+        localPool.findIndex((f) => f.id === stageContent.track.localFileId)
+      );
+      const prevIdx = (curIdx - 1 + localPool.length) % localPool.length;
+      void openLocalFileOnStage(localPool[prevIdx], localPool);
+      return;
+    }
+
+    if (playlist.length === 0) return;
+    const prevIdx = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+    const prevTrack = playlist[prevIdx];
+    if (!prevTrack) return;
+    setCurrentTrackIndex(prevIdx);
+    setMediaPaused(false);
+    setStageContent({
+      id: `stg_music_${prevTrack.id}_${Date.now()}`,
+      kind: 'music',
+      title: prevTrack.title,
+      track: prevTrack,
+    });
+  }, [stageContent, localFiles, openLocalFileOnStage, playlist, currentTrackIndex]);
+
+  const playLocalMediaCommandInternal = useCallback(
+    async (opts: {
+      kind: 'music' | 'video' | 'image' | 'audio' | 'any';
+      query?: string;
+      folderOrDate?: string;
+    }): Promise<string> => {
+      if (!localHasPermission) {
+        pendingLocalCommandRef.current = async () => {
+          await playLocalMediaCommandInternal(opts);
+        };
+        openLocalPermissionPromptStage(
+          opts.kind === 'video' ? 'video' : opts.kind === 'image' ? 'image' : 'music',
+          'Permite o acesso ao armazenamento do dispositivo para acederes aos teus ficheiros locais.'
+        );
+        return localNeedsReconnect
+          ? 'Clica em Permitir Acesso ao Armazenamento para reabrir a tua pasta local.'
+          : 'Autoriza o acesso ao armazenamento no botão do painel.';
+      }
+
+      if (opts.kind === 'image') {
+        const imgs = searchLocalFiles(localFiles, {
+          kind: 'image',
+          folderOrDate: opts.folderOrDate,
+          query: opts.query,
+        });
+        if (imgs.length === 0) {
+          setStageContent({
+            id: `stg_local_browser_${Date.now()}`,
+            kind: 'local_browser',
+            title: 'Fotos Locais',
+            filter: 'image',
+            items: localFiles.filter((f) => f.kind === 'image'),
+          });
+          return 'Não encontrei fotos com esse critério.';
+        }
+        return await openLocalFileOnStage(imgs[0], imgs);
+      }
+
+      const matches = searchLocalFiles(localFiles, {
+        kind: opts.kind === 'any' ? 'music' : opts.kind,
+        query: opts.query,
+        folderOrDate: opts.folderOrDate,
+      });
+      const pool =
+        matches.length > 0
+          ? matches
+          : opts.kind === 'any'
+          ? searchLocalFiles(localFiles, { query: opts.query })
+          : [];
+
+      if (pool.length === 0) {
+        setStageContent({
+          id: `stg_local_browser_${Date.now()}`,
+          kind: 'local_browser',
+          title: 'Biblioteca Local',
+          filter: opts.kind === 'video' ? 'video' : 'music',
+          query: opts.query,
+          items: localFiles.filter((f) =>
+            opts.kind === 'video' ? f.kind === 'video' : f.kind === 'music' || f.kind === 'audio'
+          ),
+        });
+        return 'Não foi possível abrir este ficheiro.';
+      }
+      return await openLocalFileOnStage(pool[0], pool);
+    },
+    [localFiles, localHasPermission, localNeedsReconnect, openLocalFileOnStage, openLocalPermissionPromptStage]
+  );
+
+  const openLocalDocumentCommandInternal = useCallback(
+    async (opts: {
+      docCategory: 'pdf' | 'word' | 'ppt' | 'excel' | 'recent' | 'any';
+      query?: string;
+    }): Promise<string> => {
+      if (!localHasPermission) {
+        pendingLocalCommandRef.current = async () => {
+          await openLocalDocumentCommandInternal(opts);
+        };
+        openLocalPermissionPromptStage(
+          opts.docCategory === 'pdf' ? 'pdfs' : 'document',
+          'Permite o acesso ao armazenamento para abrir os teus documentos locais.'
+        );
+        return 'Autoriza o acesso ao armazenamento no botão do painel.';
+      }
+
+      const matches = searchLocalFiles(localFiles, {
+        kind: opts.query ? 'any' : 'document',
+        docCategory: opts.docCategory,
+        query: opts.query,
+        onlyRecents: opts.docCategory === 'recent',
+      });
+      const docPool =
+        matches.length > 0
+          ? matches
+          : searchLocalFiles(localFiles, {
+              kind: 'document',
+              docCategory: opts.docCategory,
+            });
+      if (docPool.length === 0) {
+        setStageContent({
+          id: `stg_local_docs_${Date.now()}`,
+          kind: 'local_browser',
+          title: 'Documentos Locais',
+          filter: 'document',
+          query: opts.query,
+          items: localFiles.filter((f) => f.kind === 'document'),
+        });
+        return 'Não foi possível abrir este ficheiro.';
+      }
+      return await openLocalFileOnStage(docPool[0], docPool);
+    },
+    [localFiles, localHasPermission, openLocalFileOnStage, openLocalPermissionPromptStage]
+  );
+
+  const filterLocalLibraryCommandInternal = useCallback(
+    (opts: {
+      filter: 'all' | 'pdfs' | 'videos' | 'music' | 'images' | 'documents' | 'recents' | 'favorites';
+      query?: string;
+    }): string => {
+      if (!localHasPermission) {
+        openLocalPermissionPromptStage(
+          opts.filter === 'videos'
+            ? 'video'
+            : opts.filter === 'images'
+            ? 'image'
+            : opts.filter === 'documents'
+            ? 'document'
+            : opts.filter === 'pdfs'
+            ? 'pdfs'
+            : opts.filter === 'recents'
+            ? 'recents'
+            : opts.filter === 'favorites'
+            ? 'favorites'
+            : opts.filter === 'all'
+            ? 'all'
+            : 'music'
+        );
+        return 'Autoriza o acesso ao armazenamento para ver a tua biblioteca.';
+      }
+
+      const stageFilter =
+        opts.filter === 'videos'
+          ? 'video'
+          : opts.filter === 'images'
+          ? 'image'
+          : opts.filter === 'documents'
+          ? 'document'
+          : opts.filter;
+
+      const items = searchLocalFiles(localFiles, {
+        kind:
+          stageFilter === 'music'
+            ? 'music'
+            : stageFilter === 'video'
+            ? 'video'
+            : stageFilter === 'image'
+            ? 'image'
+            : stageFilter === 'document' || stageFilter === 'pdfs'
+            ? 'document'
+            : 'any',
+        docCategory: stageFilter === 'pdfs' ? 'pdf' : 'any',
+        query: opts.query,
+        favoritesSet: localFavoritesSet,
+        onlyFavorites: stageFilter === 'favorites',
+        onlyRecents: stageFilter === 'recents',
+      });
+
+      const titleMap: Record<string, string> = {
+        all: 'Todos os Ficheiros Locais',
+        pdfs: 'Os teus PDFs Locais',
+        video: 'Os teus Vídeos Locais',
+        music: opts.query ? `Músicas Locais · ${opts.query}` : 'Músicas Locais',
+        image: 'As tuas Fotos Locais',
+        document: 'Documentos Locais',
+        recents: 'Abertos Recentemente',
+        favorites: 'Favoritos Locais',
+      };
+
+      setStageContent({
+        id: `stg_local_filter_${Date.now()}`,
+        kind: 'local_browser',
+        title: titleMap[stageFilter] || 'Biblioteca Local',
+        filter: stageFilter,
+        query: opts.query,
+        items,
+      });
+
+      return items.length > 0
+        ? `A mostrar ${items.length} ficheiro${items.length > 1 ? 's' : ''}.`
+        : 'Nenhum ficheiro encontrado neste filtro.';
+    },
+    [localFavoritesSet, localFiles, localHasPermission, openLocalPermissionPromptStage]
+  );
+
   useEffect(() => {
     if (!externalMediaControlRef) return;
     externalMediaControlRef.current = {
@@ -579,17 +1298,197 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         const next = Math.max(0, Math.min(100, mediaVolumeRef.current + delta));
         mediaVolumeRef.current = next;
         setMediaVolume(next);
+        if (next > 0) setIsMuted(false);
         return next;
       },
       closeStage: () => {
         setStageContent(null);
         setMediaPaused(false);
       },
+      next: playNextTrackInternal,
+      prev: playPrevTrackInternal,
+      toggleMute: () => {
+        if (!isMuted) {
+          volumeBeforeMuteRef.current = mediaVolumeRef.current > 0 ? mediaVolumeRef.current : 80;
+          mediaVolumeRef.current = 0;
+          setMediaVolume(0);
+          setIsMuted(true);
+          return true;
+        }
+        const restored = volumeBeforeMuteRef.current || 80;
+        mediaVolumeRef.current = restored;
+        setMediaVolume(restored);
+        setIsMuted(false);
+        return false;
+      },
+      toggleShuffle: () => {
+        const nextVal = !isShuffled;
+        setIsShuffled(nextVal);
+        return nextVal;
+      },
+      toggleLoop: () => {
+        const nextVal = !isLooped;
+        setIsLooped(nextVal);
+        return nextVal;
+      },
+      likeCurrent: () => {
+        if (stageContent?.kind === 'local_gallery' && stageContent.items[stageContent.activeIndex]) {
+          const item = stageContent.items[stageContent.activeIndex];
+          toggleLocalFavoriteInternal(item.relativePath);
+          return { liked: true, title: item.name };
+        }
+        const currentTrack =
+          stageContent?.kind === 'music' || stageContent?.kind === 'video'
+            ? stageContent.track
+            : playlist[currentTrackIndex];
+        if (!currentTrack) return { liked: false };
+        if (currentTrack.source === 'local') {
+          toggleLocalFavoriteInternal(currentTrack.localFileId || currentTrack.id);
+          return { liked: true, title: currentTrack.title };
+        }
+        setMemory((prev) => {
+          const existing = prev.likedTracks || [];
+          const already = existing.some((t) => t.id === currentTrack.id);
+          const nextLiked = already ? existing : [currentTrack, ...existing].slice(0, 40);
+          return { ...prev, likedTracks: nextLiked };
+        });
+        return { liked: true, title: currentTrack.title };
+      },
+      identifyCurrent: () => {
+        const currentTrack =
+          stageContent?.kind === 'music' || stageContent?.kind === 'video'
+            ? stageContent.track
+            : playlist[currentTrackIndex];
+        if (!currentTrack) return null;
+        return { title: currentTrack.title, artist: currentTrack.artist };
+      },
+      playGenreOrQuery: playGenreOrQueryInternal,
+      applySmartHome: (payload) => {
+        const nextDevices: Record<string, boolean | string> = {
+          ...(memory.smartDevices || {}),
+        };
+        if (payload.device === 'modo' && payload.sceneName) {
+          nextDevices.modo = payload.sceneName;
+          if (payload.sceneName === 'noite' || payload.sceneName === 'dormir') {
+            nextDevices.luz = false;
+          } else if (payload.sceneName === 'estudo' || payload.sceneName === 'festa') {
+            nextDevices.luz = true;
+          }
+        } else {
+          nextDevices[payload.device] = payload.state === 'on';
+        }
+        setMemory((prev) => ({
+          ...prev,
+          smartDevices: nextDevices,
+          lastDomain: 'home',
+        }));
+        lastDomainRef.current = 'home';
+
+        const deviceLabels: Array<{ key: string; label: string; value: string }> = [
+          { key: 'luz', label: 'Iluminação', value: nextDevices.luz ? 'LIGADA' : 'DESLIGADA' },
+          { key: 'ventoinha', label: 'Ventoinha', value: nextDevices.ventoinha ? 'LIGADA' : 'DESLIGADA' },
+          { key: 'ac', label: 'Ar Condicionado', value: nextDevices.ac ? 'LIGADO' : 'DESLIGADO' },
+          { key: 'porta', label: 'Porta Principal', value: nextDevices.porta ? 'ABERTA' : 'TRANCADA' },
+          { key: 'tomada', label: 'Tomadas', value: nextDevices.tomada ? 'ATIVAS' : 'DESLIGADAS' },
+        ];
+        setStageContent({
+          id: `stg_home_${Date.now()}`,
+          kind: 'ideation',
+          title: payload.device === 'modo' ? `Ambiente: Modo ${payload.sceneName}` : 'Controlo de Ambiente SARA',
+          subtitle: payload.room ? `Divisão: ${payload.room}` : 'Estado sincronizado dos dispositivos',
+          cards: deviceLabels.map((d) => ({
+            title: d.label,
+            tag: d.value,
+            detail:
+              d.key === payload.device
+                ? `Atualizado agora para ${d.value.toLowerCase()}.`
+                : `Estado atual: ${d.value.toLowerCase()}.`,
+          })),
+        });
+      },
+      showElectricCalc: (calcParams) => {
+        const built = buildQuickElectricalCalcStageAction(calcParams);
+        lastDomainRef.current = 'electricity';
+        setMemory((prev) => ({ ...prev, lastDomain: 'electricity' }));
+        const act = built.action;
+        if (act.type === 'show_math') {
+          setStageContent({
+            id: `stg_elec_${Date.now()}`,
+            kind: 'math',
+            title: act.title || 'Cálculo Elétrico',
+            problem: act.problem,
+            formulas: act.formulas,
+            steps: act.steps || [],
+            finalAnswer: act.finalAnswer || '',
+            notes: act.notes,
+          });
+        }
+        setConversation((prev) => [
+          ...prev.slice(-28),
+          {
+            id: `sara_elec_${Date.now()}`,
+            sender: 'sara',
+            text: built.chatSummary,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+        return built.voiceReply;
+      },
+      seekBy: (seconds: number) => {
+        setLocalSeekSignal({ id: Date.now(), deltaSeconds: seconds });
+      },
+      setFullscreen: (enabled: boolean) => {
+        setLocalFullscreenSignal({ id: Date.now(), enabled });
+      },
+      playLocalMedia: playLocalMediaCommandInternal,
+      openLocalDocument: openLocalDocumentCommandInternal,
+      filterLocalLibrary: filterLocalLibraryCommandInternal,
+      switchMediaSource: (source: 'internet' | 'local') => {
+        setMemory((prev) => ({ ...prev, preferredMediaSource: source }));
+        if (source === 'local') {
+          if (!localHasPermission) {
+            openLocalPermissionPromptStage('all');
+            return 'Modo local selecionado. Autoriza a pasta no painel.';
+          }
+          setStageContent({
+            id: `stg_local_switch_${Date.now()}`,
+            kind: 'local_browser',
+            title: `Biblioteca Local · ${localFolderLabel || 'Dispositivo'}`,
+            filter: 'all',
+            items: localFiles,
+          });
+          return 'De volta às tuas músicas e ficheiros locais.';
+        }
+        return 'De volta ao modo internet.';
+      },
+      requestLocalPermission: () => {
+        openLocalPermissionPromptStage('all');
+      },
     };
     return () => {
       if (externalMediaControlRef) externalMediaControlRef.current = null;
     };
-  }, [externalMediaControlRef]);
+  }, [
+    externalMediaControlRef,
+    playNextTrackInternal,
+    playPrevTrackInternal,
+    playGenreOrQueryInternal,
+    isMuted,
+    isShuffled,
+    isLooped,
+    stageContent,
+    playlist,
+    currentTrackIndex,
+    memory.smartDevices,
+    toggleLocalFavoriteInternal,
+    playLocalMediaCommandInternal,
+    openLocalDocumentCommandInternal,
+    filterLocalLibraryCommandInternal,
+    localHasPermission,
+    localFolderLabel,
+    localFiles,
+    openLocalPermissionPromptStage,
+  ]);
 
   // Hidratação + sync isolado por usuário (ignorado em Modo Convidado)
   useEffect(() => {
@@ -607,9 +1506,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         setTasks(cloud.tasks as JarvisTaskItem[]);
       }
       if (cloud.memory && Array.isArray((cloud.memory as any).facts)) {
-        const cleanCloudFacts = ((cloud.memory as any).facts as string[]).filter(
-          (f) => typeof f === 'string' && !/\b(luanda|angola|matola)\b/i.test(f)
-        );
+        const cleanCloudFacts = ((cloud.memory as any).facts as string[]).filter((f) => {
+          if (typeof f !== 'string') return false;
+          if (/\b(luanda|angola)\b/i.test(f)) return false;
+          if (!session.isOwner && /\b(matola|iicem|24 anos|eletro-jr)\b/i.test(f)) return false;
+          return true;
+        });
         setMemory((prev) => ({
           ...DEFAULT_JARVIS_MEMORY,
           ...prev,
@@ -622,7 +1524,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     return () => {
       active = false;
     };
-  }, [session.userId, session.isGuest, session.callName]);
+  }, [session.userId, session.isGuest, session.callName, session.isOwner]);
 
   useEffect(() => {
     if (session.isGuest) return;
@@ -639,7 +1541,34 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
     const refreshTelemetry = () => {
       if (!mounted) return;
-      setTelemetry(readSyncSystemTelemetry(batteryInfoRef.current));
+      const nextTelemetry = readSyncSystemTelemetry(batteryInfoRef.current);
+      setTelemetry(nextTelemetry);
+
+      if (prevOnlineRef.current !== nextTelemetry.online) {
+        prevOnlineRef.current = nextTelemetry.online;
+        const statusMsg = nextTelemetry.online
+          ? 'Ligação à internet restabelecida.'
+          : 'Ligação à internet indisponível.';
+        if (!isCallMode && !isSaraSilenced) {
+          onNotify(statusMsg);
+          setConversation((prev) => [
+            ...prev.slice(-28),
+            {
+              id: `net_stat_${Date.now()}`,
+              sender: 'sara',
+              text: statusMsg,
+              timestamp: new Date().toLocaleTimeString('pt-PT', {
+                hour: '2-digit',
+                minute: '2-digit',
+              }),
+            },
+          ]);
+          speakAsSara(statusMsg, voiceEnabled, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        }
+      }
     };
 
     const navAny = typeof navigator !== 'undefined' ? (navigator as any) : null;
@@ -678,7 +1607,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         batteryObj.onchargingchange = null;
       }
     };
-  }, []);
+  }, [voiceEnabled, isSaraSilenced, isCallMode, onNotify]);
 
   // Relógio ao vivo (1s) + Uptime + Verificador real de alarmes
   useEffect(() => {
@@ -698,11 +1627,13 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           if (al.enabled && al.time === hhmm && al.triggeredTodayDate !== todayKey) {
             changed = true;
             setActiveRingingAlarm(al);
-            playJarvisAlarmSound();
-            speakAsSara(`Atenção! Alarme das ${al.time}: ${al.label}.`, voiceEnabled, {
-              level: 'short',
-              forceSpeak: true,
-            });
+            if (!isCallMode && !isSaraSilenced) {
+              playJarvisAlarmSound();
+              speakAsSara(`Atenção! Alarme das ${al.time}: ${al.label}.`, voiceEnabled, {
+                level: 'short',
+                forceSpeak: true,
+              });
+            }
             return { ...al, triggeredTodayDate: todayKey };
           }
           return al;
@@ -711,7 +1642,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       });
     }, 1000);
     return () => clearInterval(interval);
-  }, [voiceEnabled]);
+  }, [voiceEnabled, isCallMode, isSaraSilenced]);
 
   // Clima real via Open-Meteo + Geolocalização (Inhambane Cidade fallback fixo) a cada 10 minutos
   const refreshWeatherNow = useCallback(async (force = false) => {
@@ -1045,7 +1976,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           }
           case 'play_music': {
             onUserActivity?.('music');
-            const query = act.query || act.title || '';
+            lastDomainRef.current = 'music';
+            const rawQuery = (act.query || act.title || '').trim();
+            const isGenericMusic = !rawQuery || /^(musica|uma\s+musica|som|algo|qualquer)$/i.test(rawQuery);
+            const query = isGenericMusic
+              ? session.isOwner
+                ? 'Amapiano Afro House mix'
+                : 'Afro House chill mix'
+              : rawQuery;
             let track: JarvisTrack | null = act.videoId
               ? {
                   id: `yt_${act.videoId}`,
@@ -1124,6 +2062,74 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             onNotify('Reprodução retomada');
             break;
           }
+          case 'next_music': {
+            playNextTrackInternal();
+            onNotify('Próxima faixa');
+            break;
+          }
+          case 'prev_music': {
+            playPrevTrackInternal();
+            onNotify('Faixa anterior');
+            break;
+          }
+          case 'mute_music': {
+            if (!isMuted) {
+              volumeBeforeMuteRef.current = mediaVolumeRef.current > 0 ? mediaVolumeRef.current : 80;
+              mediaVolumeRef.current = 0;
+              setMediaVolume(0);
+              setIsMuted(true);
+              onNotify('Som silenciado');
+            } else {
+              const restored = volumeBeforeMuteRef.current || 80;
+              mediaVolumeRef.current = restored;
+              setMediaVolume(restored);
+              setIsMuted(false);
+              onNotify(`Som reposto (${restored}%)`);
+            }
+            break;
+          }
+          case 'toggle_shuffle': {
+            setIsShuffled((prev) => {
+              const next = !prev;
+              onNotify(next ? 'Modo aleatório ligado' : 'Modo aleatório desligado');
+              return next;
+            });
+            break;
+          }
+          case 'toggle_loop': {
+            setIsLooped((prev) => {
+              const next = !prev;
+              onNotify(next ? 'Repetição em loop ligada' : 'Repetição em loop desligada');
+              return next;
+            });
+            break;
+          }
+          case 'like_music': {
+            const currentTrack =
+              stageContent?.kind === 'music' || stageContent?.kind === 'video'
+                ? stageContent.track
+                : playlist[currentTrackIndex];
+            if (currentTrack) {
+              setMemory((prev) => ({
+                ...prev,
+                likedTracks: prev.likedTracks?.some((t) => t.id === currentTrack.id)
+                  ? prev.likedTracks
+                  : [currentTrack, ...(prev.likedTracks || [])].slice(0, 40),
+              }));
+              onNotify(`Guardada nos favoritos: ${currentTrack.title}`);
+            }
+            break;
+          }
+          case 'identify_music': {
+            const currentTrack =
+              stageContent?.kind === 'music' || stageContent?.kind === 'video'
+                ? stageContent.track
+                : playlist[currentTrackIndex];
+            if (currentTrack) {
+              onNotify(`A tocar: ${currentTrack.title} — ${currentTrack.artist}`);
+            }
+            break;
+          }
           case 'close_media': {
             setStageContent((prev) =>
               prev && (prev.kind === 'music' || prev.kind === 'video') ? null : prev
@@ -1139,6 +2145,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 : Math.max(0, Math.min(100, mediaVolumeRef.current + (act.delta || 0)));
             mediaVolumeRef.current = nextVol;
             setMediaVolume(nextVol);
+            if (nextVol > 0) setIsMuted(false);
             onNotify(`Volume: ${nextVol}%`);
             break;
           }
@@ -1328,7 +2335,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           }
           case 'remember_fact': {
             const fact = (act.fact || '').trim();
-            if (fact && !/\b(luanda|angola|matola)\b/i.test(fact)) {
+            const blockedForUser =
+              /\b(luanda|angola)\b/i.test(fact) ||
+              (!session.isOwner && /\b(matola|iicem|24 anos)\b/i.test(fact));
+            if (fact && !blockedForUser) {
               setMemory((prev) => ({
                 ...prev,
                 facts: prev.facts.includes(fact) ? prev.facts : [...prev.facts, fact].slice(-25),
@@ -1360,18 +2370,51 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         }
       }
     },
-    [activeDoc, focusMode, onNotify, onSwitchMode, onTriggerBackgroundBuild, updatePanelOpen]
+    [
+      activeDoc,
+      focusMode,
+      onNotify,
+      onSwitchMode,
+      onTriggerBackgroundBuild,
+      updatePanelOpen,
+      onUserActivity,
+      session.isOwner,
+      playNextTrackInternal,
+      playPrevTrackInternal,
+      isMuted,
+      stageContent,
+      playlist,
+      currentTrackIndex,
+    ]
   );
 
   const sendJarvisPrompt = useCallback(
     async (rawText: string, source: 'voice' | 'text' = 'text') => {
-      const clean = rawText.trim();
+      const rawClean = rawText.trim();
       const docToSend = pendingDoc;
-      if (!clean && !docToSend) return;
+      if (!rawClean && !docToSend) return;
+
+      // Em Modo Silêncio ou Modo Chamada, comandos de voz não liberam conversa nem disparam IA
+      if (source === 'voice' && (isCallMode || isSaraSilenced)) {
+        const wakeOrSilence = parseVoiceCommand(rawClean, {
+          isSilenced: isSaraSilenced,
+          isCallMode,
+        });
+        if (
+          onExecuteSystemCommand &&
+          (wakeOrSilence.type === 'unsilence_sara' ||
+            wakeOrSilence.type === 'silence_sara' ||
+            wakeOrSilence.type === 'enter_call_mode' ||
+            wakeOrSilence.type === 'stop_all_and_pause')
+        ) {
+          await onExecuteSystemCommand(wakeOrSilence, rawClean);
+        }
+        return;
+      }
 
       // PROTEÇÃO TOTAL (Lealdade, Admin Invisível, Segredo & Privacidade) para não-donos antes de qualquer comando ou IA
-      if (clean) {
-        const guard = evaluateNonOwnerGuard(clean, session);
+      if (rawClean) {
+        const guard = evaluateNonOwnerGuard(rawClean, session);
         if (guard.intercepted && guard.reply) {
           const guardTime = new Date().toLocaleTimeString('pt-PT', {
             hour: '2-digit',
@@ -1380,27 +2423,91 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           if (source === 'text') setInputText('');
           setConversation((prev) => [
             ...prev.slice(-28),
-            { id: `usr_g_${Date.now()}`, sender: 'user', text: clean, timestamp: guardTime },
+            { id: `usr_g_${Date.now()}`, sender: 'user', text: rawClean, timestamp: guardTime },
             { id: `sara_g_${Date.now()}`, sender: 'sara', text: guard.reply!, timestamp: guardTime },
           ]);
           speakAsSara(guard.voiceSummary || guard.reply, voiceEnabled, {
             level: 'short',
-            forceSpeak: source === 'voice' || !isSaraSilenced,
+            forceSpeak: true,
           });
           return;
         }
       }
 
+      // RECONSTRUÇÃO SILENCIOSA DE VOZ DISTORCIDA (5 Passos + Contexto das últimas 5 falas)
+      const parseCtx = {
+        workspaceMode: 'jarvis' as const,
+        hasActiveMedia: stageContent?.kind === 'music' || stageContent?.kind === 'video',
+        mediaSource:
+          stageContent?.kind === 'music' || stageContent?.kind === 'video'
+            ? stageContent.track?.source
+            : undefined,
+        isMediaPaused: mediaPaused,
+        hasActiveStage: Boolean(stageContent),
+        activeLocalKind:
+          stageContent?.kind === 'local_gallery'
+            ? ('image' as const)
+            : stageContent?.kind === 'local_browser'
+            ? ('browser' as const)
+            : stageContent?.kind === 'document' && stageContent.isLocalDeviceFile
+            ? ('document' as const)
+            : (stageContent?.kind === 'music' || stageContent?.kind === 'video') &&
+              stageContent.track.source === 'local'
+            ? stageContent.kind
+            : undefined,
+        hasActiveReading: readingStatus.active,
+        isReadingPaused: readingStatus.paused,
+        hasLocalPermission: localHasPermission,
+        preferredMediaSource: memory.preferredMediaSource,
+        isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
+        recentUserUtterances: recentUserUtterancesRef.current,
+        lastTopic: lastDomainRef.current,
+        lastTrackTitle:
+          stageContent?.kind === 'music' || stageContent?.kind === 'video'
+            ? stageContent.track?.title
+            : undefined,
+        lastTrackArtist:
+          stageContent?.kind === 'music' || stageContent?.kind === 'video'
+            ? stageContent.track?.artist
+            : undefined,
+        isOwner: session.isOwner,
+        callName: session.callName,
+        isSilenced: isSaraSilenced,
+        isCallMode,
+      };
+
+      const recon = rawClean ? reconstructDistortedVoiceInput(rawClean, parseCtx) : null;
+      if (recon?.unintelligible && !docToSend) {
+        const clarifier =
+          recon.clarifierSpeech || 'Epa, essa chegou toda torta, era música, site ou luz?';
+        if (source === 'text') setInputText('');
+        const cTime = new Date().toLocaleTimeString('pt-PT', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        setConversation((prev) => [
+          ...prev.slice(-28),
+          { id: `sara_clar_${Date.now()}`, sender: 'sara', text: clarifier, timestamp: cTime },
+        ]);
+        speakAsSara(clarifier, voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      const clean = recon ? recon.reconstructed || recon.cleaned || rawClean : rawClean;
+      if (clean) {
+        const detectedDom = inferDomainFromText(clean);
+        if (detectedDom !== 'general') {
+          lastDomainRef.current = detectedDom;
+        }
+        recentUserUtterancesRef.current = [...recentUserUtterancesRef.current, clean].slice(-5);
+      }
+
       // TIPO A - [SISTEMA]: Verifica comandos determinísticos antes da IA
       if (clean && !docToSend && onExecuteSystemCommand) {
-        const localCmd = parseVoiceCommand(clean, {
-          workspaceMode: 'jarvis',
-          hasActiveMedia: stageContent?.kind === 'music' || stageContent?.kind === 'video',
-          isMediaPaused: mediaPaused,
-          hasActiveStage: Boolean(stageContent),
-          hasActiveReading: readingStatus.active,
-          isReadingPaused: readingStatus.paused,
-        });
+        const localCmd = parseVoiceCommand(clean, parseCtx);
         if (localCmd.type === 'open_admin') {
           if (session.isOwner && onRequestAdmin) {
             if (source === 'text') setInputText('');
@@ -1423,6 +2530,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
       // CONEXÃO ASSISTENTE -> BUILDER EM 2.º PLANO: pedidos de site/app completo constroem no Builder sem sair do Assistente
       if (clean && !docToSend && onTriggerBackgroundBuild && isFullBuilderAppRequest(clean)) {
+        lastDomainRef.current = 'builder';
         onUserActivity?.('builder');
         const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
         const ackSpeech = getBackgroundBuildAckSpeech(clean);
@@ -1434,7 +2542,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             {
               id: `sara_bg_ack_${Date.now()}`,
               sender: 'sara',
-              text: 'Builder em segundo plano: a construir o pedido mantendo o Assistente livre.',
+              text: 'Builder em segundo plano: projeto em montagem mantendo o Assistente livre.',
               timestamp: nowTime,
             },
           ]);
@@ -1444,16 +2552,41 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             {
               id: `sara_bg_ack_${Date.now()}`,
               sender: 'sara',
-              text: 'Builder em segundo plano: a construir o projeto pedido.',
+              text: 'Builder em segundo plano: projeto em montagem.',
               timestamp: nowTime,
             },
           ]);
         }
         speakAsSara(ackSpeech, voiceEnabled, {
           level: 'short',
-          forceSpeak: source === 'voice' || !isSaraSilenced,
+          forceSpeak: true,
         });
         void onTriggerBackgroundBuild(clean, source);
+        return;
+      }
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        const offlineMsg = 'Ligação à internet indisponível.';
+        if (source === 'text') setInputText('');
+        setConversation((prev) => [
+          ...prev.slice(-28),
+          {
+            id: `usr_off_${Date.now()}`,
+            sender: 'user',
+            text: clean || rawClean,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+          },
+          {
+            id: `sara_off_${Date.now()}`,
+            sender: 'sara',
+            text: offlineMsg,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+        speakAsSara(offlineMsg, voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
         return;
       }
 
@@ -1504,6 +2637,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           telemetry,
           mediaState: currentMediaState,
           userIdentity,
+          recentUserUtterances: recentUserUtterancesRef.current,
+          lastDomain: lastDomainRef.current,
           builderContext: {
             activeProjectName: activeBuilderProjectName,
             activeProjectFiles: activeBuilderFiles,
@@ -1519,16 +2654,16 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         },
         {
           onSpeakReady: (speakText) => {
-            if (!speakText || spokenDuringStream) return;
+            if (!speakText || spokenDuringStream || isSaraCallMode()) return;
             spokenDuringStream = true;
             speakAsSara(speakText, voiceEnabled, {
               level: 'full',
               isQuestionReply: true,
-              forceSpeak: source === 'voice' || !isSaraSilenced,
+              forceSpeak: true,
             });
           },
           onReplyPartial: (partialReply) => {
-            if (wantsFullTextInChat) {
+            if (wantsFullTextInChat && !isSaraCallMode()) {
               setStreamingReply(sanitizeAssistantPlainText(partialReply));
             }
           },
@@ -1539,11 +2674,16 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       setStreamingReply(null);
       setMood(res.mood && res.mood !== 'speaking' ? res.mood : 'idle');
 
+      if (isSaraCallMode()) {
+        return;
+      }
+
       const todayKey = new Date().toISOString().slice(0, 10);
       setMemory((prev) => ({
         ...prev,
         lastVisitDate: todayKey,
         lastTopic: userLabel.slice(0, 80),
+        lastDomain: lastDomainRef.current,
         lastActiveProjectName: activeBuilderProjectName || prev.lastActiveProjectName,
       }));
 
@@ -1587,7 +2727,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         speakAsSara(speakText, voiceEnabled, {
           level: 'full',
           isQuestionReply: true,
-          forceSpeak: source === 'voice' || !isSaraSilenced,
+          forceSpeak: true,
         });
       }
     },
@@ -1618,6 +2758,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       applyJarvisActions,
       voiceEnabled,
       isSaraSilenced,
+      isCallMode,
     ]
   );
 
@@ -1722,15 +2863,17 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           },
           {
             onSpeakReady: (speakText) => {
-              if (!speakText || spokenDocStream) return;
+              if (!speakText || spokenDocStream || isSaraCallMode()) return;
               spokenDocStream = true;
               speakAsSara(speakText, voiceEnabled, {
                 level: 'medium',
-                forceSpeak: !isSaraSilenced,
+                forceSpeak: true,
               });
             },
             onReplyPartial: (partialReply) => {
-              setStreamingReply(sanitizeAssistantPlainText(partialReply));
+              if (!isSaraCallMode()) {
+                setStreamingReply(sanitizeAssistantPlainText(partialReply));
+              }
             },
           }
         );
@@ -1738,6 +2881,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         setIsThinking(false);
         setStreamingReply(null);
         setMood(res.mood && res.mood !== 'speaking' ? res.mood : 'idle');
+        if (isSaraCallMode()) return;
         const cleanDocReply = sanitizeAssistantPlainText(res.reply) || 'Documento analisado.';
         setConversation((prev) => [
           ...prev,
@@ -1752,7 +2896,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         if (!spokenDocStream) {
           speakAsSara(sanitizeAssistantPlainText(res.voiceSummary || cleanDocReply), voiceEnabled, {
             level: 'medium',
-            forceSpeak: !isSaraSilenced,
+            forceSpeak: true,
           });
         }
       }
@@ -1772,11 +2916,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     });
   };
 
-  const handleNextTrack = () => {
-    if (playlist.length === 0) return;
-    const nextIdx = (currentTrackIndex + 1) % playlist.length;
-    handlePlayTrack(playlist[nextIdx], nextIdx);
-  };
+  const handleNextTrack = playNextTrackInternal;
 
   const effectiveMood: JarvisHeadMood = isThinking
     ? 'thinking'
@@ -2025,14 +3165,26 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       </span>
                       <span
                         className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          isSaraSpeaking
+                          isCallMode
+                            ? 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
+                            : isSaraSilenced
+                            ? 'bg-rose-500/20 text-rose-200 border border-rose-400/40'
+                            : isSaraSpeaking
                             ? 'bg-rose-500/20 text-rose-300 border border-rose-400/40'
                             : isListening
                             ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/40'
                             : 'bg-slate-800 text-slate-400'
                         }`}
                       >
-                        {isSaraSpeaking ? 'A FALAR' : isListening ? 'ESCUTA ATIVA' : 'EM ESPERA'}
+                        {isCallMode
+                          ? 'MODO CHAMADA'
+                          : isSaraSilenced
+                          ? 'SILENCIADA'
+                          : isSaraSpeaking
+                          ? 'A FALAR'
+                          : isListening
+                          ? 'ESCUTA ATIVA'
+                          : 'EM ESPERA'}
                       </span>
                     </div>
 
@@ -2408,6 +3560,57 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       ))
                     )}
                   </div>
+
+                  {/* Secção Extra: Armazenamento Local (PC & Celular, Offline) */}
+                  <div className="pt-2 border-t border-cyan-500/20 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-emerald-300">
+                        Armazenamento Local ({localFiles.length})
+                      </span>
+                      {localHasPermission && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            void revokeLocalStorageAccess(session.userId);
+                            setLocalHasPermission(false);
+                            setLocalNeedsReconnect(false);
+                            setLocalFiles([]);
+                            onNotify('Permissão local revogada.');
+                          }}
+                          className="text-[10px] text-rose-300 hover:text-rose-200 cursor-pointer"
+                        >
+                          Revogar
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (localNeedsReconnect) {
+                            void reconnectLocalPermissionInternal();
+                          } else {
+                            void grantLocalPermissionInternal('all');
+                          }
+                          updatePanelOpen(false);
+                        }}
+                        className="flex-1 py-2 px-2.5 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                        <span>{localHasPermission ? 'Mudar Pasta' : 'Permitir Pasta Local'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          filterLocalLibraryCommandInternal({ filter: 'music' });
+                          updatePanelOpen(false);
+                        }}
+                        className="py-2 px-2.5 rounded-xl bg-[#071126] border border-cyan-500/35 text-cyan-200 text-xs font-semibold cursor-pointer"
+                      >
+                        Biblioteca
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -2426,7 +3629,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   </button>
 
                   {documents.length === 0 ? (
-                    <p className="text-xs text-slate-400 text-center py-6">
+                    <p className="text-xs text-slate-400 text-center py-4">
                       Carrega qualquer PDF, contrato, fatura ou imagem para análise instantânea.
                     </p>
                   ) : (
@@ -2463,6 +3666,60 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       ))}
                     </div>
                   )}
+
+                  {/* Documentos Locais do Dispositivo (Offline) */}
+                  <div className="pt-2 border-t border-cyan-500/20 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-300">
+                        Documentos do Dispositivo
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          filterLocalLibraryCommandInternal({ filter: 'documents' });
+                          updatePanelOpen(false);
+                        }}
+                        className="text-[10px] text-cyan-300 hover:text-white cursor-pointer"
+                      >
+                        Ver todos
+                      </button>
+                    </div>
+                    {!localHasPermission ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void grantLocalPermissionInternal('document');
+                          updatePanelOpen(false);
+                        }}
+                        className="w-full py-2 rounded-xl bg-cyan-500/15 border border-cyan-400/45 text-cyan-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                        <span>Permitir Acesso a Docs Locais</span>
+                      </button>
+                    ) : (
+                      <div className="space-y-1.5 max-h-40 overflow-y-auto sara-scroll">
+                        {localFiles
+                          .filter((f) => f.kind === 'document')
+                          .slice(0, 12)
+                          .map((lf) => (
+                            <button
+                              key={lf.id}
+                              type="button"
+                              onClick={() => {
+                                void openLocalFileOnStage(lf);
+                                updatePanelOpen(false);
+                              }}
+                              className="w-full p-2 rounded-xl bg-[#040915] border border-cyan-500/20 hover:border-cyan-400 text-left transition cursor-pointer"
+                            >
+                              <div className="text-xs font-semibold text-white truncate">{lf.name}</div>
+                              <div className="text-[10px] text-slate-400 truncate">
+                                .{lf.extension} • {lf.folderPath}
+                              </div>
+                            </button>
+                          ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -3342,7 +4599,15 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       <div className="text-[8px] text-slate-400">ÁUDIO SINTÉTICO</div>
                       <div className="text-rose-300 font-bold truncate">
                         44.1kHz |{' '}
-                        {isSaraSpeaking ? 'VOZ ATIVA' : isListening ? 'ESCUTA' : 'PRONTO'}
+                        {isCallMode
+                          ? 'MODO CHAMADA'
+                          : isSaraSilenced
+                          ? 'SILENCIADA'
+                          : isSaraSpeaking
+                          ? 'VOZ ATIVA'
+                          : isListening
+                          ? 'ESCUTA'
+                          : 'PRONTO'}
                       </div>
                     </div>
 
@@ -3447,12 +4712,59 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     setMediaPaused(false);
                   }}
                   onNextTrack={handleNextTrack}
+                  onPrevTrack={playPrevTrackInternal}
                   onAskAboutDocument={(title) => setInputText(`Sobre "${title}", `)}
                   playlist={playlist}
                   mediaPaused={mediaPaused}
                   mediaVolume={mediaVolume}
+                  mediaMuted={isMuted}
+                  mediaShuffled={isShuffled}
+                  mediaLooped={isLooped}
+                  mediaLiked={currentMediaState.isLiked}
                   onToggleMediaPause={() => setMediaPaused((p) => !p)}
-                  onChangeMediaVolume={(v) => setMediaVolume(Math.max(0, Math.min(100, v)))}
+                  onChangeMediaVolume={(v) => {
+                    const nv = Math.max(0, Math.min(100, v));
+                    setMediaVolume(nv);
+                    if (nv > 0) setIsMuted(false);
+                  }}
+                  onToggleMediaMute={() => externalMediaControlRef?.current?.toggleMute()}
+                  onToggleMediaShuffle={() => externalMediaControlRef?.current?.toggleShuffle()}
+                  onToggleMediaLoop={() => externalMediaControlRef?.current?.toggleLoop()}
+                  onToggleMediaLike={() => {
+                    const res = externalMediaControlRef?.current?.likeCurrent();
+                    if (res?.liked) onNotify(`Favorita: ${res.title || 'Faixa'}`);
+                  }}
+                  localFiles={localFiles}
+                  localHasPermission={localHasPermission}
+                  localNeedsReconnect={localNeedsReconnect}
+                  localIsMobile={localIsMobile}
+                  localFavoritesSet={localFavoritesSet}
+                  localSeekSignal={localSeekSignal}
+                  localFullscreenSignal={localFullscreenSignal}
+                  onGrantLocalPermission={(cat) => void grantLocalPermissionInternal(cat)}
+                  onReconnectLocalPermission={() => void reconnectLocalPermissionInternal()}
+                  onOpenLocalFile={(f) => void openLocalFileOnStage(f)}
+                  onToggleLocalFavorite={(f) => {
+                    const added = toggleLocalFavoriteInternal(f);
+                    onNotify(added ? 'Guardado nos favoritos locais.' : 'Removido dos favoritos.');
+                  }}
+                  onFilterLocalBrowser={(filter) =>
+                    filterLocalLibraryCommandInternal({
+                      filter:
+                        filter === 'video'
+                          ? 'videos'
+                          : filter === 'image'
+                          ? 'images'
+                          : filter === 'document'
+                          ? 'documents'
+                          : filter,
+                    })
+                  }
+                  onOpenInOfficeApp={(localId, url) => {
+                    const f = localFiles.find((x) => x.id === localId);
+                    if (f) triggerDeviceOfficeAppAttempt(f, url);
+                  }}
+                  onNotify={onNotify}
                 />
               </div>
             ) : (
@@ -3466,12 +4778,59 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     setMediaPaused(false);
                   }}
                   onNextTrack={handleNextTrack}
+                  onPrevTrack={playPrevTrackInternal}
                   onAskAboutDocument={(title) => setInputText(`Sobre "${title}", `)}
                   playlist={playlist}
                   mediaPaused={mediaPaused}
                   mediaVolume={mediaVolume}
+                  mediaMuted={isMuted}
+                  mediaShuffled={isShuffled}
+                  mediaLooped={isLooped}
+                  mediaLiked={currentMediaState.isLiked}
                   onToggleMediaPause={() => setMediaPaused((p) => !p)}
-                  onChangeMediaVolume={(v) => setMediaVolume(Math.max(0, Math.min(100, v)))}
+                  onChangeMediaVolume={(v) => {
+                    const nv = Math.max(0, Math.min(100, v));
+                    setMediaVolume(nv);
+                    if (nv > 0) setIsMuted(false);
+                  }}
+                  onToggleMediaMute={() => externalMediaControlRef?.current?.toggleMute()}
+                  onToggleMediaShuffle={() => externalMediaControlRef?.current?.toggleShuffle()}
+                  onToggleMediaLoop={() => externalMediaControlRef?.current?.toggleLoop()}
+                  onToggleMediaLike={() => {
+                    const res = externalMediaControlRef?.current?.likeCurrent();
+                    if (res?.liked) onNotify(`Favorita: ${res.title || 'Faixa'}`);
+                  }}
+                  localFiles={localFiles}
+                  localHasPermission={localHasPermission}
+                  localNeedsReconnect={localNeedsReconnect}
+                  localIsMobile={localIsMobile}
+                  localFavoritesSet={localFavoritesSet}
+                  localSeekSignal={localSeekSignal}
+                  localFullscreenSignal={localFullscreenSignal}
+                  onGrantLocalPermission={(cat) => void grantLocalPermissionInternal(cat)}
+                  onReconnectLocalPermission={() => void reconnectLocalPermissionInternal()}
+                  onOpenLocalFile={(f) => void openLocalFileOnStage(f)}
+                  onToggleLocalFavorite={(f) => {
+                    const added = toggleLocalFavoriteInternal(f);
+                    onNotify(added ? 'Guardado nos favoritos locais.' : 'Removido dos favoritos.');
+                  }}
+                  onFilterLocalBrowser={(filter) =>
+                    filterLocalLibraryCommandInternal({
+                      filter:
+                        filter === 'video'
+                          ? 'videos'
+                          : filter === 'image'
+                          ? 'images'
+                          : filter === 'document'
+                          ? 'documents'
+                          : filter,
+                    })
+                  }
+                  onOpenInOfficeApp={(localId, url) => {
+                    const f = localFiles.find((x) => x.id === localId);
+                    if (f) triggerDeviceOfficeAppAttempt(f, url);
+                  }}
+                  onNotify={onNotify}
                 />
                 {/* Cabeça 3D encolhida no canto inferior esquerdo (sem backdrop-filter sobre WebGL) */}
                 <div
@@ -3496,8 +4855,23 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             <input
               ref={fileInputRef}
               type="file"
-              accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.json,.js,.ts,.py"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.txt,.md,.csv,.json,.js,.ts,.py,.doc,.docx,.ppt,.pptx,.xls,.xlsx"
               onChange={handleUploadDocument}
+              className="hidden"
+            />
+            <input
+              ref={localDirInputRef}
+              type="file"
+              multiple
+              {...({ webkitdirectory: '', directory: '' } as Record<string, string>)}
+              onChange={(e) => void handleLocalFileInputChange(e)}
+              className="hidden"
+            />
+            <input
+              ref={localCatInputRef}
+              type="file"
+              multiple
+              onChange={(e) => void handleLocalFileInputChange(e, localIsMobile ? 'Telemóvel' : 'Pasta Local')}
               className="hidden"
             />
             <form

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Eye, Code2, Terminal, Mic, MicOff, VolumeX, Loader2, Play, Pause, Square, BookOpen } from 'lucide-react';
+import { MessageSquare, Eye, Code2, Terminal, Mic, MicOff, VolumeX, PhoneOff, Loader2, Play, Pause, Square, BookOpen } from 'lucide-react';
 import type {
   AgentMode,
   AttachedFile,
@@ -86,13 +86,15 @@ import {
   getSpokenBuildRecap,
   getVoiceReadingStatus,
   getWorkspaceSwitchSpeech,
+  inferDomainFromText,
   interruptSaraAndListen,
   isAssistantExplanationIntent,
-  normalizePhoneticVoiceTranscript,
   parseVoiceCommand,
   pauseVoiceReading,
   playCompletionChime,
+  reconstructDistortedVoiceInput,
   resumeVoiceReading,
+  setSaraCallMode,
   setSaraSilenced,
   setSpeakingStateListener,
   speakAsSara,
@@ -102,6 +104,7 @@ import {
   stopVoiceReading,
   subscribeVoiceReadingStatus,
   type VoiceCommandAction,
+  type VoiceDomainTopic,
   type VoiceParseContext,
   type VoiceReadingStatus,
 } from './utils/voiceService';
@@ -433,6 +436,9 @@ export default function App() {
     loadInitialVoiceLevel(getSavedActiveSession())
   );
   const [isSaraSilenced, setIsSaraSilencedState] = useState(false);
+  const [isCallMode, setIsCallModeState] = useState(false);
+  const isSaraSilencedRef = useRef(false);
+  const isCallModeRef = useRef(false);
   const [isListening, setIsListening] = useState(false);
   const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
   const [isSaraSpeaking, setIsSaraSpeaking] = useState(false);
@@ -483,7 +489,48 @@ export default function App() {
     close: () => void;
     adjustVolume: (delta: number) => number;
     closeStage: () => void;
+    next: () => void;
+    prev: () => void;
+    toggleMute: () => boolean;
+    toggleShuffle: () => boolean;
+    toggleLoop: () => boolean;
+    likeCurrent: () => { liked: boolean; title?: string };
+    identifyCurrent: () => { title?: string; artist?: string } | null;
+    playGenreOrQuery: (query: string) => Promise<void>;
+    applySmartHome: (payload: {
+      device: 'luz' | 'ventoinha' | 'ac' | 'porta' | 'tomada' | 'modo';
+      state: 'on' | 'off' | 'scene';
+      room?: string;
+      sceneName?: string;
+    }) => void;
+    showElectricCalc: (params: {
+      voltage?: number;
+      current?: number;
+      resistance?: number;
+      power?: number;
+      reconstructed?: string;
+    }) => string;
+    seekBy: (seconds: number) => void;
+    setFullscreen: (enabled: boolean) => void;
+    playLocalMedia: (opts: {
+      kind: 'music' | 'video' | 'image' | 'audio' | 'any';
+      query?: string;
+      folderOrDate?: string;
+    }) => Promise<string>;
+    openLocalDocument: (opts: {
+      docCategory: 'pdf' | 'word' | 'ppt' | 'excel' | 'recent' | 'any';
+      query?: string;
+    }) => Promise<string>;
+    filterLocalLibrary: (opts: {
+      filter: 'all' | 'pdfs' | 'videos' | 'music' | 'images' | 'documents' | 'recents' | 'favorites';
+      query?: string;
+    }) => string;
+    switchMediaSource: (source: 'internet' | 'local') => string;
+    requestLocalPermission: () => void;
   } | null>(null);
+  const pendingSourceAmbiguityRef = useRef<{ query?: string; kind: 'music' | 'video' } | null>(null);
+  const recentUtterancesRef = useRef<string[]>([]);
+  const lastDomainTopicRef = useRef<VoiceDomainTopic>('general');
   const [jarvisMediaState, setJarvisMediaState] = useState<JarvisMediaStateContext>({
     hasActiveMedia: false,
     mediaKind: undefined,
@@ -555,10 +602,28 @@ export default function App() {
       isMissionActive: mission.active,
       isMissionPaused: mission.paused,
       hasActiveMedia: jarvisMediaState.hasActiveMedia,
+      mediaSource: jarvisMediaState.mediaSource,
       isMediaPaused: jarvisMediaState.isPaused,
       hasActiveStage: Boolean(jarvisMediaState.activeStageKind),
+      activeLocalKind:
+        jarvisMediaState.activeStageKind === 'local_gallery'
+          ? 'image'
+          : jarvisMediaState.activeStageKind === 'local_browser'
+          ? 'browser'
+          : jarvisMediaState.mediaSource === 'local'
+          ? jarvisMediaState.mediaKind
+          : undefined,
       hasActiveReading: readingStatus.active,
       isReadingPaused: readingStatus.paused,
+      isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
+      recentUserUtterances: recentUtterancesRef.current,
+      lastTopic: lastDomainTopicRef.current,
+      lastTrackTitle: jarvisMediaState.mediaTitle,
+      lastTrackArtist: jarvisMediaState.mediaArtist,
+      isOwner,
+      callName: callerName,
+      isSilenced: isSaraSilenced,
+      isCallMode,
     };
   }, [
     workspaceMode,
@@ -578,7 +643,24 @@ export default function App() {
     jarvisMediaState,
     readingStatus.active,
     readingStatus.paused,
+    isOwner,
+    callerName,
   ]);
+
+  const pushRecentUtterance = useCallback((utterance: string) => {
+    const clean = String(utterance || '').trim();
+    if (!clean) return;
+    recentUtterancesRef.current = [...recentUtterancesRef.current, clean].slice(-5);
+    const detected = inferDomainFromText(clean);
+    if (detected !== 'general') {
+      lastDomainTopicRef.current = detected;
+    }
+    voiceContextRef.current = {
+      ...voiceContextRef.current,
+      recentUserUtterances: recentUtterancesRef.current,
+      lastTopic: lastDomainTopicRef.current,
+    };
+  }, []);
 
   useEffect(() => {
     setSpeakingStateListener((speaking) => {
@@ -2319,29 +2401,70 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
   }, [showToast]);
 
   const handleSilenceSara = useCallback(() => {
-    setIsSaraSilencedState((prev) => {
-      const next = !prev;
-      setSaraSilenced(next);
-      if (next) {
-        stopSaraSpeech();
-        showToast('Sara calada até chamares');
-      } else {
-        showToast('Voz da Sara reativada');
+    const next = !isSaraSilencedRef.current;
+    isSaraSilencedRef.current = next;
+    setSaraSilenced(next);
+    setIsSaraSilencedState(next);
+    if (next) {
+      stopSaraSpeech();
+      if (getVoiceReadingStatus().active && !getVoiceReadingStatus().paused) {
+        pauseVoiceReading();
       }
-      return next;
-    });
-  }, [showToast]);
+    } else {
+      isCallModeRef.current = false;
+      setSaraCallMode(false);
+      setIsCallModeState(false);
+      speakAsSara('Estou aqui.', voiceEnabledRef.current, {
+        level: 'short',
+        forceSpeak: true,
+        bypassSilence: true,
+      });
+    }
+  }, []);
 
   const handleForceSilenceSara = useCallback(() => {
+    isSaraSilencedRef.current = true;
+    isCallModeRef.current = false;
+    setSaraCallMode(false);
+    setIsCallModeState(false);
     setSaraSilenced(true);
     setIsSaraSilencedState(true);
     stopSaraSpeech();
-    showToast('Sara calada até chamares');
-  }, [showToast]);
+    if (getVoiceReadingStatus().active && !getVoiceReadingStatus().paused) {
+      pauseVoiceReading();
+    }
+  }, []);
 
-  const handleListenMessageDetail = useCallback((msgText: string) => {
+  const handleEnterCallMode = useCallback(() => {
+    isCallModeRef.current = true;
+    isSaraSilencedRef.current = true;
+    setSaraCallMode(true);
+    setIsCallModeState(true);
+    setSaraSilenced(true);
+    setIsSaraSilencedState(true);
+    stopSaraSpeech();
+    if (getVoiceReadingStatus().active && !getVoiceReadingStatus().paused) {
+      pauseVoiceReading();
+    }
+    jarvisMediaControlRef.current?.pause();
+  }, []);
+
+  const handleExitSilenceOrCallMode = useCallback(() => {
+    isCallModeRef.current = false;
+    isSaraSilencedRef.current = false;
+    setSaraCallMode(false);
+    setIsCallModeState(false);
     setSaraSilenced(false);
     setIsSaraSilencedState(false);
+    speakAsSara('Estou aqui.', voiceEnabledRef.current, {
+      level: 'short',
+      forceSpeak: true,
+      bypassSilence: true,
+    });
+  }, []);
+
+  const handleListenMessageDetail = useCallback((msgText: string) => {
+    if (isCallModeRef.current || isSaraSilencedRef.current) return;
     speakAsSara(msgText, true, { level: 'full', forceSpeak: true });
   }, []);
 
@@ -2490,21 +2613,42 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
-      // 1. Calar ou reativar voz da Sara imediatamente
+      // 1. Controlo imediato de Silêncio, Modo Chamada e Interrupção ("Sara, cala", "Sara, estou numa chamada", "Sara, para tudo", "Sara, pausa", "Sara, podes falar")
+      if (cmd.type === 'enter_call_mode') {
+        handleEnterCallMode();
+        return true;
+      }
+
+      if (cmd.type === 'stop_all_and_pause') {
+        stopSaraSpeech();
+        if (getVoiceReadingStatus().active && !getVoiceReadingStatus().paused) {
+          pauseVoiceReading();
+        }
+        jarvisMediaControlRef.current?.pause();
+        return true;
+      }
+
+      if (cmd.type === 'pause_current_activity') {
+        stopSaraSpeech();
+        if (getVoiceReadingStatus().active && !getVoiceReadingStatus().paused) {
+          pauseVoiceReading();
+        }
+        jarvisMediaControlRef.current?.pause();
+        return true;
+      }
+
       if (cmd.type === 'silence_sara') {
         handleForceSilenceSara();
         return true;
       }
 
       if (cmd.type === 'unsilence_sara') {
-        setSaraSilenced(false);
-        setIsSaraSilencedState(false);
-        showToast('Voz da Sara reativada');
-        speakAsSara(
-          getHumanChoice(['Voz reativada! Podes falar.', 'Estou a ouvir-te de novo! Diz lá.']),
-          voiceEnabledRef.current,
-          { level: 'short', forceSpeak: true }
-        );
+        handleExitSilenceOrCallMode();
+        return true;
+      }
+
+      // Em Modo Chamada ou Modo Silêncio, ignora qualquer outro comando ou conversa de fundo até libertação explícita
+      if (isCallModeRef.current || isSaraSilencedRef.current) {
         return true;
       }
 
@@ -2518,16 +2662,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
-      // Reativa voz automaticamente quando o utilizador chama a Sara
-      if (/^sara\b/i.test(rawText.trim())) {
-        setSaraSilenced(false);
-        setIsSaraSilencedState(false);
-      }
-
       // 2. Velocidade da voz
       if (cmd.type === 'voice_speed') {
-        setSaraSilenced(false);
-        setIsSaraSilencedState(false);
         const newRate = adjustVoiceSpeed(cmd.direction);
         const msg =
           cmd.direction === 'faster'
@@ -2542,8 +2678,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       // 3. Nível de voz
       if (cmd.type === 'voice_level') {
-        setSaraSilenced(false);
-        setIsSaraSilencedState(false);
         setVoiceLevel(cmd.level);
         const confirmMsg =
           cmd.level === 'full'
@@ -2744,6 +2878,263 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      if (cmd.type === 'wake_ack') {
+        speakAsSara(cmd.reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'unintelligible_clarify') {
+        speakAsSara(cmd.reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'next_music') {
+        jarvisMediaControlRef.current?.next();
+        showToast('Próxima faixa');
+        speakAsSara(
+          getHumanChoice(['Boa, passei para a próxima.', 'Próxima faixa a tocar.', 'Mudei de som.']),
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+        return true;
+      }
+
+      if (cmd.type === 'prev_music') {
+        jarvisMediaControlRef.current?.prev();
+        showToast('Faixa anterior');
+        speakAsSara(
+          getHumanChoice(['Voltei à faixa anterior.', 'A tocar a música de trás.']),
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+        return true;
+      }
+
+      if (cmd.type === 'mute_music') {
+        const muted = jarvisMediaControlRef.current?.toggleMute();
+        showToast(muted ? 'Som silenciado' : 'Som reposto');
+        speakAsSara(muted ? 'Tirei o som.' : 'Som ligado de novo.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'shuffle_music') {
+        const shuffled = jarvisMediaControlRef.current?.toggleShuffle();
+        showToast(shuffled ? 'Modo aleatório ligado' : 'Modo aleatório desligado');
+        speakAsSara(
+          shuffled ? 'Modo aleatório ligado, bora misturar!' : 'Ordem normal da playlist.',
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+        return true;
+      }
+
+      if (cmd.type === 'loop_music') {
+        const looped = jarvisMediaControlRef.current?.toggleLoop();
+        showToast(looped ? 'Loop ligado' : 'Loop desligado');
+        speakAsSara(
+          looped ? 'Vou repetir esta faixa em loop.' : 'Loop desligado.',
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+        return true;
+      }
+
+      if (cmd.type === 'like_music') {
+        const res = jarvisMediaControlRef.current?.likeCurrent();
+        showToast(res?.title ? `Favorita: ${res.title}` : 'Guardada nos favoritos');
+        speakAsSara(
+          res?.title
+            ? `Boa escolha, guardei ${res.title} nos teus favoritos.`
+            : 'Guardada nos teus favoritos!',
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+        return true;
+      }
+
+      if (cmd.type === 'identify_music') {
+        const info = jarvisMediaControlRef.current?.identifyCurrent();
+        speakAsSara(
+          info?.title
+            ? `Estás a ouvir ${info.title} de ${info.artist || 'YouTube'}.`
+            : 'Não há nenhuma faixa ativa agora.',
+          voiceEnabledRef.current,
+          { level: 'short', forceSpeak: true }
+        );
+        return true;
+      }
+
+      if (cmd.type === 'smart_home_control') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        setTimeout(() => {
+          jarvisMediaControlRef.current?.applySmartHome({
+            device: cmd.device,
+            state: cmd.state,
+            room: cmd.room,
+            sceneName: cmd.sceneName,
+          });
+        }, 60);
+        showToast(cmd.reply);
+        speakAsSara(cmd.reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'electric_calc') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        const immediateReply = jarvisMediaControlRef.current?.showElectricCalc({
+          voltage: cmd.voltage,
+          current: cmd.current,
+          resistance: cmd.resistance,
+          power: cmd.power,
+          reconstructed: cmd.reconstructed,
+        });
+        showToast('Cálculo elétrico no preview');
+        if (immediateReply) {
+          speakAsSara(immediateReply, voiceEnabledRef.current, { level: 'medium', forceSpeak: true });
+        } else {
+          setTimeout(() => {
+            const delayedReply = jarvisMediaControlRef.current?.showElectricCalc({
+              voltage: cmd.voltage,
+              current: cmd.current,
+              resistance: cmd.resistance,
+              power: cmd.power,
+              reconstructed: cmd.reconstructed,
+            });
+            if (delayedReply) {
+              speakAsSara(delayedReply, voiceEnabledRef.current, { level: 'medium', forceSpeak: true });
+            }
+          }, 90);
+        }
+        return true;
+      }
+
+      if (cmd.type === 'switch_media_source') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        const pendingAmb = pendingSourceAmbiguityRef.current;
+        pendingSourceAmbiguityRef.current = null;
+        setTimeout(async () => {
+          const reply =
+            jarvisMediaControlRef.current?.switchMediaSource(cmd.source) ||
+            (cmd.source === 'local' ? 'Modo local ativo.' : 'De volta ao modo internet.');
+          if (pendingAmb && cmd.source === 'local') {
+            const playReply = await jarvisMediaControlRef.current?.playLocalMedia({
+              kind: pendingAmb.kind,
+              query: pendingAmb.query,
+            });
+            speakAsSara(playReply || reply, voiceEnabledRef.current, {
+              level: 'short',
+              forceSpeak: true,
+            });
+            return;
+          }
+          if (pendingAmb && cmd.source === 'internet') {
+            await jarvisMediaControlRef.current?.playGenreOrQuery(pendingAmb.query || '');
+            speakAsSara('A tocar da internet.', voiceEnabledRef.current, {
+              level: 'short',
+              forceSpeak: true,
+            });
+            return;
+          }
+          showToast(reply);
+          speakAsSara(reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        }, 70);
+        return true;
+      }
+
+      if (cmd.type === 'play_local_media') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        setTimeout(async () => {
+          const reply =
+            (await jarvisMediaControlRef.current?.playLocalMedia({
+              kind: cmd.kind,
+              query: cmd.query,
+              folderOrDate: cmd.folderOrDate,
+            })) || 'A abrir ficheiro local.';
+          showToast(reply);
+          speakAsSara(reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        }, 70);
+        return true;
+      }
+
+      if (cmd.type === 'open_local_document') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        setTimeout(async () => {
+          const reply =
+            (await jarvisMediaControlRef.current?.openLocalDocument({
+              docCategory: cmd.docCategory,
+              query: cmd.query,
+            })) || 'A abrir documento local.';
+          showToast(reply);
+          speakAsSara(reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        }, 70);
+        return true;
+      }
+
+      if (cmd.type === 'filter_local_library') {
+        if (workspaceModeRef.current !== 'jarvis') {
+          setWorkspaceMode('jarvis');
+          workspaceModeRef.current = 'jarvis';
+        }
+        setTimeout(() => {
+          const reply =
+            jarvisMediaControlRef.current?.filterLocalLibrary({
+              filter: cmd.filter,
+              query: cmd.query,
+            }) || 'Biblioteca local filtrada.';
+          showToast(reply);
+          speakAsSara(reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        }, 70);
+        return true;
+      }
+
+      if (cmd.type === 'media_seek') {
+        jarvisMediaControlRef.current?.seekBy(cmd.seconds);
+        const dirLabel =
+          cmd.seconds > 0
+            ? cmd.seconds >= 60
+              ? `Adiantei ${Math.round(cmd.seconds / 60)} minuto.`
+              : `Adiantei ${cmd.seconds} segundos.`
+            : `Voltei ${Math.abs(cmd.seconds)} segundos.`;
+        showToast(dirLabel);
+        speakAsSara(dirLabel, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'media_fullscreen') {
+        jarvisMediaControlRef.current?.setFullscreen(cmd.enabled);
+        const msg = cmd.enabled ? 'Tela cheia ativada.' : 'Saí da tela cheia.';
+        showToast(msg);
+        speakAsSara(msg, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return true;
+      }
+
+      if (cmd.type === 'ask_media_source_ambiguity') {
+        pendingSourceAmbiguityRef.current = { kind: cmd.kind, query: cmd.query };
+        speakAsSara('Local ou da internet?', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
       if (cmd.type === 'pause_reading') {
         pauseVoiceReading();
         showToast('Leitura pausada — diz "continua" para retomar');
@@ -2771,8 +3162,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       // 4. Conversa rápida em 2.º plano (apenas voz, ZERO balão de texto no chat)
       if (cmd.type === 'background_smalltalk') {
-        setSaraSilenced(false);
-        setIsSaraSilencedState(false);
         speakAsSara(cmd.reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
         return true;
       }
@@ -3801,22 +4190,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       if (!rawTrimmed && !image && (!attachments || attachments.length === 0)) return;
 
       const isVoice = source === 'voice';
-      const trimmed = isVoice ? normalizePhoneticVoiceTranscript(rawTrimmed) : rawTrimmed;
+      const preGuardTrimmed = rawTrimmed;
       markUserActivity();
 
       // PROTEÇÃO TOTAL (Lealdade, Admin Invisível, Segredo & Privacidade) para não-donos antes de qualquer comando ou IA
-      if (trimmed) {
-        const guard = evaluateNonOwnerGuard(trimmed, session);
+      if (preGuardTrimmed) {
+        const guard = evaluateNonOwnerGuard(preGuardTrimmed, session);
         if (guard.intercepted) {
-          if (guard.alertType && session) {
-            void logAdminAlert({
-              type: guard.alertType,
-              userId: session.userId,
-              userName: session.callName,
-              userEmail: session.email,
-              summary: `${session.callName} enviou no chat: "${trimmed.slice(0, 90)}"`,
-            });
-          }
+          const guardReply = guard.reply || 'Não tens acesso a isso.';
           const guardTime = new Date().toLocaleTimeString('pt-PT', {
             hour: '2-digit',
             minute: '2-digit',
@@ -3825,13 +4206,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             const gUsrMsg: ChatMessage = {
               id: `usr_${Date.now()}`,
               sender: 'user',
-              text: trimmed,
+              text: preGuardTrimmed,
               timestamp: guardTime,
             };
             const gSaraMsg: ChatMessage = {
               id: `sara_guard_${Date.now()}`,
               sender: 'sara',
-              text: guard.reply,
+              text: guardReply,
               timestamp: guardTime,
               mode: 'conversation',
               voiceDelivered: true,
@@ -3842,12 +4223,29 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               salvarMensagemChatFirebase(gSaraMsg, currentProject.id, effectiveStorageUid);
             }
           }
-          speakAsSara(guard.voiceSummary || guard.reply, voiceEnabledRef.current, {
+          speakAsSara(guard.voiceSummary || guardReply, voiceEnabledRef.current, {
             level: 'short',
             forceSpeak: true,
           });
           return;
         }
+      }
+
+      const reconText = rawTrimmed
+        ? reconstructDistortedVoiceInput(rawTrimmed, voiceContextRef.current)
+        : null;
+      if (reconText?.unintelligible && !image && (!attachments || attachments.length === 0)) {
+        const clarifier =
+          reconText.clarifierSpeech || 'Epa, essa chegou toda torta, era música, site ou luz?';
+        speakAsSara(clarifier, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return;
+      }
+
+      const trimmed = reconText
+        ? reconText.reconstructed || reconText.cleaned || rawTrimmed
+        : rawTrimmed;
+      if (trimmed) {
+        pushRecentUtterance(trimmed);
       }
 
       const cmd = parseVoiceCommand(trimmed, voiceContextRef.current);
@@ -3858,27 +4256,40 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           stopMicRef.current = startContinuousVoiceRecognition({
             shouldKeepListening: () => shouldKeepListeningRef.current,
             onResult: (transcript) => {
-              const voiceCmd = parseVoiceCommand(transcript, voiceContextRef.current);
+              const voiceGuard = evaluateNonOwnerGuard(transcript, session);
+              if (voiceGuard.intercepted) {
+                speakAsSara(voiceGuard.voiceSummary || voiceGuard.reply || 'Não tens acesso a isso.', voiceEnabledRef.current, {
+                  level: 'short',
+                  forceSpeak: true,
+                });
+                return;
+              }
+              const voiceRecon = reconstructDistortedVoiceInput(transcript, voiceContextRef.current);
+              const cleanVoiceText = voiceRecon.reconstructed || voiceRecon.cleaned || transcript;
+              if (!voiceRecon.unintelligible) {
+                pushRecentUtterance(cleanVoiceText);
+              }
+              const voiceCmd = parseVoiceCommand(cleanVoiceText, voiceContextRef.current);
               addConsoleLog('info', '[Canal de Voz] Comando captado em 2.º plano.');
               setIsVoiceProcessing(true);
               const runner = executePlatformCommandRef.current || executePlatformCommand;
-              runner(voiceCmd, transcript)
+              runner(voiceCmd, cleanVoiceText)
                 .then((handled) => {
                   if (!handled) {
                     if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
-                      return jarvisPromptRef.current(transcript, 'voice');
+                      return jarvisPromptRef.current(cleanVoiceText, 'voice');
                     }
                     if (
                       workspaceModeRef.current === 'builder' &&
-                      isAssistantExplanationIntent(transcript)
+                      isAssistantExplanationIntent(cleanVoiceText)
                     ) {
                       handleChangeWorkspaceMode('jarvis', { silent: true });
                       setTimeout(() => {
-                        void jarvisPromptRef.current?.(transcript, 'voice');
+                        void jarvisPromptRef.current?.(cleanVoiceText, 'voice');
                       }, 90);
                       return;
                     }
-                    return handleSendMessageRef.current?.(transcript, undefined, undefined, 'voice');
+                    return handleSendMessageRef.current?.(cleanVoiceText, undefined, undefined, 'voice');
                   }
                 })
                 .finally(() => {
@@ -4404,7 +4815,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           speakAsSara(spokenOnly, voiceEnabledRef.current, {
             level: 'medium',
             isQuestionReply: true,
-            forceSpeak: isVoice || !isSaraSilenced,
+            forceSpeak: true,
           });
           if (result.actions && result.actions.length > 0) {
             await executeSaraActions(result.actions);
@@ -4574,7 +4985,41 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     stopMicRef.current = startContinuousVoiceRecognition({
       shouldKeepListening: () => shouldKeepListeningRef.current,
       onResult: (transcript) => {
-        const cmd = parseVoiceCommand(transcript, voiceContextRef.current);
+        // Quando está SILENCIADA ou em MODO CHAMADA, ignora tudo o que ouvir (inclusive conversa com outras pessoas) e só obedece a comandos explícitos de libertação/silêncio/paragem
+        if (isCallModeRef.current || isSaraSilencedRef.current) {
+          const quickCmd = parseVoiceCommand(transcript, {
+            ...voiceContextRef.current,
+            isSilenced: isSaraSilencedRef.current,
+            isCallMode: isCallModeRef.current,
+          });
+          if (
+            quickCmd.type === 'unsilence_sara' ||
+            quickCmd.type === 'silence_sara' ||
+            quickCmd.type === 'enter_call_mode' ||
+            quickCmd.type === 'stop_all_and_pause'
+          ) {
+            const runner = executePlatformCommandRef.current || executePlatformCommand;
+            void runner(quickCmd, transcript);
+          }
+          return;
+        }
+
+        const voiceGuard = evaluateNonOwnerGuard(transcript, session);
+        if (voiceGuard.intercepted) {
+          speakAsSara(voiceGuard.voiceSummary || voiceGuard.reply || 'Não tens acesso a isso.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return;
+        }
+
+        const voiceRecon = reconstructDistortedVoiceInput(transcript, voiceContextRef.current);
+        const cleanTranscript = voiceRecon.reconstructed || voiceRecon.cleaned || transcript;
+        if (!voiceRecon.unintelligible) {
+          pushRecentUtterance(cleanTranscript);
+        }
+
+        const cmd = parseVoiceCommand(cleanTranscript, voiceContextRef.current);
         addConsoleLog('info', '[Canal de Voz] Comando captado em 2.º plano.');
 
         if (cmd.type === 'start_listening') {
@@ -4587,23 +5032,23 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
         setIsVoiceProcessing(true);
         const runner = executePlatformCommandRef.current || executePlatformCommand;
-        runner(cmd, transcript)
+        runner(cmd, cleanTranscript)
           .then((handled) => {
             if (!handled) {
               if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
-                return jarvisPromptRef.current(transcript, 'voice');
+                return jarvisPromptRef.current(cleanTranscript, 'voice');
               }
               if (
                 workspaceModeRef.current === 'builder' &&
-                isAssistantExplanationIntent(transcript)
+                isAssistantExplanationIntent(cleanTranscript)
               ) {
                 handleChangeWorkspaceMode('jarvis', { silent: true });
                 setTimeout(() => {
-                  void jarvisPromptRef.current?.(transcript, 'voice');
+                  void jarvisPromptRef.current?.(cleanTranscript, 'voice');
                 }, 90);
                 return;
               }
-              return handleSendMessageRef.current?.(transcript, undefined, undefined, 'voice');
+              return handleSendMessageRef.current?.(cleanTranscript, undefined, undefined, 'voice');
             }
           })
           .finally(() => {
@@ -4802,6 +5247,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         isListening={isListening}
         isSaraSpeaking={isSaraSpeaking}
         isSaraSilenced={isSaraSilenced}
+        isCallMode={isCallMode}
         isThinking={isThinking || liveBuild.isBuilding}
         firebaseUser={firebaseUser}
         isSyncingFirebase={isSyncingFirebase}
@@ -4822,6 +5268,25 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         onLogout={() => void handleLogout('Sessão encerrada.')}
       />
 
+      {/* Indicador discreto e profissional no canto quando silenciada ou em Modo Chamada */}
+      {(isSaraSilenced || isCallMode) && (
+        <div
+          className={`fixed top-16 right-4 z-[74] flex items-center gap-2 px-3 py-1.5 rounded-xl border backdrop-blur-md shadow-[0_6px_24px_rgba(0,0,0,0.45)] text-[11px] font-mono font-bold tracking-widest uppercase select-none ${
+            isCallMode
+              ? 'bg-[#170E04]/92 border-amber-400/50 text-amber-200'
+              : 'bg-[#14070D]/92 border-rose-500/50 text-rose-200'
+          }`}
+          title='Diz "Sara, podes falar" ou "Sara, voltei" para reativar a voz'
+        >
+          {isCallMode ? (
+            <PhoneOff className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+          ) : (
+            <VolumeX className="w-3.5 h-3.5 text-rose-300 shrink-0" />
+          )}
+          <span>{isCallMode ? 'MODO CHAMADA · SILENCIADA' : 'SILENCIADA'}</span>
+        </div>
+      )}
+
       {toastMsg && (
         <div className="fixed bottom-4 right-4 z-50 px-4 py-2.5 rounded-xl bg-[#090D16] border border-cyan-400/50 text-xs font-medium text-cyan-200 shadow-2xl">
           {toastMsg}
@@ -4839,6 +5304,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           isListening={isListening}
           isSaraSpeaking={isSaraSpeaking}
           isSaraSilenced={isSaraSilenced}
+          isCallMode={isCallMode}
           firebaseUserUid={effectiveStorageUid || undefined}
           activeBuilderProjectName={currentProject.name}
           activeBuilderFiles={Object.keys(currentProject.files || {})}

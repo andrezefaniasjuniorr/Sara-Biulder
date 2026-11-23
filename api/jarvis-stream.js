@@ -119,13 +119,13 @@ export default async function handler(req, res) {
     if (!streamed) {
       sendEvent({
         type: 'error',
-        error: formatFriendlyAiError(lastError),
+        error: formatFriendlyAiError(lastError, Boolean(req.body?.userIdentity?.isOwner)),
       });
     }
   } catch (err) {
     sendEvent({
       type: 'error',
-      error: formatFriendlyAiError(err),
+      error: formatFriendlyAiError(err, Boolean(req.body?.userIdentity?.isOwner)),
     });
   } finally {
     res.end();

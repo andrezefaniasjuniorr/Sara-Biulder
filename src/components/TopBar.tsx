@@ -35,6 +35,7 @@ interface TopBarProps {
   isListening: boolean;
   isSaraSpeaking: boolean;
   isSaraSilenced: boolean;
+  isCallMode?: boolean;
   isThinking: boolean;
   firebaseUser: FirebaseUserProfile | null;
   isSyncingFirebase?: boolean;
@@ -74,6 +75,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   isListening,
   isSaraSpeaking,
   isSaraSilenced,
+  isCallMode = false,
   isThinking,
   isSyncingFirebase = false,
   isJarvisPanelOpen = false,
@@ -323,20 +325,26 @@ export const TopBar: React.FC<TopBarProps> = ({
           type="button"
           onClick={onSilenceSara}
           className={`px-2 py-1.5 rounded-lg text-xs font-medium border transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer ${
-            isSaraSilenced
+            isCallMode
+              ? 'bg-amber-500/20 border-amber-400/50 text-amber-200'
+              : isSaraSilenced
               ? 'bg-rose-500/20 border-rose-500/50 text-rose-300'
               : isSaraSpeaking
               ? 'bg-amber-500/20 border-amber-400/60 text-amber-200'
               : 'bg-[#0A0A0F] border-[#1F1F2E] text-[#A1A1AA] hover:text-rose-300'
           }`}
           title={
-            isSaraSilenced
-              ? 'Sara calada até chamares (clica para reativar)'
+            isCallMode
+              ? 'Modo Chamada ativo (clica ou diz "Sara, voltei" para sair)'
+              : isSaraSilenced
+              ? 'Silenciada até chamares (clica ou diz "Sara, podes falar")'
               : 'Calar Sara imediatamente'
           }
         >
           <VolumeX className="w-3.5 h-3.5" />
-          <span className="hidden lg:inline">{isSaraSilenced ? 'Calada' : 'Calar Sara'}</span>
+          <span className="hidden lg:inline">
+            {isCallMode ? 'Chamada' : isSaraSilenced ? 'Silenciada' : 'Calar Sara'}
+          </span>
         </button>
 
         <button

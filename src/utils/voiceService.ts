@@ -6,6 +6,13 @@ export type VoiceCommandAction =
   | { type: 'background_smalltalk'; reply: string; raw: string }
   | { type: 'silence_sara'; raw: string }
   | { type: 'unsilence_sara'; raw: string }
+  | {
+      type: 'enter_call_mode';
+      reason?: 'chamada' | 'reuniao' | 'aula' | 'ocupado';
+      raw: string;
+    }
+  | { type: 'stop_all_and_pause'; raw: string }
+  | { type: 'pause_current_activity'; raw: string }
   | { type: 'show_builder_progress'; raw: string }
   | { type: 'confirm_pending'; raw: string }
   | { type: 'cancel_pending'; raw: string }
@@ -73,7 +80,67 @@ export type VoiceCommandAction =
   | { type: 'focus_mode_off'; raw: string }
   | { type: 'open_admin'; raw: string }
   | { type: 'logout_session'; raw: string }
+  | { type: 'wake_ack'; reply: string; raw: string }
+  | { type: 'unintelligible_clarify'; reply: string; raw: string }
+  | { type: 'next_music'; raw: string }
+  | { type: 'prev_music'; raw: string }
+  | { type: 'mute_music'; raw: string }
+  | { type: 'shuffle_music'; raw: string }
+  | { type: 'loop_music'; raw: string }
+  | { type: 'like_music'; raw: string }
+  | { type: 'identify_music'; raw: string }
+  | {
+      type: 'smart_home_control';
+      device: 'luz' | 'ventoinha' | 'ac' | 'porta' | 'tomada' | 'modo';
+      state: 'on' | 'off' | 'scene';
+      room?: string;
+      sceneName?: string;
+      reply: string;
+      raw: string;
+    }
+  | {
+      type: 'electric_calc';
+      voltage?: number;
+      current?: number;
+      resistance?: number;
+      power?: number;
+      reconstructed: string;
+      raw: string;
+    }
+  | { type: 'switch_media_source'; source: 'internet' | 'local'; raw: string }
+  | {
+      type: 'play_local_media';
+      kind: 'music' | 'video' | 'image' | 'audio' | 'any';
+      query?: string;
+      folderOrDate?: string;
+      raw: string;
+    }
+  | {
+      type: 'open_local_document';
+      docCategory: 'pdf' | 'word' | 'ppt' | 'excel' | 'recent' | 'any';
+      query?: string;
+      raw: string;
+    }
+  | {
+      type: 'filter_local_library';
+      filter: 'all' | 'pdfs' | 'videos' | 'music' | 'images' | 'documents' | 'recents' | 'favorites';
+      query?: string;
+      raw: string;
+    }
+  | { type: 'media_seek'; seconds: number; raw: string }
+  | { type: 'media_fullscreen'; enabled: boolean; raw: string }
+  | { type: 'ask_media_source_ambiguity'; query?: string; kind: 'music' | 'video'; raw: string }
   | { type: 'prompt'; text: string };
+
+export type VoiceDomainTopic =
+  | 'music'
+  | 'builder'
+  | 'electricity'
+  | 'home'
+  | 'study'
+  | 'agenda'
+  | 'system'
+  | 'general';
 
 export interface VoiceParseContext {
   workspaceMode?: 'jarvis' | 'builder';
@@ -84,14 +151,37 @@ export interface VoiceParseContext {
   hasOpenOverlay?: boolean;
   hasPendingConfirm?: boolean;
   hasActiveMedia?: boolean;
+  mediaSource?: 'youtube' | 'local';
   isMediaPaused?: boolean;
   hasActiveStage?: boolean;
+  activeLocalKind?: 'music' | 'video' | 'image' | 'document' | 'browser';
   hasActiveReading?: boolean;
   isReadingPaused?: boolean;
+  hasLocalPermission?: boolean;
+  preferredMediaSource?: 'internet' | 'local';
+  isOffline?: boolean;
   projectFiles?: string[];
   availableProjects?: string[];
   isMissionActive?: boolean;
   isMissionPaused?: boolean;
+  recentUserUtterances?: string[];
+  lastTopic?: VoiceDomainTopic;
+  lastTrackTitle?: string;
+  lastTrackArtist?: string;
+  isOwner?: boolean;
+  callName?: string;
+  isSilenced?: boolean;
+  isCallMode?: boolean;
+}
+
+export interface ReconstructedVoiceResult {
+  original: string;
+  cleaned: string;
+  reconstructed: string;
+  wasDistorted: boolean;
+  domainHint: VoiceDomainTopic;
+  unintelligible: boolean;
+  clarifierSpeech?: string;
 }
 
 function getTimePeriod(): 'morning' | 'afternoon' | 'night' {
@@ -155,15 +245,47 @@ export function getInstantSmallTalkReply(
   isOwner = false
 ): string | null {
   const period = getTimePeriod();
-  const clean = normalizedLower.replace(/[!?,.;:]/g, '').trim();
+  const clean = normalizedLower
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[!?,.;:]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   const safeName = callName?.trim();
+  const nameChunk = safeName ? `, ${safeName}` : '';
+
+  // Chamamentos rápidos e alertas de presença
+  if (
+    /^(ei|pssst|psst|olha|escuta|acorda|acorda sara|sara acorda|sou eu|chefe aqui)$/i.test(clean)
+  ) {
+    if (isOwner) {
+      if (clean === 'chefe aqui') {
+        return pickNonRepeating([
+          'Sempre a postos, chefe! Manda vir.',
+          'Às ordens, Senhor Júnior! Que cena vamos atacar?',
+        ]);
+      }
+      return pickNonRepeating([
+        'Estou ligada, chefe! Manda vir.',
+        'Sempre a postos, Senhor Júnior! Que cena vamos atacar?',
+        'Estou aqui a ouvir-te. Podes mandar.',
+        'Acordada e pronta! Bora lá.',
+      ]);
+    }
+    return pickNonRepeating([
+      `Estou aqui${nameChunk}! Podes falar.`,
+      `A ouvir-te${nameChunk}. Que precisas agora?`,
+      'Ligada e pronta! Manda vir.',
+    ]);
+  }
 
   if (
-    /^(ola|oi|hey|ei)(\s+sara)?(\s+(tudo bem|como estas|como vai|esta tudo bem))?$/i.test(clean) ||
-    /^(bom dia|boa tarde|boa noite)(\s+sara)?(\s+(tudo bem|como estas))?$/i.test(clean)
+    /^(ola|oi|hey|ei)(\s+sara)?(\s+(tudo bem|como estas|como vai|esta tudo bem|ta se bem|tasse bem))?$/i.test(
+      clean
+    ) ||
+    /^(bom dia|boa tarde|boa noite)(\s+sara)?(\s+(tudo bem|como estas|ta se bem))?$/i.test(clean)
   ) {
     if (!isOwner) {
-      const nameChunk = safeName ? `, ${safeName}` : '';
       if (period === 'night') {
         return pickNonRepeating([
           `Olá${nameChunk}! Estou por aqui. O que vamos fazer esta noite?`,
@@ -185,7 +307,7 @@ export function getInstantSmallTalkReply(
       return pickNonRepeating([
         'Estou acordada e ligada. O que vamos criar hoje à noite?',
         'Cá estou eu, chefe. Tens alguma ideia forte em mente?',
-        'Fala comigo! Vamos resolver algum problema ou programar algo novo?',
+        'Fala comigo! Vamos resolver algum mambo ou programar algo novo?',
         'Chegaste na hora certa, Senhor Júnior. Qual é a missão agora?',
         'Olá! Manda o desafio que os sistemas já estão quentes.',
       ]);
@@ -202,34 +324,104 @@ export function getInstantSmallTalkReply(
     return pickNonRepeating([
       'Oi! Já estava à tua espera — o que vamos fazer agora?',
       'Fala comigo! Manda o próximo desafio que eu entro logo em ação.',
-      'Estou ligada! Queres conversar, pesquisar ou construir algum projeto?',
-      'E aí, chefe! Alguma ideia nova a ferver?',
+      'Estou ligada! Queres música, estudo ou construir algum projeto?',
+      'E aí, chefe! Alguma cena nova a ferver?',
       'Pronta para a ação. Diz-me o que tens em mente.',
       'Sempre a postos, Senhor Júnior! Vamos surpreender hoje com quê?',
     ]);
   }
 
+  // Gírias moçambicanas / expressões de confirmação casual / energia
   if (
-    /^(sara\s+)?(estas ai|tas ai|ouves me|esta me a ouvir|sara)$/i.test(clean) ||
-    /^(sara\s+)?(como estas|tudo bem|como vai|esta tudo bem)(\s+sara)?$/i.test(clean)
+    /^(sara\s+)?(ya|yeah|pode ser|exato|isso mesmo|e isso|dale|bora|bora la|manda vir|toca a fazer|ta se bem|ta-se bem|tasse bem|tasse|esta bem|na boa|fixe|nice|top|dope|ta a bater|bater maningue|maningue fixe|bue fixe)$/i.test(
+      clean
+    )
+  ) {
+    if (isOwner) {
+      return pickNonRepeating([
+        'Tá-se bem, chefe! Manda o próximo comando.',
+        'Fixe! É mesmo esse o espírito — estou a postos.',
+        'Bora lá! O que queres atacar agora?',
+        'Top! Diz-me só a próxima cena que eu executo já.',
+      ]);
+    }
+    return pickNonRepeating([
+      `Fixe${nameChunk}! O que fazemos a seguir?`,
+      'Tá-se bem! Manda o próximo pedido.',
+      'Bora lá! Estou pronta para ajudar.',
+    ]);
+  }
+
+  if (/^(epa|ih|jura|serio|estas a ver|tas a ver)(\s+sara)?$/i.test(clean)) {
+    return isOwner
+      ? pickNonRepeating([
+          'Juro mesmo, chefe! Estou aqui ligada contigo.',
+          'Epa, conta-me lá essa cena!',
+          'Estou a ver, sim! Continua.',
+        ])
+      : pickNonRepeating([
+          'Estou a acompanhar-te! Conta-me mais.',
+          'Epa, diz-me o que aconteceu!',
+        ]);
+  }
+
+  if (
+    /^(deixa|deixa la|deixa pra la|nao e isso|nao era isso|errado|nao|nada|esquece|cancela|chega|basta|ja chega)(\s+sara)?$/i.test(
+      clean
+    )
+  ) {
+    return pickNonRepeating([
+      'Tranquilo, deixei isso para lá.',
+      'Sem stress, parei por aqui. Manda outra cena quando quiseres.',
+      'Na boa, esquecido! O que fazemos agora?',
+    ]);
+  }
+
+  if (/^(vou bazar|bazar|estou a bazar|to a bazar)(\s+sara)?$/i.test(clean)) {
+    return isOwner
+      ? pickNonRepeating([
+          'Vai lá tranquilo, chefe! Quando voltares, é só chamar.',
+          'Fica bem, Senhor Júnior! Deixo tudo guardado por aqui.',
+        ])
+      : pickNonRepeating([
+          `Vai na boa${nameChunk}! Até já.`,
+          'Fica bem! Quando voltares, chama.',
+        ]);
+  }
+
+  if (/^(nao ta a dar|nao esta a dar|ta dificil|esta dificil)(\s+sara)?$/i.test(clean)) {
+    return isOwner
+      ? pickNonRepeating([
+          'Epa, não stressa chefe — diz-me qual é o mambo que a gente resolve já.',
+          'Calma! Mostra-me onde trancou que eu ajudo-te a destravar isso agora.',
+        ])
+      : pickNonRepeating([
+          'Calma, diz-me o que não está a dar que eu ajudo a resolver agora.',
+          'Sem stress — explica-me onde encravou e vamos desbloquear isso.',
+        ]);
+  }
+
+  if (
+    /^(sara\s+)?(estas ai|tas ai|ouves me|esta me a ouvir|me ouves|sara)$/i.test(clean) ||
+    /^(sara\s+)?(como estas|tudo bem|como vai|esta tudo bem|como tas)(\s+sara)?$/i.test(clean)
   ) {
     return isOwner
       ? pickNonRepeating([
-          'Por aqui está tudo a mil! E desse lado, tudo fixe?',
+          'Por aqui está tudo a bater forte! E desse lado, tudo fixe?',
           'Estou impecável e cheia de ideias. O que trazes hoje?',
           'A funcionar sem nenhum erro! Conta-me lá o que precisas.',
           'Tudo ótimo, chefe! Manda voz ou texto que eu respondo já.',
         ])
       : pickNonRepeating([
-          `Estou aqui${safeName ? `, ${safeName}` : ''}! O que precisas agora?`,
+          `Estou aqui${nameChunk}! O que precisas agora?`,
           'Tudo ótimo por aqui! Conta-me o que queres fazer.',
         ]);
   }
 
-  if (/^(obrigado|obrigada|valeu|muito obrigado)(\s+sara)?$/i.test(clean)) {
+  if (/^(obrigado|obrigada|valeu|muito obrigado|brigad[oa])(\s+sara)?$/i.test(clean)) {
     return pickNonRepeating([
       'Sempre às ordens!',
-      'De nada! Precisando de mais alguma coisa, chama.',
+      'De nada! Precisando de mais alguma cena, chama.',
       'Não tens de quê. Bora para a próxima!',
       'É para isso que estou cá!',
     ]);
@@ -238,7 +430,7 @@ export function getInstantSmallTalkReply(
   if (/^(tchau|ate logo|ate ja|ate amanha|adeus)(\s+sara)?$/i.test(clean)) {
     if (!isOwner) {
       return pickNonRepeating([
-        `Até já${safeName ? `, ${safeName}` : ''}! Quando precisares, é só chamar.`,
+        `Até já${nameChunk}! Quando precisares, é só chamar.`,
         'Fica bem! Estou por aqui.',
       ]);
     }
@@ -447,30 +639,116 @@ export function getModeSwitchSpeech(mode: 'manual' | 'automatic'): string {
 }
 
 /**
- * Corrige erros fonéticos frequentes do reconhecimento de voz pt-PT / Moçambique dentro do contexto da plataforma.
+ * Infere o domínio principal de uma frase (música, builder, eletricidade, casa, estudo, agenda, sistema)
+ */
+export function inferDomainFromText(text: string): VoiceDomainTopic {
+  const lower = String(text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (
+    /\b(musica|som|toca|amapiano|afro|marrabenta|kizomba|youtube|pausa|volume|playlist|faixa|canta|shuffle|baralha|loop)\b/i.test(
+      lower
+    )
+  ) {
+    return 'music';
+  }
+  if (
+    /\b(volt|volts|ampere|amperes|watt|watts|kw|kva|ohm|ohms|resistencia|tensao|corrente|potencia|disjuntor|fusivel|contactor|rele|trifasico|monofasico|220|380|230|400|curto|aterramento|fase|neutro|quadro\s+eletrico|inversor|solar|multimetro|alicate|edm|kwh|cabo|seccao|eletric)/i.test(
+      lower
+    )
+  ) {
+    return 'electricity';
+  }
+  if (
+    /\b(site|website|app|aplicativo|aplicacao|sistema|jogo|loja|portfolio|builder|codigo|editor|cor|layout|botao|html)\b/i.test(
+      lower
+    )
+  ) {
+    return 'builder';
+  }
+  if (
+    /\b(luz|luzes|lujo|ventoinha|ventilador|ar\s+condicionado|porta|tranca|destranca|tomada|modo\s+(noite|estudo|festa|dormir|relax))\b/i.test(
+      lower
+    )
+  ) {
+    return 'home';
+  }
+  if (
+    /\b(explica|cubo|esfera|cilindro|cone|piramide|prisma|calcula|equacao|matematica|fisica|teste|quiz|flashcards|mapa\s+mental|resumo|traduz)\b/i.test(
+      lower
+    )
+  ) {
+    return 'study';
+  }
+  if (/\b(agenda|alarme|lembra|lembrete|anota|marca|tarefa|reuniao|prazo)\b/i.test(lower)) {
+    return 'agenda';
+  }
+  if (/\b(painel|menu|admin|volume|bateria|wifi|internet|sistema|microfone|clima|tempo)\b/i.test(lower)) {
+    return 'system';
+  }
+  return 'general';
+}
+
+/**
+ * Corrige erros fonéticos frequentes do Google SpeechRecognition e da API em pt-PT / Moçambique.
  */
 export function normalizePhoneticVoiceTranscript(transcript: string): string {
-  let out = transcript.trim();
+  let out = String(transcript || '')
+    // Passo 1 base: remove artefactos estranhos e espaços múltiplos
+    .replace(/[\u200B-\u200D\uFEFF]/g, '')
+    .replace(/[~^*_|\\<>]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!out) return out;
 
-  // Confusão comum do nome "Sara" no início da frase (ex: "sala abre o editor", "zara modo manual")
+  // Passo 1b: limpa hesitações de preenchimento isoladas ("uhm", "ah", "eh", "hmm")
+  out = out.replace(/^(?:uhm+|hum+|hmm+|ah+|eh+|oh+)\b[\s,]*/gi, '').trim();
+  out = out.replace(/\b(?:uhm+|hmm+|aaa+)\b/gi, ' ').replace(/\s+/g, ' ').trim();
+
+  // Passo 1c: remove palavras gaguejadas / repetidas consecutivamente (ex: "sara sara", "toca toca")
+  out = out.replace(/\b([a-zà-ÿ0-9]{2,})\s+\1\b/gi, '$1');
+
+  // Passo 2: Correção fonética do nome "Sara" (início da frase ou isolado)
   out = out.replace(
-    /^(sala|saia|cara|zara|lara|saraa|çara|seara)(?=[\s,]+(abre|abrir|fecha|fechar|apaga|apagar|elimina|remove|cria|criar|faz|fazer|modo|desfaz|mostra|vai|para|continua|limpa|baixa|salva|guarda|atualiza|recarrega|cala|fala|podes|pode|pausa|retoma|tudo|esta|oi|ola|duplica|renomeia|quero|muda|poe|explica|me\s+explica|como|builder|biuder|assistente|volta))/i,
+    /^(?:sera|será|cara|sarah|zara|sala|sar|saara|cera|lara|çara|seara|saia|saraa)(?=[\s,]+|$)/i,
     'Sara'
   );
+  // Também no meio se vier depois de saudação ("oi sala" -> "oi Sara")
+  out = out.replace(
+    /\b(oi|ola|ei|hey|bora|toca|abre|fecha|calcula|explica|faz|liga|desliga)\s+(?:sera|será|cara|sarah|zara|sala|saara|cera|lara|çara|seara)\b/gi,
+    '$1 Sara'
+  );
 
-  // Confusões técnicas e fonéticas recorrentes em STT português
+  // Correções fonéticas e vocabulares de alta frequência (Google STT + API distorcida)
   const replacements: Array<[RegExp, string]> = [
-    [/\b(biuder|biulder|bilder|bilda|bider|builder\s*pro)\b/gi, 'builder'],
-    [/\b(assistent|acistente|assistenta)\b/gi, 'assistente'],
+    [/\b(pai\s+nel|painer|painel|panel|pano)\b(?=\s|$|[,!?.])/gi, 'painel'],
+    [/\b(bilder|bulder|bilda|bilde|biuder|biulder|builder\s*pro)\b/gi, 'builder'],
+    [/\b(assistent|acistente|assistenta|assistencia)\b/gi, 'assistente'],
     [/\b(jarves|javis|jarvis)\b/gi, 'jarvis'],
+    [/\b(seiti|saiti|saite|sait|web\s*site|uebsite)\b/gi, 'site'],
+    [/\b(aplicassao|aplicacao|aplicat[ií]v[oa]?|apli)\b/gi, 'aplicativo'],
+    [/\b(lujo|lujos|lus|lúz)\b/gi, 'luz'],
+    [/\b(calcu|calca|calq|calcul)\b(?=\s+\d|\s+(?:potencia|ohm|tensao|corrente|area|volume|$))/gi, 'calcula'],
+    [/\b(inhamban|inhanbane|inhanban|imbanbane|imbane)\b/gi, 'Inhambane'],
+    [/\b(matol)\b/gi, 'Matola'],
+    [/\b(maput)\b/gi, 'Maputo'],
+    [/\b(inhac)\b/gi, 'Inhaca'],
+    [/\b(noit|noiti)\b/gi, 'noite'],
+    [/\b(amapian|mapiano|a\s+ma\s+piano|ama\s+piano)\b/gi, 'Amapiano'],
+    [/\b(marabenta|maraventa)\b/gi, 'Marrabenta'],
+    [/\b(kizomb)\b/gi, 'Kizomba'],
+    [/\b(ventoinh|bentoinha)\b/gi, 'ventoinha'],
+    [/\b(tomad)\b/gi, 'tomada'],
+    [/\b(disjutor|disjuntô|disjuntores)\b/gi, 'disjuntor'],
+    [/\b(tencao|tenção)\b/gi, 'tensão'],
+    [/\b(voltes|voltz|vólts)\b/gi, 'volts'],
+    [/\b(amper|ampere|ampéres)\b/gi, 'amperes'],
     [/\b(priviu|perviu|pr[eé]vio|pre viu)\b/gi, 'preview'],
     [/\b(consola|consolo|conselho)\b/gi, 'console'],
     [/\b(heitor|aditor|edito|edictor)\b/gi, 'editor'],
     [/\b(feicheiros|fixeiros)\b/gi, 'ficheiros'],
     [/\b(proj[eé]to|progeto)\b/gi, 'projeto'],
-    [/\b(web\s*site|uebsite)\b/gi, 'website'],
-    [/\b(aplicassao|aplicacao)\b/gi, 'aplicação'],
     [/\b(matem[aá]ticas?)\b/gi, 'matemática'],
     [/\b(progre[sç]o|progre[cç]ao)\b/gi, 'progresso'],
     [/\b(por\s*cento|porcento)\b/gi, 'porcento'],
@@ -486,6 +764,9 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
     [/\b(tela\s+cheia|ecra\s+inteiro|ekra\s+inteiro)\b/gi, 'tela cheia'],
     [/\b(git\s*hub|guit\s*hub|jithub)\b/gi, 'github'],
     [/\b(chart\s*js|xart\s*js|shart)\b/gi, 'chart.js'],
+    [/\b(abri|abr)\b(?=\s+(o|a|os|as|painel|builder|agenda|musica|editor))/gi, 'abre'],
+    [/\b(feich|feixa|fech)\b(?=\s+(o|a|painel|editor|porta|musica))/gi, 'fecha'],
+    [/\b(ascende|asende)\b/gi, 'acende'],
   ];
 
   for (const [pattern, target] of replacements) {
@@ -496,10 +777,124 @@ export function normalizePhoneticVoiceTranscript(transcript: string): string {
 }
 
 /**
- * Deteta se o utilizador (mesmo estando dentro do Builder) está a pedir uma explicação geral / matemática / estudo para a Assistente.
+ * MODO RECONSTRUÇÃO EM 5 PASSOS (Detetive de Voz):
+ * 1. Limpa ruído/gaguez/pontuação estranha
+ * 2. Extrai palavras-chave e corrige fonética Google/API
+ * 3. Liga com o contexto (últimas 5 falas + estado da app/média/build)
+ * 4. Reescreve silenciosamente num português limpo e direto
+ * 5. Só sinaliza unintelligible se tiver 0% de sentido mesmo após o contexto
+ */
+export function reconstructDistortedVoiceInput(
+  rawTranscript: string,
+  context?: VoiceParseContext
+): ReconstructedVoiceResult {
+  const original = String(rawTranscript || '').trim();
+  const cleaned = normalizePhoneticVoiceTranscript(original);
+  const lower = cleaned
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.!?]+$/g, '')
+    .trim();
+
+  if (!lower) {
+    return {
+      original,
+      cleaned,
+      reconstructed: '',
+      wasDistorted: original.length > 0,
+      domainHint: context?.lastTopic || 'general',
+      unintelligible: true,
+      clarifierSpeech: 'Epa, essa chegou toda torta, era música, site ou luz?',
+    };
+  }
+
+  const domainHint = inferDomainFromText(cleaned);
+  const effectiveDomain: VoiceDomainTopic =
+    domainHint !== 'general' ? domainHint : context?.lastTopic || 'general';
+
+  // Verifica se é ruído puro 0% entendível (sem letras vocálicas reais ou sequência aleatória sem nenhuma palavra conhecida)
+  const words = lower.split(/\s+/).filter(Boolean);
+  const hasRealVowelWord =
+    /\b(sh{2,}|xiu)\b/i.test(lower) ||
+    words.some((w) => /[aeiouy0-9]/.test(w) && w.length >= 2);
+  const hasRecognizedSignal =
+    /(sara|ei|oi|ola|ya|sim|nao|bora|fixe|painel|builder|assistente|abre|fecha|toca|bota|mete|poe|solta|musica|som|pausa|para|continua|proxima|seguinte|passa|pula|saltar|salta|anterior|volta|adianta|avanca|recua|sobe|aumenta|desce|baixa|baralha|mistura|shuffle|loop|repete|gostei|curti|guarda|favorit|recent|canta|mudo|silenc|cala|calad|chega|stop|espera|quiet|sh{2,}|xiu|atrapalh|respond|fala|podes|pode|voltei|acabei|terminei|livre|chamada|reuniao|aula|ocupad|telefone|ligacao|alguem|oky|okay|ok|tudo|liga|ligar|acende|desliga|apaga|luz|ventoinha|porta|tomada|modo|site|app|jogo|loja|portfolio|explica|calcula|ohm|volt|ampere|watt|disjuntor|cabo|motor|cubo|esfera|lembra|anota|marca|agenda|alarme|tarefa|clima|tempo|bateria|wifi|obrigado|tchau|bazar|chefe|admin|sair|local|minha|minhas|meu|meus|pc|telemovel|celular|offline|internet|ficheiro|arquivo|documento|relatorio|apresentacao|tabela|pdf|word|excel|powerpoint|foto|fotos|imagem|imagens|video|videos|filme|gravacao|pasta|tela|cheia|marrabenta|amapiano|como|que|qual|onde|quando|quanto|porque|para|\d+)/i.test(
+      lower
+    );
+
+  if (
+    !hasRealVowelWord ||
+    (!hasRecognizedSignal && words.length <= 2 && words.every((w) => w.length <= 4 && !/^(ai|ok|eu|tu)$/.test(w)))
+  ) {
+    return {
+      original,
+      cleaned,
+      reconstructed: cleaned,
+      wasDistorted: true,
+      domainHint: effectiveDomain,
+      unintelligible: true,
+      clarifierSpeech: 'Epa, essa chegou toda torta, era música, site ou luz?',
+    };
+  }
+
+  let reconstructed = cleaned;
+
+  // Passo 3 + 4: Reconstrução contextual silenciosa
+  // Caso A: fragmento elétrico com números (ex: "sara calcula 220 10" / "220 10" / "sara ohm 12 4")
+  const twoNums = cleaned.match(
+    /\b(\d+(?:[.,]\d+)?)\s*(?:v|volts?|a|amp(?:eres?)?|w|watts?|ohms?)?(?:\s*(?:e|por|com|\/|x|,)\s*|\s+)(\d+(?:[.,]\d+)?)\s*(?:v|volts?|a|amp(?:eres?)?|w|watts?|ohms?)?\b/i
+  );
+  if (
+    twoNums &&
+    !/\b(segundos?|minutos?|horas?|adianta|volta|recua|atrasa)\b/i.test(lower) &&
+    (/\b(calcula|conta|ohm|eletric\w*|volts?\b|voltagem|amper\w*|watts?\b|potencia|220|380|230|400)\b/i.test(
+      lower
+    ) ||
+      effectiveDomain === 'electricity')
+  ) {
+    reconstructed = `Calcula potência e resistência elétrica para ${twoNums[1]} e ${twoNums[2]} passo a passo.`;
+  } else if (/^(?:sara[,\s]+)?faz\s+site\s+(.+)$/i.test(lower) && !/\bum\b/i.test(lower)) {
+    const rest = cleaned.replace(/^(?:sara[,\s]+)?faz\s+site\s+/i, '').trim();
+    reconstructed = `Sara, faz um site de ${rest}`;
+  } else if (/\btoca\s+musica\s+noite\s+inhambane\b/i.test(lower)) {
+    reconstructed = 'Sara, toca música noite de Inhambane';
+  } else if (
+    effectiveDomain === 'builder' &&
+    /^(?:sara[,\s]+)?(?:mete\s+mais\s+bonito|deixa\s+mais\s+bonito|muda\s+a\s+cor|mete\s+mais\s+detalhes|melhora\s+isso|melhora\s+isto|continua\s+isso)$/i.test(
+      lower
+    )
+  ) {
+    reconstructed = `No projeto atual do Builder, ${cleaned.replace(/^sara[,\s]+/i, '')}`;
+  } else if (
+    (effectiveDomain === 'electricity' ||
+      (context?.recentUserUtterances || []).some((u) => inferDomainFromText(u) === 'electricity')) &&
+    /^(?:sara[,\s]+)?(?:e\s+se\s+for|com|agora\s+com|muda\s+para)\s+\d+/i.test(lower)
+  ) {
+    const prevElec = [...(context?.recentUserUtterances || [])]
+      .reverse()
+      .find((u) => inferDomainFromText(u) === 'electricity');
+    reconstructed = prevElec
+      ? `Continuando o cálculo anterior (${prevElec}): agora ${cleaned}`
+      : cleaned;
+  }
+
+  return {
+    original,
+    cleaned,
+    reconstructed,
+    wasDistorted: reconstructed.toLowerCase() !== original.toLowerCase(),
+    domainHint: effectiveDomain,
+    unintelligible: false,
+  };
+}
+
+/**
+ * Deteta se o utilizador (mesmo estando dentro do Builder) está a pedir uma explicação geral / matemática / eletricidade / estudo para a Assistente.
  */
 export function isAssistantExplanationIntent(text: string): boolean {
-  const lower = String(text || '')
+  const repaired = normalizePhoneticVoiceTranscript(text);
+  const lower = repaired
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -516,10 +911,10 @@ export function isAssistantExplanationIntent(text: string): boolean {
   }
 
   return (
-    /\b(me\s+explica|explica[-\s]?me|podes\s+explicar|explica\s+(isso|isto|sobre|a\s+materia|matematica|fisica|quimica|biologia|historia|como))\b/i.test(
+    /\b(me\s+explica|explica[-\s]?me|podes\s+explicar|explica\s+(isso|isto|sobre|a\s+materia|matematica|fisica|quimica|biologia|historia|eletricidade|como)|explica\s+de\s+outro\s+jeito)\b/i.test(
       lower
     ) ||
-    /^(sara[,\s]+)?(o\s+que\s+e|como\s+funciona|qual\s+e\s+a\s+formula|resolve\s+esta?\s+(equacao|conta|calculo)|calcula\s+(o\s+volume|a\s+area)|faz\s+um\s+(teste|quiz|flashcards|resumo))\b/i.test(
+    /^(sara[,\s]+)?(o\s+que\s+e|como\s+funciona|qual\s+e\s+a\s+formula|resolve\s+esta?\s+(equacao|conta|calculo)|calcula\s+(o\s+volume|a\s+area|a\s+potencia|a\s+corrente|a\s+resistencia|a\s+queda|o\s+cabo|o\s+disjuntor)|faz\s+um\s+(teste|quiz|flashcards|resumo|mapa\s+mental))\b/i.test(
       lower
     )
   );
@@ -562,7 +957,6 @@ export function detectAmbiguousOrDangerousPrompt(
 
   if (!lower) return null;
 
-  // Já contém autorização explícita na mesma frase
   if (/\b(confirmo|autorizo|pode\s+apagar|sim\s+apaga|tenho\s+certeza)\b/i.test(lower)) {
     return null;
   }
@@ -584,12 +978,16 @@ export function detectAmbiguousOrDangerousPrompt(
   return null;
 }
 
+function parseLocalizedNumber(raw: string): number {
+  return Number(String(raw || '').replace(',', '.'));
+}
+
 export function parseVoiceCommand(
   transcript: string,
   context?: VoiceParseContext
 ): VoiceCommandAction {
-  const repaired = normalizePhoneticVoiceTranscript(transcript);
-  const clean = repaired.trim();
+  const recon = reconstructDistortedVoiceInput(transcript, context);
+  const clean = recon.reconstructed || recon.cleaned || String(transcript || '').trim();
   const lower = clean
     .toLowerCase()
     .normalize('NFD')
@@ -597,18 +995,26 @@ export function parseVoiceCommand(
     .replace(/[.!?]+$/g, '')
     .trim();
 
+  if (recon.unintelligible) {
+    return {
+      type: 'unintelligible_clarify',
+      reply: recon.clarifierSpeech || 'Epa, essa chegou toda torta, era música, site ou luz?',
+      raw: transcript,
+    };
+  }
+
   // Confirmação / cancelamento imediato quando há uma pergunta de segurança pendente
   if (context?.hasPendingConfirm) {
     const cleanWords = lower.replace(/[,.;:]+/g, ' ').replace(/\s+/g, ' ').trim();
     if (
-      /^(sara\s+)?(sim|confirmo|confirmar|autorizo|ok|claro|avanca|manda\s+ver|executa|faz\s+isso|pode\s+(fazer|ir|enviar|apagar|limpar))(\s+(sim|confirmo|autorizo|pode\s+(fazer|ir|enviar|apagar|limpar)|sara))*$/i.test(
+      /^(sara\s+)?(sim|ya|yeah|confirmo|confirmar|autorizo|ok|claro|avanca|manda\s+ver|manda\s+vir|dale|bora|toca\s+a\s+fazer|executa|faz\s+isso|pode\s+ser|e\s+isso|isso\s+mesmo|exato|pode\s+(fazer|ir|enviar|apagar|limpar))(\s+(sim|ya|confirmo|autorizo|sara))*$/i.test(
         cleanWords
       )
     ) {
       return { type: 'confirm_pending', raw: clean };
     }
     if (
-      /^(sara\s+)?(nao|cancela|cancelar|aborta|abortar|esquece|para|deixa\s+estar)(\s+(nao|cancela|cancelar|esquece|sara))*$/i.test(
+      /^(sara\s+)?(nao|nada|deixa|deixa\s+pra\s+la|nao\s+e\s+isso|nao\s+era\s+isso|errado|cancela|cancelar|aborta|abortar|esquece|para|chega|basta|ja\s+chega|deixa\s+estar)(\s+(nao|cancela|cancelar|esquece|sara))*$/i.test(
         cleanWords
       )
     ) {
@@ -630,33 +1036,76 @@ export function parseVoiceCommand(
     return { type: 'logout_session', raw: clean };
   }
 
-  // Calar / Reativar a voz da Sara imediatamente
+  // Modo Chamada / Ocupado (tem prioridade sobre silêncio simples quando menciona chamada/reunião/aula/ocupado)
   if (
-    lower.includes('sara, cala') ||
-    lower.includes('sara cala') ||
-    lower.includes('cala a boca') ||
-    lower.includes('para de falar') ||
-    lower.includes('parar de falar') ||
-    lower.includes('cala-te') ||
-    lower.includes('cala te') ||
-    lower === 'cala' ||
-    lower.includes('fica calada') ||
-    lower.includes('silencia a voz')
+    /\b(estou|to|tou|entrei|entrando|vou\s+entrar|fui\s+para|atendendo|atender)\s+(?:n?uma\s+|em\s+|na\s+|no\s+)?(chamada|ligacao|reuniao|aula|videochamada|call)\b/i.test(
+      lower
+    ) ||
+    /\b(estou|to|tou|fico|vou\s+ficar)\s+(ao\s+telefone|ocupad[oa]|numa\s+consulta|em\s+atendimento)\b/i.test(
+      lower
+    ) ||
+    /\b(estou|to|tou)\s+(a\s+falar|falando|conversando|em\s+conversa)\s+com\s+(alguem|uma\s+pessoa)\b/i.test(
+      lower
+    ) ||
+    /\bmodo\s+(chamada|ocupado|reuniao|nao\s+atrapalhe|nao\s+perturbe)\b/i.test(lower) ||
+    (/\bnao\s+(me\s+)?atrapalhes?\b/i.test(lower) &&
+      /\b(chamada|ligacao|reuniao|aula|ocupad[oa]|alguem|telefone)\b/i.test(lower))
+  ) {
+    const reason: 'chamada' | 'reuniao' | 'aula' | 'ocupado' = /\breuniao\b/i.test(lower)
+      ? 'reuniao'
+      : /\baula\b/i.test(lower)
+      ? 'aula'
+      : /\bocupad[oa]|alguem\b/i.test(lower)
+      ? 'ocupado'
+      : 'chamada';
+    return { type: 'enter_call_mode', reason, raw: clean };
+  }
+
+  // "Sara, para tudo" = Para a voz + Para música / vídeo / leitura (fica tudo em pausa)
+  if (
+    /^(?:sara[,\s]+)?(?:para|pare|stop|encerra|corta)\s+tudo(?:\s+agora)?$/i.test(lower) ||
+    /\bpara\s+tudo\b/i.test(lower)
+  ) {
+    return { type: 'stop_all_and_pause', raw: clean };
+  }
+
+  // Mandar Calar - Obediência total e imediata (todas as variações espontâneas)
+  if (
+    /\b(cala\s+a\s+boca|para\s+de\s+falar|parar\s+de\s+falar|deixa\s+de\s+falar|chega\s+de\s+falar|cala[-\s]?te|fica\s+calada|fica\s+quieta|nao\s+fales|nao\s+fala|nao\s+me\s+atrapalhes|nao\s+atrapalhes|nao\s+atrapalha|nao\s+respondas|nao\s+responde|modo\s+silencio|silencia\s+a\s+voz|sh{2,})\b/i.test(
+      lower
+    ) ||
+    /^(?:sara[,\s]+)?(?:cala|calada|quieta|silencio|silencia|stop|chega|ja\s+chega|espera|espera\s+ai|espera\s+um\s+pouco|xiu)(?:\s+(?:sara|por\s+favor|agora))?$/i.test(
+      lower
+    ) ||
+    /^(?:sara[,\s]+)?para(?:\s+(?:com\s+isso|agora|por\s+favor|sara))?$/i.test(lower)
   ) {
     return { type: 'silence_sara', raw: clean };
   }
 
+  // "Sara, pausa" = Pausa o que está a fazer mas continua a ouvir
+  if (/^(?:sara[,\s]+)?(pausa|pausar)(?:\s+(?:tudo|isso|agora))?$/i.test(lower)) {
+    return { type: 'pause_current_activity', raw: clean };
+  }
+
+  // Voltar a falar / Sair do Modo Silêncio ou Modo Chamada (só quando o utilizador chamar explicitamente)
   if (
-    /^(sara[,\s]+)?(fala|podes\s+falar|pode\s+falar|volta\s+a\s+falar|reativa\s+a\s+voz|ativa\s+a\s+voz|liga\s+a\s+voz)$/i.test(
+    /^(?:(?:ok|oky|okay|pronto|ei|olha|entao)[,\s]+)*(?:sara[,\s]+)?(?:podes\s+falar(?:\s+agora)?|pode\s+falar(?:\s+agora)?|ja\s+podes\s+falar|ja\s+pode\s+falar|volta\s+a\s+falar|reativa\s+a\s+voz|ativa\s+a\s+voz|liga\s+a\s+voz|fala(?:\s+agora|\s+comigo)?|ja\s+estou\s+aqui|voltei|estou\s+de\s+volta|to\s+de\s+volta|tou\s+de\s+volta|ja\s+voltei|ja\s+acabei(?:\s+(?:a\s+|o\s+)?(?:chamada|ligacao|reuniao|aula))?|acabei(?:\s+(?:a\s+|o\s+)?(?:chamada|ligacao|reuniao|aula))|terminei(?:\s+(?:a\s+|o\s+)?(?:chamada|ligacao|reuniao|aula))?|ja\s+terminei(?:\s+(?:a\s+|o\s+)?(?:chamada|ligacao|reuniao|aula))?|desliguei(?:\s+a\s+chamada)?|sai\s+da\s+(?:chamada|reuniao|aula)|estou\s+livre|to\s+livre|tou\s+livre|ja\s+estou\s+livre|podes\s+voltar|pode\s+voltar)(?:[,\s]+sara)?$/i.test(
       lower
     ) ||
+    ((context?.isSilenced || context?.isCallMode) &&
+      (/^(?:(?:ok|oky|okay)[,\s]+)*(?:sara[,\s]+)?(?:volta|estou\s+aqui)(?:[,\s]+sara)?$/i.test(
+        lower
+      ) ||
+        /\b(?:sara[,\s]+voltei|voltei[,\s]+sara|sara[,\s]+ja\s+acabei|sara[,\s]+podes\s+falar|sara[,\s]+estou\s+livre|sara[,\s]+volta|sara[,\s]+fala|fala[,\s]+sara)\b/i.test(
+          lower
+        ))) ||
     lower.includes('sara, fala') ||
     lower.includes('sara fala')
   ) {
     return { type: 'unsilence_sara', raw: clean };
   }
 
-  // Ajuste de velocidade da voz
+  // Ajuste de velocidade da voz e pedidos de clareza ("mais devagar", "repete", "explica de outro jeito")
   if (lower.includes('fala mais rapido') || lower.includes('mais rapido') || lower.includes('acelera a voz')) {
     return { type: 'voice_speed', direction: 'faster', raw: clean };
   }
@@ -684,8 +1133,7 @@ export function parseVoiceCommand(
     lower.includes('desliga o microfone') ||
     lower.includes('desligar microfone') ||
     lower.includes('desligar o microfone') ||
-    lower.includes('desativa o microfone') ||
-    lower === 'silencio'
+    lower.includes('desativa o microfone')
   ) {
     return { type: 'stop_listening' };
   }
@@ -703,7 +1151,7 @@ export function parseVoiceCommand(
     /\b(mostra|mostrar|exibe|ver|abre)\s+(o\s+que\s+estas\s+a\s+fazer|o\s+trabalho|a\s+construcao|o\s+progresso)\s+(no\s+|do\s+)?builder\b/.test(
       lower
     ) ||
-    /\bmostra\s+o\s+que\s+(estas|ta|t[aá]s)\s+a\s+fazer\s+no\s+builder\b/.test(lower)
+    /\bmostra\s+o\s+que\s+(estas|ta|tas)\s+a\s+fazer\s+no\s+builder\b/.test(lower)
   ) {
     return { type: 'show_builder_progress', raw: clean };
   }
@@ -740,9 +1188,119 @@ export function parseVoiceCommand(
     return { type: 'focus_mode_on', raw: clean };
   }
 
-  // Repetir última resposta
-  if (/^(sara[,\s]+)?(repete|repete isso|podes repetir|diz outra vez|o que disseste)$/i.test(lower)) {
+  // Controlo avançado de Música (baralhar, loop, curtir, identificar, próxima, anterior, mudo, volume)
+  if (
+    /\b(baralha|mistura|shuffle|modo\s+aleatorio|aleatorio)\b/.test(lower) &&
+    (context?.hasActiveMedia || context?.lastTopic === 'music' || /\b(musica|som|playlist|faixa)\b/.test(lower))
+  ) {
+    return { type: 'shuffle_music', raw: clean };
+  }
+
+  if (
+    (/\b(loop|em\s+loop|toca\s+outra\s+vez|repete\s+a\s+musica|repetir\s+musica)\b/.test(lower) ||
+      ((context?.hasActiveMedia || context?.lastTopic === 'music') &&
+        /^(sara[,\s]+)?(loop|repete|outra\s+vez|de\s+novo)$/i.test(lower)))
+  ) {
+    return { type: 'loop_music', raw: clean };
+  }
+
+  if (
+    /\b(gostei\s+dessa|gostei\s+desta|curti|guarda\s+essa|guarda\s+esta|guarda\s+nos\s+favoritos|guarda\s+nas\s+favoritas|mete\s+nas\s+gostadas|favorita\s+essa|adiciona\s+aos\s+favoritos)\b/.test(
+      lower
+    )
+  ) {
+    return { type: 'like_music', raw: clean };
+  }
+
+  if (
+    /\b(que\s+musica\s+e\s+essa|qual\s+e\s+essa\s+musica|quem\s+canta\s+isso|quem\s+canta|qual\s+e\s+o\s+nome\s+da\s+musica|que\s+som\s+e\s+esse)\b/.test(
+      lower
+    )
+  ) {
+    return { type: 'identify_music', raw: clean };
+  }
+
+  if (
+    /\b(mete\s+no\s+mudo|tira\s+o\s+som|sem\s+som|silencia\s+o\s+som|silenciar|muta)\b|^mudo$/.test(lower)
+  ) {
+    return { type: 'mute_music', raw: clean };
+  }
+
+  // Adiantar / Voltar tempo na reprodução local (ex: "adianta", "adianta 1 minuto", "volta 10 segundos")
+  const seekForwardMatch = lower.match(
+    /^(?:sara[,\s]+)?(?:adianta|avanca|pula\s+para\s+frente)(?:\s+(\d+)\s*(min(?:uto)?s?|seg(?:undo)?s?|m|s))?$/i
+  );
+  if (seekForwardMatch) {
+    const val = seekForwardMatch[1] ? Number(seekForwardMatch[1]) : 0;
+    const unit = (seekForwardMatch[2] || '').toLowerCase();
+    let seconds = context?.activeLocalKind === 'video' ? 60 : 10;
+    if (val > 0) {
+      seconds = unit.startsWith('m') ? val * 60 : val;
+    }
+    return { type: 'media_seek', seconds, raw: clean };
+  }
+
+  const seekBackwardMatch = lower.match(
+    /^(?:sara[,\s]+)?(?:volta|recua|atrasa)\s+(\d+)\s*(min(?:uto)?s?|seg(?:undo)?s?|m|s)$/i
+  );
+  if (seekBackwardMatch) {
+    const val = Number(seekBackwardMatch[1]) || 10;
+    const unit = (seekBackwardMatch[2] || '').toLowerCase();
+    const seconds = -(unit.startsWith('m') ? val * 60 : val);
+    return { type: 'media_seek', seconds, raw: clean };
+  }
+  if (/^(?:sara[,\s]+)?(?:recua|atrasa|volta\s+um\s+pouco)$/i.test(lower)) {
+    return { type: 'media_seek', seconds: -10, raw: clean };
+  }
+
+  // Tela cheia / Sair da tela cheia para leitor/galeria JARVIS
+  if (
+    context?.workspaceMode === 'jarvis' &&
+    /^(?:sara[,\s]+)?(sai|sair|fecha|fechar|minimiza|reduz)\s+(?:da\s+|a\s+)?(tela\s+cheia|ecra\s+inteiro)$/i.test(
+      lower
+    )
+  ) {
+    return { type: 'media_fullscreen', enabled: false, raw: clean };
+  }
+  if (
+    context?.workspaceMode === 'jarvis' &&
+    /^(?:sara[,\s]+)?(?:abre\s+|poe\s+|mete\s+|entra\s+em\s+)?(tela\s+cheia|ecra\s+inteiro)$/i.test(
+      lower
+    )
+  ) {
+    return { type: 'media_fullscreen', enabled: true, raw: clean };
+  }
+
+  if (
+    /\b(proxima|seguinte|passa\s+a\s+musica|pula\s+a\s+musica|proxima\s+musica|proximo\s+video|manda\s+outra|outra\s+musica)\b/.test(
+      lower
+    ) ||
+    ((context?.hasActiveMedia || context?.activeLocalKind === 'image' || context?.lastTopic === 'music') &&
+      /^(sara[,\s]+)?(passa|pula|saltar|salta|outra|proxima|proximo|seguinte|next|muda)$/i.test(lower))
+  ) {
+    return { type: 'next_music', raw: clean };
+  }
+
+  if (
+    /\b(musica\s+anterior|video\s+anterior|foto\s+anterior|volta\s+a\s+musica|a\s+de\s+tras|anterior)\b/.test(
+      lower
+    ) ||
+    ((context?.hasActiveMedia || context?.activeLocalKind === 'image' || context?.lastTopic === 'music') &&
+      /^(sara[,\s]+)?(volta|a\s+de\s+tras|anterior|volta\s+atras)$/i.test(lower))
+  ) {
+    return { type: 'prev_music', raw: clean };
+  }
+
+  // Repetir última resposta ou pedido de clarificação ("não percebi", "o quê", "fala de novo")
+  if (
+    /^(sara[,\s]+)?(repete|repete isso|podes repetir|diz outra vez|o que disseste|fala de novo|nao percebi|o que|como|ha)$/i.test(
+      lower
+    )
+  ) {
     return { type: 'repeat_sara', raw: clean };
+  }
+  if (/\bexplica\s+(de\s+outro\s+jeito|mais\s+simples|outra\s+vez)\b/.test(lower)) {
+    return { type: 'prompt', text: 'Explica o ponto anterior de outro jeito mais simples e com um exemplo prático.' };
   }
 
   // [SISTEMA] Leitura em voz alta (pausar e retomar do ponto exato mesmo noutras abas/modos)
@@ -768,10 +1326,12 @@ export function parseVoiceCommand(
     return { type: 'stop_reading', raw: clean };
   }
 
-  // [SISTEMA] Controlo de mídia YouTube & Palco (MEMÓRIA DE ESTADO: nunca pesquisa "pausa" nem troca de música!)
+  // [SISTEMA] Controlo de mídia YouTube & Palco (pausa/stop/tocar/volume)
   if (
-    /^(sara[,\s]+)?(pausa|pausar|pause|para)(\s+(a|o)\s+(musica|som|audio|video|player))?$/i.test(lower) ||
-    /\b(pausa|pausar|para)\s+(a\s+musica|o\s+video|o\s+som|o\s+player|esta\s+musica)\b/.test(lower)
+    /^(sara[,\s]+)?(pausa|pausar|pause|para|stop)(\s+(a|o)\s+(musica|som|audio|video|player))?$/i.test(
+      lower
+    ) ||
+    /\b(pausa|pausar|para|stop)\s+(a\s+musica|o\s+video|o\s+som|o\s+player|esta\s+musica)\b/.test(lower)
   ) {
     if (context?.hasActiveMedia || /\b(musica|video|som|player)\b/.test(lower)) {
       return { type: 'pause_music', raw: clean };
@@ -779,31 +1339,328 @@ export function parseVoiceCommand(
   }
 
   if (
-    /\b(fecha|fechar|para\s+e\s+fecha|tira|remove|encerra)\s+(a\s+musica|o\s+video|o\s+player|o\s+som)\b/.test(lower)
+    /\b(fecha|fechar|para\s+e\s+fecha|tira|remove|encerra)\s+(a\s+musica|o\s+video|o\s+player|o\s+som)\b/.test(
+      lower
+    )
   ) {
     return { type: 'close_music', raw: clean };
   }
 
   if (
-    /\b(aumenta|aumentar|sobe|subir|mais\s+alto|ergue)\s+(o\s+)?volume\b|^volume\s*(\+|mais|alto)$/.test(lower) ||
-    /^(sara[,\s]+)?(aumenta|sobe)\s+o\s+som$/i.test(lower)
+    /\b(aumenta|aumentar|sobe|subir|mais\s+alto|ergue|maningue\s+alto)\s+(o\s+)?(volume|som)\b|^volume\s*(\+|mais|alto)$/.test(
+      lower
+    ) ||
+    /^(sara[,\s]+)?(aumenta|sobe|mais\s+alto)(\s+o\s+som|\s+isso)?$/i.test(lower)
   ) {
     return { type: 'volume_up', raw: clean };
   }
 
   if (
-    /\b(diminui|diminuir|baixa|baixar|reduz|reduzir|mais\s+baixo)\s+(o\s+)?volume\b|^volume\s*(-|menos|baixo)$/.test(lower) ||
-    /^(sara[,\s]+)?(diminui|baixa)\s+o\s+som$/i.test(lower)
+    /\b(diminui|diminuir|baixa|baixar|desce|descer|reduz|reduzir|mais\s+baixo)\s+(o\s+)?(volume|som)\b|^volume\s*(-|menos|baixo)$/.test(
+      lower
+    ) ||
+    /^(sara[,\s]+)?(diminui|baixa|desce|mais\s+baixo)(\s+o\s+som|\s+isso)?$/i.test(lower)
   ) {
     return { type: 'volume_down', raw: clean };
   }
 
   if (
     context?.hasActiveMedia &&
-    (/^(sara[,\s]+)?(continua|retoma|retomar|toca|play|despausa)(\s+(a\s+musica|o\s+video|o\s+som))?$/i.test(lower) ||
+    (/^(sara[,\s]+)?(continua|retoma|retomar|toca|play|despausa)(\s+(a\s+musica|o\s+video|o\s+som))?$/i.test(
+      lower
+    ) ||
       /\b(continua|retoma)\s+(a\s+musica|o\s+video|essa\s+musica)\b/.test(lower))
   ) {
     return { type: 'resume_music', raw: clean };
+  }
+
+  // =========================================================================
+  // ACESSO TOTAL LOCAL + INTERNET (Diferenciação espontânea sem frase exata)
+  // =========================================================================
+  // 1. Alternância explícita de fonte ("volta para a internet" vs "volta para as minhas", ou resposta direta à ambiguidade)
+  if (
+    /^(?:sara[,\s]+)?(?:da\s+|na\s+|a\s+)?internet$/i.test(lower) ||
+    /\b(volta|voltar|muda|mudar|passa|passar|vai|ir)\s+(para\s+)?(a\s+|o\s+)?internet\b|\btoca\s+(da|na)\s+internet\b|\bmodo\s+internet\b/i.test(
+      lower
+    )
+  ) {
+    return { type: 'switch_media_source', source: 'internet', raw: clean };
+  }
+  if (
+    /^(?:sara[,\s]+)?(?:do\s+|no\s+|das\s+|dos\s+)?(?:local|meu|minha|meus|minhas)$/i.test(lower) ||
+    /\b(volta|voltar|muda|mudar|passa|passar|vai|ir)\s+(para\s+)?((as\s+)?minhas|(os\s+)?meus|(o\s+)?local|armazenamento\s+local)\b|\btoca\s+das\s+minhas\b|\bmodo\s+local\b/i.test(
+      lower
+    )
+  ) {
+    return { type: 'switch_media_source', source: 'local', raw: clean };
+  }
+
+  // 2. Filtros rápidos por voz da biblioteca local
+  if (
+    /\b(mostra|ver|lista|abre)\s+todos\s+(os\s+)?(meus\s+)?(ficheiros|arquivos|locais)\b/i.test(
+      lower
+    )
+  ) {
+    return { type: 'filter_local_library', filter: 'all', raw: clean };
+  }
+  if (/\b(abre|mostra|ver|lista)\s+(os\s+|as\s+)?(meus\s+|minhas\s+)?recentes\b|^recentes$/i.test(lower)) {
+    return { type: 'filter_local_library', filter: 'recents', raw: clean };
+  }
+  if (/\b(abre|mostra|ver|lista)\s+(os\s+|as\s+)?(meus\s+|minhas\s+)?favorit(os|as)\b|^favorit(os|as)$/i.test(lower)) {
+    return { type: 'filter_local_library', filter: 'favorites', raw: clean };
+  }
+  if (/\b(mostra|ver|lista|abre)\s+(so\s+)?(os\s+|as\s+)?(meus\s+|minhas\s+)?pdfs?\b/i.test(lower)) {
+    return { type: 'filter_local_library', filter: 'pdfs', raw: clean };
+  }
+  if (/\b(mostra|ver|lista|abre)\s+so\s+(os\s+)?(meus\s+)?videos\b/i.test(lower)) {
+    return { type: 'filter_local_library', filter: 'videos', raw: clean };
+  }
+  const onlyMusicFilter = lower.match(
+    /\b(?:mostra|lista|ver|filtra)\s+so\s+(?:as\s+)?(?:minhas\s+)?musicas?(?:\s+de\s+(.+))?$/i
+  );
+  if (onlyMusicFilter) {
+    return {
+      type: 'filter_local_library',
+      filter: 'music',
+      query: onlyMusicFilter[1]?.trim(),
+      raw: clean,
+    };
+  }
+
+  // 3. Documentos locais & Procura de ficheiros no dispositivo
+  const searchLocalMatch = lower.match(
+    /^(?:sara[,\s]+)?(?:procura|busca|encontra|acha)\s+(?:o\s+|a\s+)?(?:ficheiro|arquivo|documento|pasta|foto|video|musica)\s+(?:com\s+|chamado\s+|sobre\s+|de\s+)?(.+)$/i
+  );
+  if (searchLocalMatch) {
+    return {
+      type: 'open_local_document',
+      docCategory: 'any',
+      query: searchLocalMatch[1].trim(),
+      raw: clean,
+    };
+  }
+
+  const hasLocalOwnershipCue =
+    /\b(meu|minha|meus|minhas|local|locais|do\s+meu\s+pc|no\s+meu\s+pc|do\s+pc|do\s+meu\s+telemovel|no\s+telemovel|do\s+celular|no\s+celular|do\s+dispositivo|offline|daqui|guardado|guardada|guardados|guardadas|da\s+minha\s+pasta)\b/i.test(
+      lower
+    );
+
+  // Fotos / Imagens locais (ex: "mostra as minhas fotos", "mostra fotos de 2025", "mostra fotos da pasta viagens")
+  const photosMatch = lower.match(
+    /\b(?:mostra|abre|ver|exibe)\s+(?:as\s+|os\s+)?(?:minhas\s+)?(?:fotos|imagens)(?:\s+(?:de|da|do)\s+(.+))?$/i
+  );
+  if (photosMatch && (hasLocalOwnershipCue || photosMatch[1] || /\bfotos\b/i.test(lower))) {
+    return {
+      type: 'play_local_media',
+      kind: 'image',
+      folderOrDate: photosMatch[1]?.trim(),
+      raw: clean,
+    };
+  }
+
+  // Documentos locais explícitos ou com pista de propriedade ("abre o meu relatório", "abre o trabalho", "abre o último documento")
+  if (
+    /\b(abre|abrir|mostra|ver|le)\s+(o\s+|a\s+)?(ultimo\s+documento|trabalho)\b/i.test(lower) ||
+    (hasLocalOwnershipCue &&
+      /\b(documento|relatorio|apresentacao|tabela|planilha|pdf|word|excel|powerpoint|ficheiro|arquivo)\b/i.test(
+        lower
+      ))
+  ) {
+    let docCategory: 'pdf' | 'word' | 'ppt' | 'excel' | 'recent' | 'any' = 'any';
+    if (/\bultimo\s+documento\b/.test(lower)) docCategory = 'recent';
+    else if (/\bpdf\b/.test(lower)) docCategory = 'pdf';
+    else if (/\b(word|docx?)\b/.test(lower)) docCategory = 'word';
+    else if (/\b(apresentacao|slides|powerpoint|pptx?)\b/.test(lower)) docCategory = 'ppt';
+    else if (/\b(tabela|planilha|excel|xlsx?|csv)\b/.test(lower)) docCategory = 'excel';
+
+    let query = lower
+      .replace(/^(?:sara[,\s]+)?(?:abre|abrir|mostra|ver|le)\s+(?:o\s+|a\s+|os\s+|as\s+)?/i, '')
+      .replace(/\b(aquele|aquela|meu|minha|meus|minhas|do\s+meu\s+pc|do\s+pc|do\s+meu\s+telemovel|do\s+celular|local|offline|daqui|guardado|guardada|ultimo\s+documento)\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (/\b(documento|ficheiro|arquivo|pdf|word|excel|powerpoint)\b/i.test(query) && query.split(' ').length <= 1) {
+      query = '';
+    }
+
+    return {
+      type: 'open_local_document',
+      docCategory,
+      query: query || undefined,
+      raw: clean,
+    };
+  }
+
+  // 4. Música / Áudio / Vídeo / Filme local (somente quando há pista local OU preferência ativa em modo local!)
+  if (
+    (hasLocalOwnershipCue || (context?.preferredMediaSource === 'local' && !/\binternet|youtube\b/i.test(lower))) &&
+    /\b(toca|tocar|mete|poe|por|bota|solta|abre|abrir|reproduz|ouvir|mostra|ver)\b/i.test(lower) &&
+    !hasExplicitAppFeatureEdit(lower) &&
+    !/\b(painel|editor|builder|projeto|site|app|jogo|loja|agenda|tarefas|sistema|voz|admin|perfil|conta|configuracoes|modulo)\b/i.test(
+      lower
+    )
+  ) {
+    let kind: 'music' | 'video' | 'image' | 'audio' | 'any' = 'any';
+    if (/\b(video|filme|clip|serie)\b/i.test(lower)) kind = 'video';
+    else if (/\b(gravacao|gravacoes|audio|nota\s+de\s+voz)\b/i.test(lower)) kind = 'audio';
+    else if (/\b(foto|fotos|imagem|imagens)\b/i.test(lower)) kind = 'image';
+    else if (/\b(musica|musicas|som|sons|faixa|cancao|aquela\s+minha|uma\s+minha)\b/i.test(lower)) kind = 'music';
+
+    const cleanedQuery = lower
+      .replace(
+        /^(?:sara[,\s]+)?(?:toca|tocar|mete|poe|por|bota|solta|abre|abrir|reproduz|ouvir|mostra|ver)\s+/i,
+        ''
+      )
+      .replace(
+        /\b(uma|um|a|o|as|os|aquela|aquele|minha|meu|minhas|meus|ai|agora|por\s+favor|do\s+meu\s+pc|no\s+meu\s+pc|do\s+pc|do\s+meu\s+telemovel|no\s+telemovel|do\s+celular|no\s+celular|do\s+dispositivo|offline|local|locais|daqui|guardado|guardada|da|do|de|musica|musicas|som|video|filme|audio|gravacao|ficheiro|arquivo)\b/gi,
+        ''
+      )
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (
+      kind !== 'any' ||
+      /\bficheiro|arquivo|pasta\b/i.test(lower) ||
+      (hasLocalOwnershipCue && /\b(toca|tocar|mete|poe|por|bota|solta|reproduz|ouvir)\b/i.test(lower)) ||
+      context?.preferredMediaSource === 'local'
+    ) {
+      return {
+        type: 'play_local_media',
+        kind:
+          kind === 'any' && /\b(toca|tocar|mete|poe|por|bota|solta|ouvir)\b/i.test(lower)
+            ? 'music'
+            : kind,
+        query: cleanedQuery || undefined,
+        raw: clean,
+      };
+    }
+  }
+
+  // 5. Ambiguidade real quando não diz se é local nem internet nem um artista/género concreto
+  if (
+    !hasLocalOwnershipCue &&
+    !context?.hasActiveMedia &&
+    !context?.preferredMediaSource &&
+    /^(?:sara[,\s]+)?(?:toca|mete|poe|abre)\s+(?:aquela|aquela\s+musica|aquele\s+video|esse\s+som)$/i.test(
+      lower
+    )
+  ) {
+    return {
+      type: 'ask_media_source_ambiguity',
+      kind: /\bvideo\b/i.test(lower) ? 'video' : 'music',
+      raw: clean,
+    };
+  }
+
+  // Casa / Luz / Aparelhos / Cenas (execução espontânea com feedback visual no palco)
+  const sceneMatch = lower.match(/\bmodo\s+(noite|estudo|festa|dormir|relax)\b/i);
+  if (sceneMatch && !/\bmodo\s+(manual|automatico|foco|builder|assistente|curto|completo|convidado)\b/i.test(lower)) {
+    const sc = sceneMatch[1].toLowerCase();
+    const sceneReplies: Record<string, string> = {
+      noite: 'Boa, modo noite ligado — luzes suaves e som relaxado.',
+      estudo: 'Modo estudo ativado! Tudo pronto para foco total.',
+      festa: 'Bora! Modo festa ligado — som em alta e ambiente pronto.',
+      dormir: 'Modo dormir ativo — luzes desligadas e silêncio tranquilo.',
+      relax: 'Modo relax ligado. Podes descansar à vontade.',
+    };
+    return {
+      type: 'smart_home_control',
+      device: 'modo',
+      state: 'scene',
+      sceneName: sc,
+      reply: sceneReplies[sc] || `Modo ${sc} ativado.`,
+      raw: clean,
+    };
+  }
+
+  const homeDeviceMatch = lower.match(
+    /\b(liga|ligar|acende|acender|abre|abrir|destranca|destrancar|desliga|desligar|apaga|apagar|fecha|fechar|tranca|trancar)\s+(?:a|o|as|os)?\s*(luz|luzes|ventoinha|ventilador|ar\s+condicionado|ar|porta|tomada)(?:\s+(?:(?:da|do|de|na|no|em)\s+)?([a-z0-9\s]+))?/i
+  );
+  if (homeDeviceMatch && !/\b(painel|editor|builder|microfone|projeto|musica|player)\b/i.test(lower)) {
+    const verb = homeDeviceMatch[1].toLowerCase();
+    const rawDev = homeDeviceMatch[2].toLowerCase();
+    const room = homeDeviceMatch[3]?.trim();
+    const isOn = /^(liga|ligar|acende|acender|abre|abrir|destranca|destrancar)$/.test(verb);
+    const dev: 'luz' | 'ventoinha' | 'ac' | 'porta' | 'tomada' = rawDev.startsWith('luz')
+      ? 'luz'
+      : rawDev.startsWith('vent')
+      ? 'ventoinha'
+      : rawDev.startsWith('ar')
+      ? 'ac'
+      : rawDev.startsWith('porta')
+      ? 'porta'
+      : 'tomada';
+    const roomLabel = room ? ` da ${room}` : '';
+    const reply =
+      dev === 'porta'
+        ? isOn
+          ? `Feito, abri e destranquei a porta${roomLabel}.`
+          : `Trancado! Fechei a porta${roomLabel}.`
+        : dev === 'luz'
+        ? isOn
+          ? `Feito, luz${roomLabel} ligada.`
+          : `Luz${roomLabel} desligada.`
+        : dev === 'ventoinha'
+        ? isOn
+          ? `Boa, ventoinha${roomLabel} a rodar.`
+          : `Ventoinha${roomLabel} desligada.`
+        : dev === 'ac'
+        ? isOn
+          ? `Ar condicionado${roomLabel} ligado.`
+          : `Ar condicionado${roomLabel} desligado.`
+        : isOn
+        ? `Tomada${roomLabel} ligada.`
+        : `Tomada${roomLabel} desligada.`;
+    return {
+      type: 'smart_home_control',
+      device: dev,
+      state: isOn ? 'on' : 'off',
+      room,
+      reply,
+      raw: clean,
+    };
+  }
+
+  // Cálculo elétrico rápido / frases distorcidas ("sara calcu 220 10" -> calcula potência P = V*I e R = V/I passo a passo!)
+  const elecShortcut = lower.match(
+    /^(?:sara[,\s]+)?(?:calcula(?:\s+(?:a\s+)?(?:potencia|ohm|corrente|resistencia|energia))?|conta|quanto\s+da|lei\s+de\s+ohm)\s+(?:potencia\s+e\s+resistencia\s+eletrica\s+para\s+)?(\d+(?:[.,]\d+)?)\s*(v|volts?|a|amp(?:eres?)?|w|watts?|ohms?)?\s*(?:e|por|com|x|\*|\/)?\s*(\d+(?:[.,]\d+)?)\s*(v|volts?|a|amp(?:eres?)?|w|watts?|ohms?)?(?:\s+passo\s+a\s+passo)?$/i
+  );
+  if (elecShortcut && !hasExplicitAppFeatureEdit(lower)) {
+    const n1 = parseLocalizedNumber(elecShortcut[1]);
+    const u1 = (elecShortcut[2] || '').toLowerCase();
+    const n2 = parseLocalizedNumber(elecShortcut[3]);
+    const u2 = (elecShortcut[4] || '').toLowerCase();
+    if (Number.isFinite(n1) && Number.isFinite(n2) && n1 > 0 && n2 > 0) {
+      let voltage: number | undefined;
+      let current: number | undefined;
+      let resistance: number | undefined;
+      let power: number | undefined;
+
+      if (u1.startsWith('w') || u2.startsWith('w')) {
+        power = u1.startsWith('w') ? n1 : n2;
+        voltage = u1.startsWith('w') ? n2 : n1;
+      } else if (u1.startsWith('o') || u2.startsWith('o')) {
+        resistance = u1.startsWith('o') ? n1 : n2;
+        voltage = u1.startsWith('o') ? n2 : n1;
+      } else if (u1.startsWith('a') && u2.startsWith('v')) {
+        current = n1;
+        voltage = n2;
+      } else {
+        // Default: V and A (ex: 220V e 10A)
+        voltage = n1;
+        current = n2;
+      }
+
+      return {
+        type: 'electric_calc',
+        voltage,
+        current,
+        resistance,
+        power,
+        reconstructed: clean,
+        raw: transcript,
+      };
+    }
   }
 
   // [SISTEMA:ABRIR_EDITOR / SISTEMA] Comandos universais da plataforma (mesmo estando no Modo Assistente!)
@@ -812,7 +1669,9 @@ export function parseVoiceCommand(
     !/\b(no\s+site|na\s+pagina|no\s+app|no\s+projeto)\b/.test(lower)
   ) {
     if (
-      /\b(abre|abrir|vai\s+para|entra\s+no|mostra)\s+(o\s+)?(editor|codigo)\s+(em\s+)?(tela\s+cheia|ecra\s+inteiro|grande)\b/.test(lower)
+      /\b(abre|abrir|vai\s+para|entra\s+no|mostra)\s+(o\s+)?(editor|codigo)\s+(em\s+)?(tela\s+cheia|ecra\s+inteiro|grande)\b/.test(
+        lower
+      )
     ) {
       return { type: 'open_editor_fullscreen' };
     }
@@ -887,9 +1746,23 @@ export function parseVoiceCommand(
     lower.includes('quantos porcento') ||
     lower.includes('como vai o projeto') ||
     lower.includes('qual o progresso') ||
-    lower.includes('o que falta fazer')
+    lower.includes('o que falta fazer') ||
+    ((context?.lastTopic === 'builder' || context?.isMissionActive) &&
+      /^(sara[,\s]+)?(como\s+ta|como\s+esta|ta\s+pronto|ja\s+acabou|como\s+vai)$/i.test(lower))
   ) {
     return { type: 'query_status', raw: clean };
+  }
+
+  // Chamamentos puros e saudações / gírias rápidas antes de enviar à IA
+  const smallTalk = getInstantSmallTalkReply(lower, context?.callName, Boolean(context?.isOwner));
+  if (smallTalk) {
+    return {
+      type: /^(ei|pssst|psst|olha|escuta|acorda|sou eu|chefe aqui)/i.test(lower)
+        ? 'wake_ack'
+        : 'background_smalltalk',
+      reply: smallTalk,
+      raw: clean,
+    };
   }
 
   // No Modo Assistente JARVIS: fechar conteúdo no Preview ou continuar explicação
@@ -1347,6 +2220,8 @@ export function isSpeechRecognitionSupported(): boolean {
 // Estado global de trava de eco e controlo de fala
 export let saraEstaAFalar = false;
 let saraSilenciada = false;
+let saraModoChamada = false;
+let currentUtteranceNormalized = '';
 let activeRecognition: any = null;
 let micShouldBeActive = false;
 let resumeMicFn: (() => void) | null = null;
@@ -1391,10 +2266,79 @@ export function isSaraSilenced(): boolean {
   return saraSilenciada;
 }
 
+export function isSaraCallMode(): boolean {
+  return saraModoChamada;
+}
+
 export function setSaraSilenced(silenced: boolean): void {
   saraSilenciada = silenced;
   if (silenced) {
     stopSaraSpeech();
+  }
+}
+
+export function setSaraCallMode(active: boolean): void {
+  saraModoChamada = active;
+  if (active) {
+    saraSilenciada = true;
+    stopSaraSpeech();
+  }
+}
+
+export function detectBargeInCommand(
+  transcript: string,
+  context?: VoiceParseContext
+): VoiceCommandAction | null {
+  const raw = String(transcript || '').trim();
+  if (!raw) return null;
+  const norm = normalizeForRepeatCheck(raw);
+  if (
+    saraEstaAFalar &&
+    norm.length >= 4 &&
+    currentUtteranceNormalized &&
+    currentUtteranceNormalized.includes(norm)
+  ) {
+    return null;
+  }
+  const cmd = parseVoiceCommand(raw, {
+    ...context,
+    isSilenced: saraSilenciada || context?.isSilenced,
+    isCallMode: saraModoChamada || context?.isCallMode,
+  });
+  if (
+    cmd.type === 'silence_sara' ||
+    cmd.type === 'enter_call_mode' ||
+    cmd.type === 'stop_all_and_pause' ||
+    cmd.type === 'pause_current_activity' ||
+    cmd.type === 'unsilence_sara' ||
+    cmd.type === 'stop_listening'
+  ) {
+    return cmd;
+  }
+  return null;
+}
+
+export function interruptSaraForBargeIn(): void {
+  currentSpeechSeq += 1;
+  readingSeq += 1;
+  if (readingActive && !readingPaused) {
+    readingPaused = true;
+    emitReadingStatus();
+  }
+  queuedSpeeches.length = 0;
+  saraEstaAFalar = false;
+  currentUtteranceNormalized = '';
+  speakingStateListener?.(false);
+  if (restartAfterSpeechTimer) {
+    clearTimeout(restartAfterSpeechTimer);
+    restartAfterSpeechTimer = null;
+  }
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
   }
 }
 
@@ -1550,8 +2494,10 @@ export function startContinuousVoiceRecognition(options: {
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
   let consecutiveErrors = 0;
 
+  let lastBargeInHandled: { key: string; ts: number } | null = null;
+
   const scheduleRestart = (delayMs = 110) => {
-    if (manuallyStopped || !options.shouldKeepListening() || saraEstaAFalar) return;
+    if (manuallyStopped || !options.shouldKeepListening()) return;
     if (restartTimer) clearTimeout(restartTimer);
     restartTimer = setTimeout(() => {
       restartTimer = null;
@@ -1566,11 +2512,6 @@ export function startContinuousVoiceRecognition(options: {
       return;
     }
 
-    // Trava: se a Sara ainda está a falar, aguarda fim da fala + 400ms
-    if (saraEstaAFalar) {
-      return;
-    }
-
     // Evita instâncias paralelas presas na mesma sessão
     if (activeRecognition) {
       return;
@@ -1580,7 +2521,8 @@ export function startContinuousVoiceRecognition(options: {
     activeRecognition = recognition;
     recognition.lang = 'pt-PT';
     recognition.continuous = true;
-    recognition.interimResults = false;
+    // interimResults=true permite interrupção instantânea por voz ("Sara, cala", "Sara, para") a meio da frase
+    recognition.interimResults = true;
     recognition.maxAlternatives = 3;
 
     recognition.onstart = () => {
@@ -1589,10 +2531,51 @@ export function startContinuousVoiceRecognition(options: {
     };
 
     recognition.onresult = (event: any) => {
-      // TRAVA ABSOLUTA: ignora qualquer captura enquanto a Sara estiver a falar
-      if (saraEstaAFalar) return;
-
       consecutiveErrors = 0;
+
+      // Quando a Sara está a falar, escuta comandos de interrupção/silêncio em tempo real (inclusive resultados parciais)
+      if (saraEstaAFalar) {
+        let interimCombined = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          const primary = (res?.[0]?.transcript || '').trim();
+          if (primary) interimCombined = `${interimCombined} ${primary}`.trim();
+
+          for (let altIdx = 0; altIdx < Math.min(3, res?.length || 0); altIdx++) {
+            const cand = (res?.[altIdx]?.transcript || '').trim();
+            if (!cand) continue;
+            const bargeCmd = detectBargeInCommand(cand);
+            if (bargeCmd) {
+              const key = `${bargeCmd.type}:${normalizeForRepeatCheck(cand)}`;
+              const nowTs = Date.now();
+              if (lastBargeInHandled && lastBargeInHandled.key === key && nowTs - lastBargeInHandled.ts < 1400) {
+                return;
+              }
+              lastBargeInHandled = { key, ts: nowTs };
+              interruptSaraForBargeIn();
+              options.onResult(cand);
+              return;
+            }
+          }
+        }
+
+        if (interimCombined) {
+          const combinedCmd = detectBargeInCommand(interimCombined);
+          if (combinedCmd) {
+            const key = `${combinedCmd.type}:${normalizeForRepeatCheck(interimCombined)}`;
+            const nowTs = Date.now();
+            if (lastBargeInHandled && lastBargeInHandled.key === key && nowTs - lastBargeInHandled.ts < 1400) {
+              return;
+            }
+            lastBargeInHandled = { key, ts: nowTs };
+            interruptSaraForBargeIn();
+            options.onResult(interimCombined);
+            return;
+          }
+        }
+        return;
+      }
+
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const res = event.results[i];
         if (!res?.isFinal) continue;
@@ -1603,7 +2586,9 @@ export function startContinuousVoiceRecognition(options: {
           const cand = (res?.[altIdx]?.transcript || '').trim();
           if (!cand) continue;
           const baseConf = typeof res?.[altIdx]?.confidence === 'number' ? res[altIdx].confidence : 0.45;
-          const domainBoost = /\b(sara|builder|assistente|painel|cubo|musica|agenda|explica)\b/i.test(cand)
+          const domainBoost = /\b(sara|builder|assistente|painel|cubo|musica|agenda|explica|amapiano|afro|marrabenta|inhambane|luz|ventoinha|porta|calcula|ohm|volts?|amperes?|watts?|disjuntor|site|fixe|maningue|bora|cala|para|chega|voltei|chamada|pausa)\b/i.test(
+            cand
+          )
             ? 0.25
             : 0;
           const score = baseConf + domainBoost;
@@ -1613,6 +2598,12 @@ export function startContinuousVoiceRecognition(options: {
           }
         }
         if (!bestTranscript) continue;
+        if (lastBargeInHandled && Date.now() - lastBargeInHandled.ts < 1400) {
+          const bCmd = detectBargeInCommand(bestTranscript);
+          if (bCmd && lastBargeInHandled.key.startsWith(`${bCmd.type}:`)) {
+            continue;
+          }
+        }
         options.onResult(bestTranscript);
       }
     };
@@ -1639,8 +2630,8 @@ export function startContinuousVoiceRecognition(options: {
       if (activeRecognition === recognition) {
         activeRecognition = null;
       }
-      if (!saraEstaAFalar && !manuallyStopped && options.shouldKeepListening()) {
-        const backoff = Math.min(1400, 180 + consecutiveErrors * 180);
+      if (!manuallyStopped && options.shouldKeepListening()) {
+        const backoff = Math.min(1400, (saraEstaAFalar ? 420 : 180) + consecutiveErrors * 180);
         scheduleRestart(backoff);
       }
     };
@@ -1649,11 +2640,8 @@ export function startContinuousVoiceRecognition(options: {
       if (activeRecognition === recognition) {
         activeRecognition = null;
       }
-      if (saraEstaAFalar) {
-        return;
-      }
       if (!manuallyStopped && options.shouldKeepListening()) {
-        const delay = consecutiveErrors > 0 ? Math.min(1200, 200 + consecutiveErrors * 180) : 100;
+        const delay = consecutiveErrors > 0 ? Math.min(1200, 200 + consecutiveErrors * 180) : saraEstaAFalar ? 350 : 100;
         scheduleRestart(delay);
       } else {
         micShouldBeActive = false;
@@ -1668,31 +2656,30 @@ export function startContinuousVoiceRecognition(options: {
       if (activeRecognition === recognition) {
         activeRecognition = null;
       }
-      if (!manuallyStopped && options.shouldKeepListening() && !saraEstaAFalar) {
+      if (!manuallyStopped && options.shouldKeepListening()) {
         scheduleRestart(500);
       }
     }
   };
 
   resumeMicFn = () => {
-    if (!activeRecognition && !saraEstaAFalar && !manuallyStopped && options.shouldKeepListening()) {
+    if (!activeRecognition && !manuallyStopped && options.shouldKeepListening()) {
       startSession();
     }
   };
 
-  // Watchdog contínuo: garante que o microfone nunca morre após trocar de aba/ecrã ou falha silenciosa do browser
+  // Watchdog contínuo: garante que o microfone nunca morre (inclusive durante leitura/fala para interrupção por voz)
   const watchdogId = setInterval(() => {
     if (
       !manuallyStopped &&
       micShouldBeActive &&
       options.shouldKeepListening() &&
-      !saraEstaAFalar &&
       !activeRecognition &&
       !restartTimer
     ) {
       startSession();
     }
-  }, 1500);
+  }, 1400);
 
   const handleTabWake = () => {
     if (
@@ -1701,7 +2688,6 @@ export function startContinuousVoiceRecognition(options: {
       !manuallyStopped &&
       micShouldBeActive &&
       options.shouldKeepListening() &&
-      !saraEstaAFalar &&
       !activeRecognition
     ) {
       scheduleRestart(80);
@@ -1801,6 +2787,7 @@ export function stopSaraSpeech(): void {
   currentSpeechSeq += 1;
   queuedSpeeches.length = 0;
   saraEstaAFalar = false;
+  currentUtteranceNormalized = '';
   speakingStateListener?.(false);
   if (restartAfterSpeechTimer) {
     clearTimeout(restartAfterSpeechTimer);
@@ -1816,37 +2803,23 @@ export function stopSaraSpeech(): void {
   if (micShouldBeActive && resumeMicFn) {
     restartAfterSpeechTimer = setTimeout(() => {
       restartAfterSpeechTimer = null;
-      if (!saraEstaAFalar && micShouldBeActive) {
+      if (micShouldBeActive) {
         resumeMicFn?.();
       }
-    }, 320);
+    }, 120);
   }
 }
 
 /**
  * Interrupção imediata (Barge-In): cala a Sara no instante em que o utilizador quer falar
- * e religa o microfone em ~60ms sem precisar reiniciar toda a sessão.
+ * mantendo a escuta contínua sem precisar desligar o microfone.
  */
 export function interruptSaraAndListen(): void {
-  currentSpeechSeq += 1;
-  queuedSpeeches.length = 0;
-  saraEstaAFalar = false;
-  speakingStateListener?.(false);
-  if (restartAfterSpeechTimer) {
-    clearTimeout(restartAfterSpeechTimer);
-    restartAfterSpeechTimer = null;
-  }
-  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      // ignore
-    }
-  }
+  interruptSaraForBargeIn();
   if (micShouldBeActive && resumeMicFn) {
     restartAfterSpeechTimer = setTimeout(() => {
       restartAfterSpeechTimer = null;
-      if (!saraEstaAFalar && micShouldBeActive) {
+      if (micShouldBeActive) {
         resumeMicFn?.();
       }
     }, 60);
@@ -1856,6 +2829,7 @@ export function interruptSaraAndListen(): void {
 export interface SpeakOptions {
   level?: VoiceLevel;
   forceSpeak?: boolean;
+  bypassSilence?: boolean;
   isQuestionReply?: boolean;
   allowInfraMention?: boolean;
   queueIfSpeaking?: boolean;
@@ -1953,7 +2927,8 @@ export function speakAsSara(
       ? { onFinished: onFinishedOrOptions }
       : onFinishedOrOptions || {};
 
-  if (!enabled || (saraSilenciada && !opts.forceSpeak)) {
+  // Regra de Ouro do Silêncio: quando silenciada ou em Modo Chamada, não emite NENHUMA fala nem som (só desbloqueia com bypassSilence explícito do utilizador)
+  if (!enabled || ((saraSilenciada || saraModoChamada) && !opts.bypassSilence)) {
     opts.onFinished?.();
     return;
   }
@@ -2007,20 +2982,11 @@ export function speakAsSara(
       return;
     }
 
-    // Trava o microfone ANTES de falar (mas NÃO anima a boca ainda — espera utterance.onstart!)
+    // Mantém o microfone ATIVO em segundo plano durante toda a fala para permitir interrupção imediata por voz
     const mySpeechSeq = ++currentSpeechSeq;
     saraEstaAFalar = true;
+    currentUtteranceNormalized = normalizeForRepeatCheck(spoken);
     speakingStateListener?.(false);
-
-    if (activeRecognition) {
-      const prevRec = activeRecognition;
-      activeRecognition = null;
-      try {
-        prevRec.stop?.();
-      } catch {
-        // ignore
-      }
-    }
 
     window.speechSynthesis.cancel();
 
@@ -2042,22 +3008,23 @@ export function speakAsSara(
       speakingStateListener?.(false);
 
       const nextQueued = queuedSpeeches.shift();
-      if (nextQueued) {
+      if (nextQueued && !saraSilenciada && !saraModoChamada) {
         saraEstaAFalar = false;
         speakAsSara(nextQueued.text, nextQueued.enabled, nextQueued.options);
         return;
       }
 
       saraEstaAFalar = false;
+      currentUtteranceNormalized = '';
 
-      if (micShouldBeActive && resumeMicFn) {
+      if (micShouldBeActive && resumeMicFn && !activeRecognition) {
         if (restartAfterSpeechTimer) clearTimeout(restartAfterSpeechTimer);
         restartAfterSpeechTimer = setTimeout(() => {
           restartAfterSpeechTimer = null;
-          if (!saraEstaAFalar && micShouldBeActive) {
+          if (!activeRecognition && micShouldBeActive) {
             resumeMicFn?.();
           }
-        }, 380);
+        }, 140);
       }
     };
 
@@ -2276,19 +3243,20 @@ function splitTextForVoiceReading(raw: string): string[] {
 }
 
 function speakNextReadingChunk(mySeq: number): void {
-  if (!readingActive || readingPaused || mySeq !== readingSeq) return;
+  if (!readingActive || readingPaused || mySeq !== readingSeq || saraSilenciada || saraModoChamada) return;
   if (readingCursor >= readingChunks.length) {
     readingActive = false;
     readingPaused = false;
     readingCursor = 0;
     readingChunks = [];
     saraEstaAFalar = false;
+    currentUtteranceNormalized = '';
     speakingStateListener?.(false);
     emitReadingStatus();
-    if (micShouldBeActive && resumeMicFn) {
+    if (micShouldBeActive && resumeMicFn && !activeRecognition) {
       setTimeout(() => {
-        if (!saraEstaAFalar && micShouldBeActive) resumeMicFn?.();
-      }, 300);
+        if (!activeRecognition && micShouldBeActive) resumeMicFn?.();
+      }, 140);
     }
     return;
   }
@@ -2298,17 +3266,9 @@ function speakNextReadingChunk(mySeq: number): void {
   const chunk = readingChunks[readingCursor];
   emitReadingStatus();
 
-  if (activeRecognition) {
-    const prevRec = activeRecognition;
-    activeRecognition = null;
-    try {
-      prevRec.stop?.();
-    } catch {
-      // ignore
-    }
-  }
-
+  // Mantém microfone ativo durante leitura para interrupção imediata por voz
   saraEstaAFalar = true;
+  currentUtteranceNormalized = normalizeForRepeatCheck(chunk);
   const utter = new SpeechSynthesisUtterance(chunk);
   utter.lang = 'pt-PT';
   utter.rate = customBaseRate;
@@ -2345,6 +3305,7 @@ function speakNextReadingChunk(mySeq: number): void {
 }
 
 export function startVoiceReading(title: string, text: string): boolean {
+  if (saraSilenciada || saraModoChamada) return false;
   const chunks = splitTextForVoiceReading(text);
   if (chunks.length === 0) return false;
   readingSeq += 1;
@@ -2417,6 +3378,7 @@ export function stopVoiceReading(): void {
 }
 
 export function speakPronunciation(text: string, lang: 'pt-PT' | 'en-US' | 'fr-FR' = 'en-US'): void {
+  if (saraSilenciada || saraModoChamada) return;
   if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text.trim()) return;
   try {
     window.speechSynthesis.cancel();
@@ -2434,6 +3396,7 @@ export function speakPronunciation(text: string, lang: 'pt-PT' | 'en-US' | 'fr-F
 }
 
 export function playCompletionChime(): void {
+  if (saraSilenciada || saraModoChamada) return;
   if (typeof window === 'undefined') return;
   try {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;

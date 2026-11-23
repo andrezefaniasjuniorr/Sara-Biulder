@@ -25,14 +25,22 @@ export async function onRequestPost(context) {
     }
 
     const apiKey = resolveEdgeApiKey(context.request, context.env);
+    const isOwner = Boolean(body?.userIdentity?.isOwner);
     if (!apiKey) {
-      return jsonResponse({ error: 'Chave Gemini não configurada.' }, 500);
+      return jsonResponse(
+        {
+          error: isOwner
+            ? 'Chave Gemini não configurada.'
+            : 'Estou a ajustar o sistema em segundo plano. Tenta novamente em instantes.',
+        },
+        500
+      );
     }
 
     const result = await runJarvisAssistantEdge(apiKey, body);
     return jsonResponse(result, 200);
   } catch (err) {
     console.error('Erro Cloudflare /api/jarvis:', err);
-    return jsonResponse({ error: formatFriendlyEdgeError(err) }, err?.status === 403 ? 403 : 500);
+    return jsonResponse({ error: formatFriendlyEdgeError(err, false) }, err?.status === 403 ? 403 : 500);
   }
 }

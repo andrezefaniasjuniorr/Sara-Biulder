@@ -41,10 +41,22 @@ import {
   Layers,
   Box,
   Camera,
+  FolderOpen,
+  Image as ImageIcon,
+  FileSpreadsheet,
+  Presentation,
 } from 'lucide-react';
-import type { Jarvis3DShape, JarvisMathStep, JarvisStageContent, JarvisTrack } from '../../types/jarvis';
+import type { Jarvis3DShape, JarvisMathStep, JarvisStageContent, JarvisTrack, LocalDeviceFile } from '../../types/jarvis';
+import { formatDocumentTypeLabel, formatFileSize } from '../../services/localMediaService';
 import { speakPronunciation, startVoiceReading } from '../../utils/voiceService';
 import { ThreeSceneStageView } from './ThreeSceneStageView';
+import {
+  LocalJarvisMediaPlayer,
+  LocalLibraryBrowserView,
+  LocalPhotoGalleryView,
+  type LocalFullscreenSignal,
+  type LocalSeekSignal,
+} from './LocalMediaStageView';
 
 let mathJaxInstance: { convert: (tex: string, opts: { display: boolean }) => any; adaptor: any } | null = null;
 function renderMathJaxSvgFallback(latex: string, displayMode: boolean): string {
@@ -777,12 +789,37 @@ interface JarvisStageRendererProps {
   onChangeLayoutMode: (mode: 'split' | 'focus') => void;
   onClose: () => void;
   onNextTrack?: () => void;
+  onPrevTrack?: () => void;
   onAskAboutDocument?: (docTitle: string) => void;
   playlist?: JarvisTrack[];
   mediaPaused?: boolean;
   mediaVolume?: number;
+  mediaMuted?: boolean;
+  mediaShuffled?: boolean;
+  mediaLooped?: boolean;
+  mediaLiked?: boolean;
   onToggleMediaPause?: () => void;
   onChangeMediaVolume?: (volume: number) => void;
+  onToggleMediaMute?: () => void;
+  onToggleMediaShuffle?: () => void;
+  onToggleMediaLoop?: () => void;
+  onToggleMediaLike?: () => void;
+  localFiles?: LocalDeviceFile[];
+  localHasPermission?: boolean;
+  localNeedsReconnect?: boolean;
+  localIsMobile?: boolean;
+  localFavoritesSet?: Set<string>;
+  localSeekSignal?: LocalSeekSignal | null;
+  localFullscreenSignal?: LocalFullscreenSignal | null;
+  onGrantLocalPermission?: (category?: 'all' | 'music' | 'video' | 'document' | 'image') => void;
+  onReconnectLocalPermission?: () => void;
+  onOpenLocalFile?: (file: LocalDeviceFile) => void;
+  onToggleLocalFavorite?: (fileOrPath: LocalDeviceFile | string) => void;
+  onFilterLocalBrowser?: (
+    filter: 'all' | 'music' | 'video' | 'image' | 'document' | 'pdfs' | 'recents' | 'favorites'
+  ) => void;
+  onOpenInOfficeApp?: (localFileId?: string, previewUrl?: string, title?: string) => void;
+  onNotify?: (msg: string) => void;
 }
 
 export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
@@ -791,20 +828,47 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
   onChangeLayoutMode,
   onClose,
   onNextTrack,
+  onPrevTrack,
   onAskAboutDocument,
   mediaPaused = false,
   mediaVolume = 80,
+  mediaMuted = false,
+  mediaShuffled = false,
+  mediaLooped = false,
+  mediaLiked = false,
   onToggleMediaPause,
   onChangeMediaVolume,
+  onToggleMediaMute,
+  onToggleMediaShuffle,
+  onToggleMediaLoop,
+  onToggleMediaLike,
+  localFiles = [],
+  localHasPermission = false,
+  localNeedsReconnect = false,
+  localIsMobile = false,
+  localFavoritesSet = new Set<string>(),
+  localSeekSignal = null,
+  localFullscreenSignal = null,
+  onGrantLocalPermission,
+  onReconnectLocalPermission,
+  onOpenLocalFile,
+  onToggleLocalFavorite,
+  onFilterLocalBrowser,
+  onOpenInOfficeApp,
+  onNotify,
 }) => {
   const [svgZoom, setSvgZoom] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   const [isExportingPng, setIsExportingPng] = useState(false);
+  const [activeSheetIdx, setActiveSheetIdx] = useState(0);
+  const [activeSlideIdx, setActiveSlideIdx] = useState(0);
   const htmlIframeRef = useRef<HTMLIFrameElement | null>(null);
   const exportRootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setSvgZoom(false);
+    setActiveSheetIdx(0);
+    setActiveSlideIdx(0);
     if (exportRootRef.current) {
       gsap.fromTo(
         exportRootRef.current,
@@ -900,6 +964,10 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
         return <HelpCircle className="w-4 h-4 text-emerald-300" />;
       case 'flashcards':
         return <Layers className="w-4 h-4 text-cyan-300" />;
+      case 'local_gallery':
+        return <ImageIcon className="w-4 h-4 text-emerald-300" />;
+      case 'local_browser':
+        return <FolderOpen className="w-4 h-4 text-cyan-300" />;
       default:
         return <Sparkles className="w-4 h-4 text-cyan-300" />;
     }
@@ -1227,20 +1295,201 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
 
         {content.kind === 'document' && (
           <div className="space-y-3">
+            {/* Card lateral/superior de metadados locais: Tipo, Nome, Última abertura, Tamanho */}
+            {(content.isLocalDeviceFile || content.fileExtension) && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-3 rounded-xl bg-[#071327] border border-cyan-400/35">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-mono uppercase text-cyan-300">Tipo</div>
+                  <div className="text-xs font-bold text-white truncate">
+                    {formatDocumentTypeLabel(content.fileExtension || '')}
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-mono uppercase text-cyan-300">Nome</div>
+                  <div className="text-xs font-bold text-white truncate">{content.title}</div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-mono uppercase text-cyan-300">Última abertura</div>
+                  <div className="text-xs font-semibold text-slate-200 truncate">
+                    {content.lastOpenedAt
+                      ? new Date(content.lastOpenedAt).toLocaleString('pt-PT', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                      : 'Agora'}
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[10px] font-mono uppercase text-cyan-300">Tamanho</div>
+                  <div className="text-xs font-bold text-emerald-300 truncate">
+                    {typeof content.fileSizeBytes === 'number'
+                      ? formatFileSize(content.fileSizeBytes)
+                      : '--'}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Botão para abrir no Microsoft Word / PowerPoint / Excel do dispositivo quando aplicável */}
+            {content.fileExtension &&
+              /^(doc|docx|ppt|pptx|xls|xlsx)$/i.test(content.fileExtension) &&
+              onOpenInOfficeApp && (
+                <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#061124] border border-cyan-500/30">
+                  <span className="text-xs text-slate-300 flex items-center gap-1.5">
+                    {/^(xls|xlsx)$/i.test(content.fileExtension) ? (
+                      <FileSpreadsheet className="w-4 h-4 text-emerald-300" />
+                    ) : /^(ppt|pptx)$/i.test(content.fileExtension) ? (
+                      <Presentation className="w-4 h-4 text-amber-300" />
+                    ) : (
+                      <FileText className="w-4 h-4 text-cyan-300" />
+                    )}
+                    <span>Aberto no leitor próprio da SARA</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenInOfficeApp(content.localFileId, content.previewUrl, content.title)
+                    }
+                    className="px-3 py-1.5 rounded-lg bg-cyan-500/20 border border-cyan-400/55 text-cyan-100 text-xs font-bold flex items-center gap-1.5 hover:bg-cyan-500/30 cursor-pointer"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>
+                      {/^(xls|xlsx)$/i.test(content.fileExtension)
+                        ? 'Abrir no Microsoft Excel'
+                        : /^(ppt|pptx)$/i.test(content.fileExtension)
+                        ? 'Abrir no PowerPoint'
+                        : 'Abrir no Microsoft Word'}
+                    </span>
+                  </button>
+                </div>
+              )}
+
             {content.previewUrl && content.mimeType.startsWith('image/') && (
-              <div className="rounded-xl overflow-hidden border border-cyan-500/30 bg-[#040914] max-h-[220px] flex items-center justify-center">
+              <div className="rounded-xl overflow-hidden border border-cyan-500/30 bg-[#040914] max-h-[260px] flex items-center justify-center">
                 <img
                   src={content.previewUrl}
                   alt={content.title}
-                  className="max-h-[220px] object-contain"
+                  className="max-h-[260px] object-contain"
                 />
               </div>
             )}
             {content.previewUrl && content.mimeType === 'application/pdf' && (
-              <div className="rounded-xl overflow-hidden border border-cyan-500/30 bg-[#040914] h-[220px]">
+              <div className="rounded-xl overflow-hidden border border-cyan-500/30 bg-[#040914] h-[360px]">
                 <iframe src={content.previewUrl} title={content.title} className="w-full h-full" />
               </div>
             )}
+
+            {/* Leitor próprio Word (.docx) */}
+            {content.formattedHtml && (
+              <div
+                className="p-4 rounded-xl bg-white text-slate-900 text-xs sm:text-sm leading-relaxed max-h-[380px] overflow-y-auto sara-scroll prose prose-sm max-w-none"
+                dangerouslySetInnerHTML={{ __html: content.formattedHtml }}
+              />
+            )}
+
+            {/* Leitor próprio Excel (.xlsx / .xls / .csv) */}
+            {content.sheets && content.sheets.length > 0 && (
+              <div className="space-y-2">
+                {content.sheets.length > 1 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {content.sheets.map((sh, sIdx) => (
+                      <button
+                        key={sh.name}
+                        type="button"
+                        onClick={() => setActiveSheetIdx(sIdx)}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold border cursor-pointer ${
+                          sIdx === activeSheetIdx
+                            ? 'bg-cyan-500/25 border-cyan-400 text-white'
+                            : 'bg-[#071124] border-cyan-500/20 text-slate-300'
+                        }`}
+                      >
+                        {sh.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="rounded-xl overflow-auto max-h-[340px] border border-cyan-500/30 bg-[#040915] sara-scroll">
+                  <table className="w-full text-xs text-left border-collapse">
+                    <tbody>
+                      {(content.sheets[activeSheetIdx]?.rows || []).map((row, rIdx) => (
+                        <tr
+                          key={rIdx}
+                          className={
+                            rIdx === 0
+                              ? 'bg-[#0B1933] text-cyan-200 font-bold sticky top-0'
+                              : 'border-t border-cyan-500/15 text-slate-200'
+                          }
+                        >
+                          {row.map((cell, cIdx) => (
+                            <td key={cIdx} className="px-2.5 py-1.5 border-r border-cyan-500/10 whitespace-nowrap">
+                              {cell}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Leitor próprio PowerPoint (.pptx / .ppt) */}
+            {content.slides && content.slides.length > 0 && (
+              <div className="p-4 rounded-xl bg-[#071124] border border-cyan-400/35 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[11px] font-mono uppercase text-cyan-300">
+                    Diapositivo {activeSlideIdx + 1} de {content.slides.length}
+                  </span>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={activeSlideIdx <= 0}
+                      onClick={() => setActiveSlideIdx((i) => Math.max(0, i - 1))}
+                      className="px-2.5 py-1 rounded-lg bg-[#040915] border border-cyan-500/30 text-xs text-cyan-200 disabled:opacity-40 cursor-pointer"
+                    >
+                      Anterior
+                    </button>
+                    <button
+                      type="button"
+                      disabled={activeSlideIdx >= content.slides.length - 1}
+                      onClick={() =>
+                        setActiveSlideIdx((i) => Math.min((content.slides?.length || 1) - 1, i + 1))
+                      }
+                      className="px-2.5 py-1 rounded-lg bg-[#040915] border border-cyan-500/30 text-xs text-cyan-200 disabled:opacity-40 cursor-pointer"
+                    >
+                      Próximo
+                    </button>
+                  </div>
+                </div>
+                <div className="p-4 rounded-xl bg-[#040915] border border-cyan-500/25 min-h-[160px] space-y-2">
+                  <h4 className="text-sm sm:text-base font-bold text-white">
+                    {content.slides[activeSlideIdx]?.title}
+                  </h4>
+                  <ul className="space-y-1.5">
+                    {(content.slides[activeSlideIdx]?.bullets || []).map((b, bIdx) => (
+                      <li key={bIdx} className="text-xs text-slate-200 flex items-start gap-2">
+                        <span className="text-cyan-400 font-bold">•</span>
+                        <span>{b}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+
+            {/* Leitor próprio Texto simples (.txt / .md / .json / fallback) */}
+            {!content.formattedHtml &&
+              !content.sheets?.length &&
+              !content.slides?.length &&
+              content.mimeType !== 'application/pdf' &&
+              !content.mimeType.startsWith('image/') &&
+              content.rawText && (
+                <pre className="p-3.5 rounded-xl bg-[#040915] border border-cyan-500/25 text-xs text-slate-100 whitespace-pre-wrap font-mono max-h-[340px] overflow-y-auto sara-scroll">
+                  {content.rawText}
+                </pre>
+              )}
 
             <div className="p-3 rounded-xl bg-[#071124] border border-cyan-500/25">
               <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300 mb-1">
@@ -1315,15 +1564,68 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
           </div>
         )}
 
-        {(content.kind === 'music' || content.kind === 'video') && (
-          <YouTubeMediaPlayer
-            track={content.track}
-            kind={content.kind}
-            isPaused={mediaPaused}
-            volume={mediaVolume}
-            onTogglePause={() => onToggleMediaPause?.()}
-            onChangeVolume={(v) => onChangeMediaVolume?.(v)}
-            onNextTrack={onNextTrack}
+        {(content.kind === 'music' || content.kind === 'video') &&
+          (content.track.source === 'local' ? (
+            <LocalJarvisMediaPlayer
+              track={content.track}
+              kind={content.kind}
+              isPaused={mediaPaused}
+              volume={mediaVolume}
+              isMuted={mediaMuted}
+              isShuffled={mediaShuffled}
+              isLooped={mediaLooped}
+              isLiked={mediaLiked}
+              localQueue={localFiles.filter((f) =>
+                content.kind === 'video'
+                  ? f.kind === 'video'
+                  : f.kind === 'music' || f.kind === 'audio'
+              )}
+              seekSignal={localSeekSignal}
+              fullscreenSignal={localFullscreenSignal}
+              onTogglePause={() => onToggleMediaPause?.()}
+              onChangeVolume={(v) => onChangeMediaVolume?.(v)}
+              onToggleMute={onToggleMediaMute}
+              onNextTrack={onNextTrack}
+              onPrevTrack={onPrevTrack}
+              onToggleShuffle={onToggleMediaShuffle}
+              onToggleLoop={onToggleMediaLoop}
+              onToggleLike={onToggleMediaLike}
+              onSelectLocalFile={onOpenLocalFile}
+              onNotifyError={onNotify}
+            />
+          ) : (
+            <YouTubeMediaPlayer
+              track={content.track}
+              kind={content.kind}
+              isPaused={mediaPaused}
+              volume={mediaVolume}
+              onTogglePause={() => onToggleMediaPause?.()}
+              onChangeVolume={(v) => onChangeMediaVolume?.(v)}
+              onNextTrack={onNextTrack}
+            />
+          ))}
+
+        {content.kind === 'local_gallery' && (
+          <LocalPhotoGalleryView
+            content={content}
+            fullscreenSignal={localFullscreenSignal}
+            favoritesSet={localFavoritesSet}
+            onToggleFavorite={(idOrPath) => onToggleLocalFavorite?.(idOrPath)}
+          />
+        )}
+
+        {content.kind === 'local_browser' && (
+          <LocalLibraryBrowserView
+            content={content}
+            hasPermission={localHasPermission}
+            needsReconnect={localNeedsReconnect}
+            isMobile={localIsMobile}
+            favoritesSet={localFavoritesSet}
+            onGrantPermission={(cat) => onGrantLocalPermission?.(cat)}
+            onReconnect={() => onReconnectLocalPermission?.()}
+            onOpenFile={(f) => onOpenLocalFile?.(f)}
+            onToggleFavorite={(f) => onToggleLocalFavorite?.(f)}
+            onFilterChange={(filter) => onFilterLocalBrowser?.(filter)}
           />
         )}
 

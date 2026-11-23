@@ -30,6 +30,23 @@ export interface JarvisTaskItem {
   createdAt: string;
 }
 
+export type LocalMediaKind = 'music' | 'video' | 'image' | 'audio' | 'document';
+
+export interface LocalDeviceFile {
+  id: string;
+  name: string;
+  relativePath: string;
+  folderPath: string;
+  extension: string;
+  mimeType: string;
+  size: number;
+  lastModified: number;
+  lastOpenedAt?: string;
+  kind: LocalMediaKind;
+  sourcePlatform: 'pc' | 'mobile';
+  subtitleName?: string;
+}
+
 export interface JarvisTrack {
   id: string;
   title: string;
@@ -38,7 +55,14 @@ export interface JarvisTrack {
   thumbnailUrl?: string;
   watchUrl?: string;
   durationText?: string;
-  source: 'youtube';
+  source: 'youtube' | 'local';
+  localFileId?: string;
+  localUrl?: string;
+  subtitleUrl?: string;
+  extension?: string;
+  sizeBytes?: number;
+  folderPath?: string;
+  kind?: 'music' | 'audio' | 'video';
 }
 
 export interface JarvisDocumentItem {
@@ -153,6 +177,15 @@ export type JarvisStageContent =
       extractedData: Array<{ label: string; value: string }>;
       previewUrl?: string;
       rawText?: string;
+      formattedHtml?: string;
+      slides?: Array<{ title: string; bullets: string[] }>;
+      sheets?: Array<{ name: string; rows: string[][] }>;
+      fileExtension?: string;
+      fileSizeBytes?: number;
+      lastOpenedAt?: string;
+      relativePath?: string;
+      isLocalDeviceFile?: boolean;
+      localFileId?: string;
     }
   | {
       id: string;
@@ -166,6 +199,32 @@ export type JarvisStageContent =
       kind: 'music' | 'video';
       title: string;
       track: JarvisTrack;
+    }
+  | {
+      id: string;
+      kind: 'local_gallery';
+      title: string;
+      subtitle?: string;
+      items: Array<{
+        id: string;
+        name: string;
+        url: string;
+        folderPath: string;
+        lastModified: number;
+        size: number;
+        relativePath: string;
+      }>;
+      activeIndex: number;
+    }
+  | {
+      id: string;
+      kind: 'local_browser';
+      title: string;
+      subtitle?: string;
+      filter: 'all' | 'music' | 'video' | 'image' | 'document' | 'pdfs' | 'recents' | 'favorites';
+      query?: string;
+      needsPermission?: boolean;
+      items: LocalDeviceFile[];
     }
   | {
       id: string;
@@ -207,14 +266,36 @@ export interface JarvisConversationEntry {
   stageAttachedTitle?: string;
 }
 
+export type JarvisDomainTopic =
+  | 'music'
+  | 'builder'
+  | 'electricity'
+  | 'home'
+  | 'study'
+  | 'agenda'
+  | 'system'
+  | 'general';
+
 export interface JarvisMemoryState {
   userName: string;
   preferences: string[];
   facts: string[];
+  likedTracks?: JarvisTrack[];
+  smartDevices?: Record<string, boolean | string>;
+  preferredMediaSource?: 'internet' | 'local';
+  localFavorites?: string[];
+  localRecents?: Array<{
+    id: string;
+    name: string;
+    relativePath: string;
+    kind: LocalMediaKind;
+    lastOpenedAt: string;
+  }>;
   lastRoutineGreetingDate?: string;
   lastVisitDate?: string;
   lastActiveProjectName?: string;
   lastTopic?: string;
+  lastDomain?: JarvisDomainTopic;
 }
 
 export interface JarvisActionPayload {
@@ -227,6 +308,13 @@ export interface JarvisActionPayload {
     | 'play_video'
     | 'pause_music'
     | 'resume_music'
+    | 'next_music'
+    | 'prev_music'
+    | 'mute_music'
+    | 'toggle_shuffle'
+    | 'toggle_loop'
+    | 'like_music'
+    | 'identify_music'
     | 'close_media'
     | 'set_volume'
     | 'close_stage'
@@ -372,9 +460,15 @@ export interface JarvisSystemTelemetry {
 export interface JarvisMediaStateContext {
   hasActiveMedia: boolean;
   mediaKind?: 'music' | 'video';
+  mediaSource?: 'youtube' | 'local';
   mediaTitle?: string;
+  mediaArtist?: string;
   isPaused: boolean;
   volume: number;
+  isMuted?: boolean;
+  isShuffled?: boolean;
+  isLooped?: boolean;
+  isLiked?: boolean;
   activeStageKind?: JarvisStageContent['kind'];
   activeStageTitle?: string;
 }

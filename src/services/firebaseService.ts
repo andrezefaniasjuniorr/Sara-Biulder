@@ -6,12 +6,6 @@ import type {
   SessionAccessLog,
   UserActivityStats,
 } from '../types/auth';
-import type {
-  AdminAlert,
-  SaraUserAccount,
-  SessionAccessLog,
-  UserActivityStats,
-} from '../types/auth';
 
 // Configuração REAL e exclusiva do projeto Firebase sara-biulder
 export const firebaseConfig = {
