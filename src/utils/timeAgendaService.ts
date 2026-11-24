@@ -364,29 +364,61 @@ export function parseAgendaCommand(prompt: string, now: Date = new Date()): Pars
 
   if (!hasScheduleCue) return null;
 
+  const B_START = '(?<![A-Za-zÀ-ÿ0-9_])';
+  const B_END = '(?![A-Za-zÀ-ÿ0-9_])';
   let cleanedTitle = raw
-    .replace(/^(?:ei|ola|olá|sara|por favor|pfv)[,\s]+/gi, '')
+    .replace(/^(?:ei|ol[aá]|sara|por favor|pfv)[,\s]+/gi, '')
     .replace(
-      /\b(?:sara|marca(?:-me)?|marcar|agenda(?:-me)?|agendar|agende|coloca(?:-me)?|colocar|p[oõ]e|adiciona(?:-me)?|adicionar|anota(?:-me)?|anotar|regista(?:-me)?|registar|lembra-me\s+de|lembra-me|cria\s+um\s+lembrete(?:\s+de|\s+para)?|na\s+agenda|na\s+minha\s+agenda|a\s+agenda|um\s+compromisso|uma\s+reuni[aã]o\s+para)\b/gi,
+      new RegExp(
+        `${B_START}(?:sara|marca(?:-me)?|marcar|agenda(?:-me)?|agendar|agende|coloca(?:-me)?|colocar|p[oõ]e|adiciona(?:-me)?|adicionar|anota(?:-me)?|anotar|regista(?:-me)?|registar|lembra-me\\s+de|lembra-me|cria\\s+um\\s+lembrete(?:\\s+de|\\s+para)?|na\\s+agenda|na\\s+minha\\s+agenda|a\\s+agenda|um\\s+compromisso|uma\\s+reuni[aã]o\\s+para)${B_END}`,
+        'gi'
+      ),
       ' '
     )
-    .replace(/\b(?:depois\s+de\s+amanh[aã]|amanh[aã]|hoje|ontem|pr[oó]xima\s+semana|semana\s+que\s+vem)\b/gi, ' ')
     .replace(
-      /\b(?:no\s+domingo|na\s+segunda(?:-feira)?|na\s+ter[cç]a(?:-feira)?|na\s+quarta(?:-feira)?|na\s+quinta(?:-feira)?|na\s+sexta(?:-feira)?|no\s+s[aá]bado|domingo|segunda(?:-feira)?|ter[cç]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[aá]bado)\b/gi,
+      new RegExp(
+        `${B_START}(?:depois\\s+de\\s+amanh[aã]|amanh[aã]|hoje|ontem|pr[oó]xima\\s+semana|semana\\s+que\\s+vem)${B_END}`,
+        'gi'
+      ),
       ' '
     )
-    .replace(/\b(?:para\s+o\s+dia|para\s+dia|no\s+dia|dia)\s+\d{1,2}(?:\s+de\s+[a-zçãõáéíóú]+)?(?:\s+de\s+20\d{2})?\b/gi, ' ')
+    .replace(
+      new RegExp(
+        `${B_START}(?:no\\s+domingo|na\\s+segunda(?:-feira)?|na\\s+ter[cç]a(?:-feira)?|na\\s+quarta(?:-feira)?|na\\s+quinta(?:-feira)?|na\\s+sexta(?:-feira)?|no\\s+s[aá]bado|domingo|segunda(?:-feira)?|ter[cç]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[aá]bado)${B_END}`,
+        'gi'
+      ),
+      ' '
+    )
+    .replace(
+      new RegExp(
+        `${B_START}(?:para\\s+o\\s+dia|para\\s+dia|no\\s+dia|dia)\\s+\\d{1,2}(?:\\s+de\\s+[a-zçãõáéíóú]+)?(?:\\s+de\\s+20\\d{2})?${B_END}`,
+        'gi'
+      ),
+      ' '
+    )
     .replace(/\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b/g, ' ')
-    .replace(/\b(?:[aà]s|pelas|para\s+[aà]s|para)\s+\d{1,2}(?::\d{2}|h\d{0,2}|\s*horas?(?:\s+e\s+\d{1,2})?)?\b/gi, ' ')
+    .replace(
+      new RegExp(
+        `${B_START}(?:[aà]s|pelas|para\\s+[aà]s|para)\\s+\\d{1,2}(?::\\d{2}|h\\d{0,2}|\\s*horas?(?:\\s+e\\s+\\d{1,2})?)?${B_END}`,
+        'gi'
+      ),
+      ' '
+    )
     .replace(/\b\d{1,2}\s*(?::|h|horas?)\s*\d{0,2}\b/gi, ' ')
-    .replace(/\b(?:da\s+manh[aã]|da\s+tarde|da\s+noite|meio-dia|meia-noite)\b/gi, ' ')
+    .replace(
+      new RegExp(
+        `${B_START}(?:da\\s+manh[aã]|da\\s+tarde|da\\s+noite|meio-dia|meia-noite|[aà]s|pelas)${B_END}`,
+        'gi'
+      ),
+      ' '
+    )
     .replace(/^[,\s\-.:;]+|[,\s\-.:;]+$/g, '')
-    .replace(/\b(?:para|uma|um|o|a|de|no|na)\s+$/i, '')
+    .replace(new RegExp(`${B_START}(?:para|uma|um|o|a|de|no|na|[aà]s)\\s*$`, 'i'), '')
     .replace(/^(?:para|um|uma|de)\s+/i, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 
-  if (!cleanedTitle && /\breuni[aã]o\b/i.test(raw)) {
+  if (!cleanedTitle && /\breuni[aã]o\b/i.test(normalizeTextForSchedule(raw))) {
     cleanedTitle = 'Reunião';
   }
   if (!cleanedTitle) {
