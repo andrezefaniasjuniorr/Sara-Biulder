@@ -75,6 +75,7 @@ import { getSavedGitHubToken, pushProjectToGitHub } from './utils/githubService'
 import {
   adjustVoiceSpeed,
   detectAmbiguousOrDangerousPrompt,
+  detectBargeInCommand,
   getBackgroundBuildDoneSpeech,
   getGuestExpirySpeech,
   getHumanChoice,
@@ -89,6 +90,10 @@ import {
   inferDomainFromText,
   interruptSaraAndListen,
   isAssistantExplanationIntent,
+  isProbableSaraEcho,
+  isSaraActivelySpeaking,
+  isSaraCallMode as isSaraCallModeFlag,
+  isSaraSilenced as isSaraSilencedFlag,
   parseVoiceCommand,
   pauseVoiceReading,
   playCompletionChime,
@@ -445,6 +450,9 @@ export default function App() {
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingVoiceConfirmation | null>(null);
   const shouldKeepListeningRef = useRef(false);
   const stopMicRef = useRef<(() => void) | null>(null);
+  const startHandsFreeMicRef = useRef<(() => void) | null>(null);
+  const voiceDispatchInFlightRef = useRef(false);
+  const lastVoiceDispatchRef = useRef<{ norm: string; ts: number }>({ norm: '', ts: 0 });
 
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUserProfile | null>(null);
   const [authReady, setAuthReady] = useState(false);
@@ -4250,68 +4258,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       const cmd = parseVoiceCommand(trimmed, voiceContextRef.current);
       if (cmd.type === 'start_listening') {
-        if (!shouldKeepListeningRef.current) {
-          shouldKeepListeningRef.current = true;
-          setIsListening(true);
-          stopMicRef.current = startContinuousVoiceRecognition({
-            shouldKeepListening: () => shouldKeepListeningRef.current,
-            onResult: (transcript) => {
-              const voiceGuard = evaluateNonOwnerGuard(transcript, session);
-              if (voiceGuard.intercepted) {
-                speakAsSara(voiceGuard.voiceSummary || voiceGuard.reply || 'Não tens acesso a isso.', voiceEnabledRef.current, {
-                  level: 'short',
-                  forceSpeak: true,
-                });
-                return;
-              }
-              const voiceRecon = reconstructDistortedVoiceInput(transcript, voiceContextRef.current);
-              const cleanVoiceText = voiceRecon.reconstructed || voiceRecon.cleaned || transcript;
-              if (!voiceRecon.unintelligible) {
-                pushRecentUtterance(cleanVoiceText);
-              }
-              const voiceCmd = parseVoiceCommand(cleanVoiceText, voiceContextRef.current);
-              addConsoleLog('info', '[Canal de Voz] Comando captado em 2.º plano.');
-              setIsVoiceProcessing(true);
-              const runner = executePlatformCommandRef.current || executePlatformCommand;
-              runner(voiceCmd, cleanVoiceText)
-                .then((handled) => {
-                  if (!handled) {
-                    if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
-                      return jarvisPromptRef.current(cleanVoiceText, 'voice');
-                    }
-                    if (
-                      workspaceModeRef.current === 'builder' &&
-                      isAssistantExplanationIntent(cleanVoiceText)
-                    ) {
-                      handleChangeWorkspaceMode('jarvis', { silent: true });
-                      setTimeout(() => {
-                        void jarvisPromptRef.current?.(cleanVoiceText, 'voice');
-                      }, 90);
-                      return;
-                    }
-                    return handleSendMessageRef.current?.(cleanVoiceText, undefined, undefined, 'voice');
-                  }
-                })
-                .finally(() => {
-                  setIsVoiceProcessing(false);
-                });
-            },
-            onError: (errMsg, fatal) => {
-              addConsoleLog('warn', errMsg);
-              setIsVoiceProcessing(false);
-              if (fatal) {
-                shouldKeepListeningRef.current = false;
-                setIsListening(false);
-                showToast(errMsg);
-              }
-            },
-            onEnd: () => {
-              if (!shouldKeepListeningRef.current) {
-                setIsListening(false);
-              }
-            },
-          });
-        }
+        startHandsFreeMicRef.current?.();
         showToast('Microfone contínuo ativado!');
         speakAsSara(`Microfone ligado, estou a ouvir${callerShortVoc}.`, voiceEnabledRef.current, {
           level: 'short',
@@ -4729,6 +4676,17 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                 };
               });
             },
+            onBusyRetry: (busyMsg) => {
+              showToast(busyMsg);
+              setLiveBuild((prev) =>
+                prev.isBuilding ? { ...prev, currentStepLabel: busyMsg } : prev
+              );
+            },
+            onReplyProgress: (progressText) => {
+              if (progressText.includes('Núcleo ocupado')) {
+                showToast(progressText);
+              }
+            },
           },
         });
 
@@ -4985,12 +4943,35 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     stopMicRef.current = startContinuousVoiceRecognition({
       shouldKeepListening: () => shouldKeepListeningRef.current,
       onResult: (transcript) => {
-        // Quando está SILENCIADA ou em MODO CHAMADA, ignora tudo o que ouvir (inclusive conversa com outras pessoas) e só obedece a comandos explícitos de libertação/silêncio/paragem
-        if (isCallModeRef.current || isSaraSilencedRef.current) {
+        const silencedNow =
+          isCallModeRef.current || isSaraSilencedRef.current || isSaraCallModeFlag() || isSaraSilencedFlag();
+
+        // Prioridade máxima: comandos instantâneos de calar/parar/retomar antes de qualquer reconstrução ou fila
+        const immediateBarge = detectBargeInCommand(transcript, {
+          ...voiceContextRef.current,
+          isSilenced: silencedNow,
+          isCallMode: isCallModeRef.current || isSaraCallModeFlag(),
+        });
+        if (immediateBarge) {
+          if (immediateBarge.type === 'silence_sara') {
+            handleForceSilenceSara();
+            return;
+          }
+          if (immediateBarge.type === 'enter_call_mode') {
+            handleEnterCallMode();
+            return;
+          }
+          const runner = executePlatformCommandRef.current || executePlatformCommand;
+          void runner(immediateBarge, transcript);
+          return;
+        }
+
+        // Quando está SILENCIADA ou em MODO CHAMADA, ignora tudo o que ouvir (inclusive conversa com outras pessoas)
+        if (silencedNow) {
           const quickCmd = parseVoiceCommand(transcript, {
             ...voiceContextRef.current,
-            isSilenced: isSaraSilencedRef.current,
-            isCallMode: isCallModeRef.current,
+            isSilenced: true,
+            isCallMode: isCallModeRef.current || isSaraCallModeFlag(),
           });
           if (
             quickCmd.type === 'unsilence_sara' ||
@@ -5001,6 +4982,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             const runner = executePlatformCommandRef.current || executePlatformCommand;
             void runner(quickCmd, transcript);
           }
+          return;
+        }
+
+        // Bloqueio extra anti-eco: nunca despacha prompts normais enquanto a Sara fala ou logo após eco dos altifalantes
+        if (isSaraSpeakingRef.current || isSaraActivelySpeaking() || isProbableSaraEcho(transcript)) {
           return;
         }
 
@@ -5015,6 +5001,24 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
         const voiceRecon = reconstructDistortedVoiceInput(transcript, voiceContextRef.current);
         const cleanTranscript = voiceRecon.reconstructed || voiceRecon.cleaned || transcript;
+        const normVoice = cleanTranscript
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/[^a-z0-9\s]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (!normVoice) return;
+
+        // Evita disparo duplicado do mesmo áudio final ou empilhamento de turnos simultâneos de voz
+        const nowTs = Date.now();
+        if (
+          (lastVoiceDispatchRef.current.norm === normVoice && nowTs - lastVoiceDispatchRef.current.ts < 2500) ||
+          voiceDispatchInFlightRef.current
+        ) {
+          return;
+        }
+
         if (!voiceRecon.unintelligible) {
           pushRecentUtterance(cleanTranscript);
         }
@@ -5030,6 +5034,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           return;
         }
 
+        lastVoiceDispatchRef.current = { norm: normVoice, ts: nowTs };
+        voiceDispatchInFlightRef.current = true;
         setIsVoiceProcessing(true);
         const runner = executePlatformCommandRef.current || executePlatformCommand;
         runner(cmd, cleanTranscript)
@@ -5052,11 +5058,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             }
           })
           .finally(() => {
+            voiceDispatchInFlightRef.current = false;
             setIsVoiceProcessing(false);
           });
       },
       onError: (errMsg, fatal) => {
         addConsoleLog('warn', errMsg);
+        voiceDispatchInFlightRef.current = false;
         setIsVoiceProcessing(false);
         if (fatal) {
           shouldKeepListeningRef.current = false;
@@ -5070,7 +5078,17 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
       },
     });
-  }, [addConsoleLog, callerShortVoc, executePlatformCommand, handleChangeWorkspaceMode, showToast]);
+  }, [
+    addConsoleLog,
+    callerShortVoc,
+    executePlatformCommand,
+    handleChangeWorkspaceMode,
+    handleEnterCallMode,
+    handleForceSilenceSara,
+    session,
+    showToast,
+  ]);
+  startHandsFreeMicRef.current = startHandsFreeMic;
 
   const handleToggleMic = useCallback(() => {
     if (isSaraSpeakingRef.current) {

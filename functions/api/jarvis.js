@@ -3,7 +3,7 @@ import {
   formatFriendlyEdgeError,
   handleOptions,
   jsonResponse,
-  resolveEdgeApiKey,
+  resolveEdgeApiKeys,
   runJarvisAssistantEdge,
   searchYouTubeTrackEdge,
 } from './_saraEdge.js';
@@ -24,23 +24,11 @@ export async function onRequestPost(context) {
       return jsonResponse(feed, 200);
     }
 
-    const apiKey = resolveEdgeApiKey(context.request, context.env);
+    const apiKeys = resolveEdgeApiKeys(context.request, context.env);
     const isOwner = Boolean(body?.userIdentity?.isOwner);
-    if (!apiKey) {
-      return jsonResponse(
-        {
-          error: isOwner
-            ? 'Chave do Núcleo não configurada.'
-            : 'Núcleo offline. A tentar reconectar...',
-        },
-        500
-      );
-    }
-
-    const result = await runJarvisAssistantEdge(apiKey, body);
+    const result = await runJarvisAssistantEdge(apiKeys, body);
     return jsonResponse(result, 200);
   } catch (err) {
-    console.error('Erro Cloudflare /api/jarvis:', err);
-    return jsonResponse({ error: formatFriendlyEdgeError(err, false) }, err?.status === 403 ? 403 : 500);
+    return jsonResponse({ error: formatFriendlyEdgeError(err, false) }, err?.status === 503 ? 503 : 500);
   }
 }

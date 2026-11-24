@@ -7,7 +7,7 @@ import {
   getSaraCorePrompt,
   handleOptions,
   jsonResponse,
-  resolveEdgeApiKey,
+  resolveEdgeApiKeys,
 } from './_saraEdge.js';
 
 export async function onRequestOptions() {
@@ -18,7 +18,7 @@ export async function onRequestPost(context) {
   const { request, env } = context;
 
   try {
-    const apiKey = resolveEdgeApiKey(request, env);
+    const apiKeys = resolveEdgeApiKeys(request, env);
     const body = await request.json();
     const {
       contents,
@@ -57,7 +57,7 @@ Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwner
 3. ${isManual ? `Termina com uma pergunta curta convidando ${callerLabel} a aprovar o início ou sugerir ajustes antes de mexeres no código.` : 'Termina confirmando que assumes a construção completa e os testes automáticos a partir de agora.'}`;
 
       const { text, modelUsed } = await callGeminiRestWithFailover(
-        apiKey,
+        apiKeys,
         (model) => ({
           system_instruction: {
             parts: [
@@ -134,7 +134,7 @@ Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwner
       SARA_CORE_SYSTEM_PROMPT;
 
     const { text, modelUsed } = await callGeminiRestWithFailover(
-      apiKey,
+      apiKeys,
       (model) => ({
         system_instruction: { parts: [{ text: systemText }] },
         contents: finalContents,
@@ -150,6 +150,6 @@ Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwner
 
     return jsonResponse({ reply: text, modelUsed });
   } catch (err) {
-    return jsonResponse({ error: formatFriendlyEdgeError(err) }, err?.status === 403 ? 403 : 500);
+    return jsonResponse({ error: formatFriendlyEdgeError(err) }, err?.status === 503 ? 503 : 500);
   }
 }

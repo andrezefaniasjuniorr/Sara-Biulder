@@ -2836,6 +2836,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               setStreamingReply(sanitizeAssistantPlainText(partialReply));
             }
           },
+          onBusyRetry: (busyMsg) => {
+            setStreamingReply(busyMsg);
+            onNotify(busyMsg);
+          },
         }
       );
 
@@ -3043,6 +3047,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               if (!isSaraCallMode()) {
                 setStreamingReply(sanitizeAssistantPlainText(partialReply));
               }
+            },
+            onBusyRetry: (busyMsg) => {
+              setStreamingReply(busyMsg);
+              onNotify(busyMsg);
             },
           }
         );

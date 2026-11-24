@@ -417,6 +417,18 @@ export interface StreamBuildCallbacks {
   onMeta?: (meta: StreamMeta, modelUsed?: string) => void;
   onFileProgress?: (files: ProjectFiles, activeFile: string | undefined, completedFiles: string[]) => void;
   onReplyProgress?: (reply: string) => void;
+  onBusyRetry?: (message: string, attempt: number) => void;
+}
+
+const SARA_BUSY_RETRY_MSG = 'Núcleo ocupado, a tentar de novo...';
+
+function isSaraBusyError(errOrText: any): boolean {
+  if (!errOrText) return false;
+  if (typeof errOrText === 'object' && (errOrText.retryable || errOrText.status === 503 || errOrText.status === 429 || errOrText.status === 504 || errOrText.status === 502)) {
+    return true;
+  }
+  const msg = String(errOrText?.message || errOrText || '');
+  return /ocupado|a tentar de novo|429|503|504|timeout|rate.?limit|quota|overloaded/i.test(msg);
 }
 
 async function postJsonWithFallback(
@@ -451,7 +463,9 @@ async function postJsonWithFallback(
 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
-        const err = new Error(data.error || `${defaultError} (HTTP ${response.status})`);
+        const err: any = new Error(data.error || `${defaultError} (HTTP ${response.status})`);
+        err.status = response.status;
+        err.retryable = Boolean(data?.retryable || isSaraBusyError({ status: response.status, message: data?.error }));
         if (hasNext && response.status >= 500) {
           lastError = err;
           continue;
@@ -612,206 +626,131 @@ export async function runSaraStream(params: {
   const isKeyAuthErrorMsg = (msg: string) =>
     /gemini_api_key|inv[aá]lida|desativada|unauthenticated|api_key_invalid|401|403/i.test(msg);
 
-  if (pureChat) {
-    try {
-      const saraData = await postJsonWithFallback(
-        ['/api/sara', '/api/build'],
-        {
-          prompt,
-          files,
-          consoleLogs: consoleLogs.slice(-6),
-          history: history.slice(-8).map((m) => ({ sender: m.sender, text: m.text })),
-          imageBase64: image?.data,
-          mimeType: image?.mimeType,
-          agentMode,
-          pastProjects,
-          screenContext,
-          userIdentity,
-          forceBuilderMode: false,
-        },
-        headers,
-        'Falha silenciosa no canal de conversa'
-      );
+  const attemptCount = 2;
+  for (let attempt = 0; attempt < attemptCount; attempt++) {
+    const canRetryAfterBusy =
+      attempt < attemptCount - 1 && (typeof navigator === 'undefined' || navigator.onLine !== false);
 
-      const { actions: parsedActions, cleanedText } = extractSaraActionsFromText(
-        saraData?.reply || ''
-      );
-      const structuredActions: SaraPlatformAction[] = Array.isArray(saraData?.actions)
-        ? saraData.actions.filter((a: any) => a && typeof a.type === 'string')
-        : [];
-      const mergedActions = [...structuredActions, ...parsedActions];
-      const finalReply = sanitizeNonOwnerAiReply(
-        cleanedText || `Estou aqui contigo${voc} — o que queres explorar agora?`,
-        isOwner
-      );
+    if (pureChat) {
+      try {
+        const saraData = await postJsonWithFallback(
+          ['/api/sara', '/api/build'],
+          {
+            prompt,
+            files,
+            consoleLogs: consoleLogs.slice(-6),
+            history: history.slice(-8).map((m) => ({ sender: m.sender, text: m.text })),
+            imageBase64: image?.data,
+            mimeType: image?.mimeType,
+            agentMode,
+            pastProjects,
+            screenContext,
+            userIdentity,
+            forceBuilderMode: false,
+          },
+          headers,
+          'Falha silenciosa no canal de conversa'
+        );
 
-      return {
-        mode: 'conversation',
-        reply: finalReply,
-        updateFiles: false,
-        actions: mergedActions.length > 0 ? mergedActions : undefined,
-        engineLabel: isOwner ? 'Estúdio SARA' : 'SARA OS',
-        modelUsed: saraData.modelUsed,
-      };
-    } catch (bgErr: any) {
-      const errText = String(bgErr?.message || '');
-      const needsKey = isKeyAuthErrorMsg(errText);
-      const activeProj = screenContext?.projectName || 'este projeto';
-      return {
-        mode: 'conversation',
-        reply:
-          needsKey && isOwner
-            ? `Falta configurar a Chave do Núcleo nas Configurações do Sistema para trabalhar em **${activeProj}**, Eletro-Jr.`
-            : `Núcleo offline. A tentar reconectar...`,
-        updateFiles: false,
-        apiDegraded: true,
-        needsApiKey: isOwner ? needsKey : false,
-        engineLabel: 'Motor Inteligente SARA',
-      };
+        const { actions: parsedActions, cleanedText } = extractSaraActionsFromText(
+          saraData?.reply || ''
+        );
+        const structuredActions: SaraPlatformAction[] = Array.isArray(saraData?.actions)
+          ? saraData.actions.filter((a: any) => a && typeof a.type === 'string')
+          : [];
+        const mergedActions = [...structuredActions, ...parsedActions];
+        const finalReply = sanitizeNonOwnerAiReply(
+          cleanedText || `Estou aqui contigo${voc} — o que queres explorar agora?`,
+          isOwner
+        );
+
+        return {
+          mode: 'conversation',
+          reply: finalReply,
+          updateFiles: false,
+          actions: mergedActions.length > 0 ? mergedActions : undefined,
+          engineLabel: isOwner ? 'Estúdio SARA' : 'SARA OS',
+          modelUsed: saraData.modelUsed,
+        };
+      } catch (bgErr: any) {
+        const errText = String(bgErr?.message || '');
+        const needsKey = isKeyAuthErrorMsg(errText);
+        if (!needsKey && isSaraBusyError(bgErr) && canRetryAfterBusy) {
+          callbacks?.onBusyRetry?.(SARA_BUSY_RETRY_MSG, attempt + 1);
+          callbacks?.onReplyProgress?.(SARA_BUSY_RETRY_MSG);
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
+        }
+        const activeProj = screenContext?.projectName || 'este projeto';
+        const isBusy = !needsKey && isSaraBusyError(bgErr);
+        return {
+          mode: 'conversation',
+          reply:
+            needsKey && isOwner
+              ? `Falta configurar a Chave do Núcleo nas Configurações do Sistema para trabalhar em **${activeProj}**, Eletro-Jr.`
+              : isBusy
+              ? SARA_BUSY_RETRY_MSG
+              : `Núcleo offline. A tentar reconectar...`,
+          updateFiles: false,
+          apiDegraded: true,
+          needsApiKey: isOwner ? needsKey : false,
+          engineLabel: 'Motor Inteligente SARA',
+        };
+      }
     }
-  }
 
-  let response: Response | null = null;
-  let shouldFallbackToBuild = false;
+    let response: Response | null = null;
+    let shouldFallbackToBuild = false;
+    let streamHttpBusy = false;
 
-  try {
-    response = await fetch('/api/build-stream', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestPayload),
-    });
+    try {
+      response = await fetch('/api/build-stream', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestPayload),
+      });
 
-    const contentType = response.headers.get('content-type') || '';
-    if (
-      !response.ok ||
-      !response.body ||
-      contentType.includes('text/html')
-    ) {
+      const contentType = response.headers.get('content-type') || '';
+      if (
+        !response.ok ||
+        !response.body ||
+        contentType.includes('text/html')
+      ) {
+        if (!response.ok && isSaraBusyError({ status: response.status })) {
+          streamHttpBusy = true;
+        }
+        shouldFallbackToBuild = true;
+      }
+    } catch {
       shouldFallbackToBuild = true;
     }
-  } catch {
-    shouldFallbackToBuild = true;
-  }
 
-  if (shouldFallbackToBuild || !response || !response.body) {
-    try {
-      const fallbackData = await postJsonWithFallback(
-        ['/api/build', '/api/builder/generate'],
-        { ...requestPayload, forceBuilderMode: true },
-        headers,
-        'Falha silenciosa de failover'
-      );
-      return buildResultFromJsonFallback(fallbackData, customKey, callbacks, userIdentity);
-    } catch (bgErr: any) {
-      const errText = String(bgErr?.message || '');
-      const needsKey = isKeyAuthErrorMsg(errText);
-      return {
-        mode: 'conversation',
-        reply:
-          needsKey && isOwner
-            ? 'Para criar e editar ficheiros no Estúdio SARA, configura a Chave do Núcleo nas Configurações do Sistema.'
-            : 'Núcleo offline. A tentar reconectar...',
-        updateFiles: false,
-        apiDegraded: true,
-        needsApiKey: isOwner ? needsKey : false,
-        engineLabel: 'Motor Inteligente SARA',
-      };
-    }
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let sseBuffer = '';
-  let rawModelText = '';
-  let modelUsed = 'gemini-4-hydrogen';
-  let metaSent = false;
-  let streamErroredMessage = '';
-  let lastParsed: ReturnType<typeof parseStreamBuffer> = {
-    meta: null,
-    files: {},
-    activeFilePath: undefined,
-    completedFiles: [],
-    actions: [],
-    reply: '',
-  };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    sseBuffer += decoder.decode(value, { stream: true });
-    const lines = sseBuffer.split('\n');
-    sseBuffer = lines.pop() || '';
-
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const jsonStr = line.slice(6).trim();
-      if (!jsonStr) continue;
-
-      let evt: any;
+    if (shouldFallbackToBuild || !response || !response.body) {
       try {
-        evt = JSON.parse(jsonStr);
-      } catch {
-        continue;
-      }
-
-      if (evt.type === 'status' && evt.model) {
-        modelUsed = evt.model;
-      } else if (evt.type === 'error') {
-        streamErroredMessage = evt.error || 'Erro no streaming da IA.';
-      } else if (evt.type === 'chunk' && evt.text) {
-        if (evt.model) modelUsed = evt.model;
-        rawModelText += evt.text;
-        lastParsed = parseStreamBuffer(rawModelText);
-
-        if (lastParsed.meta && !metaSent) {
-          metaSent = true;
-          callbacks?.onMeta?.(lastParsed.meta, modelUsed);
+        const fallbackData = await postJsonWithFallback(
+          ['/api/build', '/api/builder/generate'],
+          { ...requestPayload, forceBuilderMode: true },
+          headers,
+          'Falha silenciosa de failover'
+        );
+        return buildResultFromJsonFallback(fallbackData, customKey, callbacks, userIdentity);
+      } catch (bgErr: any) {
+        const errText = String(bgErr?.message || '');
+        const needsKey = isKeyAuthErrorMsg(errText);
+        const isBusy = !needsKey && (streamHttpBusy || isSaraBusyError(bgErr));
+        if (isBusy && canRetryAfterBusy) {
+          callbacks?.onBusyRetry?.(SARA_BUSY_RETRY_MSG, attempt + 1);
+          callbacks?.onReplyProgress?.(SARA_BUSY_RETRY_MSG);
+          await new Promise((r) => setTimeout(r, 3000));
+          continue;
         }
-
-        if (Object.keys(lastParsed.files).length > 0) {
-          callbacks?.onFileProgress?.(
-            lastParsed.files,
-            lastParsed.activeFilePath,
-            lastParsed.completedFiles
-          );
-        }
-
-        if (lastParsed.reply) {
-          callbacks?.onReplyProgress?.(lastParsed.reply);
-        }
-      }
-    }
-  }
-
-  const streamHadFiles = Object.keys(lastParsed.files).length > 0;
-  const streamOnlyHasActions = !streamHadFiles && lastParsed.actions.length > 0;
-
-  // Se o stream terminou vazio OU era um pedido de construção/edição e a IA só respondeu texto sem criar ficheiros nem ações, força /api/build com JSON Schema estrito!
-  if ((!rawModelText.trim() || (!streamHadFiles && !streamOnlyHasActions)) && !isKeyAuthErrorMsg(streamErroredMessage)) {
-    try {
-      const fallbackData = await postJsonWithFallback(
-        ['/api/build', '/api/builder/generate'],
-        { ...requestPayload, forceBuilderMode: true },
-        headers,
-        streamErroredMessage || 'Failover silencioso na construção'
-      );
-      const jsonResult = buildResultFromJsonFallback(fallbackData, customKey, callbacks, userIdentity);
-      if (jsonResult.updateFiles && jsonResult.files) {
-        return jsonResult;
-      }
-      if (!rawModelText.trim()) {
-        return jsonResult;
-      }
-    } catch (fallbackErr: any) {
-      const errText = `${streamErroredMessage} ${String(fallbackErr?.message || '')}`;
-      const needsKey = isKeyAuthErrorMsg(errText);
-      if (!rawModelText.trim()) {
         return {
           mode: 'conversation',
           reply:
             needsKey && isOwner
               ? 'Para criar e editar ficheiros no Estúdio SARA, configura a Chave do Núcleo nas Configurações do Sistema.'
+              : isBusy
+              ? SARA_BUSY_RETRY_MSG
               : 'Núcleo offline. A tentar reconectar...',
           updateFiles: false,
           apiDegraded: true,
@@ -820,61 +759,185 @@ export async function runSaraStream(params: {
         };
       }
     }
-  }
 
-  if (!rawModelText.trim() && isKeyAuthErrorMsg(streamErroredMessage)) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder('utf-8');
+    let sseBuffer = '';
+    let rawModelText = '';
+    let modelUsed = 'gemini-4-hydrogen';
+    let metaSent = false;
+    let streamErroredMessage = '';
+    let streamRetryable = false;
+    let lastParsed: ReturnType<typeof parseStreamBuffer> = {
+      meta: null,
+      files: {},
+      activeFilePath: undefined,
+      completedFiles: [],
+      actions: [],
+      reply: '',
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      sseBuffer += decoder.decode(value, { stream: true });
+      const lines = sseBuffer.split('\n');
+      sseBuffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const jsonStr = line.slice(6).trim();
+        if (!jsonStr) continue;
+
+        let evt: any;
+        try {
+          evt = JSON.parse(jsonStr);
+        } catch {
+          continue;
+        }
+
+        if (evt.type === 'status' && evt.model) {
+          modelUsed = evt.model;
+        } else if (evt.type === 'error') {
+          streamErroredMessage = evt.error || 'Erro no streaming da IA.';
+          if (evt.retryable || isSaraBusyError(streamErroredMessage)) {
+            streamRetryable = true;
+          }
+        } else if (evt.type === 'chunk' && evt.text) {
+          if (evt.model) modelUsed = evt.model;
+          rawModelText += evt.text;
+          lastParsed = parseStreamBuffer(rawModelText);
+
+          if (lastParsed.meta && !metaSent) {
+            metaSent = true;
+            callbacks?.onMeta?.(lastParsed.meta, modelUsed);
+          }
+
+          if (Object.keys(lastParsed.files).length > 0) {
+            callbacks?.onFileProgress?.(
+              lastParsed.files,
+              lastParsed.activeFilePath,
+              lastParsed.completedFiles
+            );
+          }
+
+          if (lastParsed.reply) {
+            callbacks?.onReplyProgress?.(lastParsed.reply);
+          }
+        }
+      }
+    }
+
+    const streamHadFiles = Object.keys(lastParsed.files).length > 0;
+    const streamOnlyHasActions = !streamHadFiles && lastParsed.actions.length > 0;
+
+    // Se o stream terminou vazio OU era um pedido de construção/edição e a IA só respondeu texto sem criar ficheiros nem ações, força /api/build com JSON Schema estrito!
+    if ((!rawModelText.trim() || (!streamHadFiles && !streamOnlyHasActions)) && !isKeyAuthErrorMsg(streamErroredMessage)) {
+      try {
+        const fallbackData = await postJsonWithFallback(
+          ['/api/build', '/api/builder/generate'],
+          { ...requestPayload, forceBuilderMode: true },
+          headers,
+          streamErroredMessage || 'Failover silencioso na construção'
+        );
+        const jsonResult = buildResultFromJsonFallback(fallbackData, customKey, callbacks, userIdentity);
+        if (jsonResult.updateFiles && jsonResult.files) {
+          return jsonResult;
+        }
+        if (!rawModelText.trim()) {
+          return jsonResult;
+        }
+      } catch (fallbackErr: any) {
+        const errText = `${streamErroredMessage} ${String(fallbackErr?.message || '')}`;
+        const needsKey = isKeyAuthErrorMsg(errText);
+        if (!rawModelText.trim()) {
+          const isBusy = !needsKey && (streamRetryable || isSaraBusyError(fallbackErr) || isSaraBusyError(streamErroredMessage));
+          if (isBusy && canRetryAfterBusy) {
+            callbacks?.onBusyRetry?.(SARA_BUSY_RETRY_MSG, attempt + 1);
+            callbacks?.onReplyProgress?.(SARA_BUSY_RETRY_MSG);
+            await new Promise((r) => setTimeout(r, 3000));
+            continue;
+          }
+          return {
+            mode: 'conversation',
+            reply:
+              needsKey && isOwner
+                ? 'Para criar e editar ficheiros no Estúdio SARA, configura a Chave do Núcleo nas Configurações do Sistema.'
+                : isBusy
+                ? SARA_BUSY_RETRY_MSG
+                : 'Núcleo offline. A tentar reconectar...',
+            updateFiles: false,
+            apiDegraded: true,
+            needsApiKey: isOwner ? needsKey : false,
+            engineLabel: 'Motor Inteligente SARA',
+          };
+        }
+      }
+    }
+
+    if (!rawModelText.trim() && isKeyAuthErrorMsg(streamErroredMessage)) {
+      return {
+        mode: 'conversation',
+        reply: isOwner
+          ? 'Para construir e editar ficheiros no Estúdio SARA, verifica a Chave do Núcleo nas Configurações do Sistema.'
+          : 'Núcleo offline. A tentar reconectar...',
+        updateFiles: false,
+        apiDegraded: true,
+        needsApiKey: isOwner,
+        engineLabel: 'Motor Inteligente SARA',
+      };
+    }
+
+    const hasFiles = Object.keys(lastParsed.files).length > 0;
+    const fallbackRawClean = extractSaraActionsFromText(
+      rawModelText.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim()
+    ).cleanedText;
+    const finalReply = sanitizeNonOwnerAiReply(
+      lastParsed.reply ||
+        (!hasFiles && fallbackRawClean) ||
+        (hasFiles
+          ? `Pronto${voc}! Construí ${Object.keys(lastParsed.files).length} ficheiro(s) completo(s) para o teu projeto.`
+          : `Tudo tratado por aqui${voc}!`),
+      isOwner
+    );
+
+    const stepLabels = lastParsed.meta?.steps || [];
+
     return {
-      mode: 'conversation',
-      reply: isOwner
-        ? 'Para construir e editar ficheiros no Estúdio SARA, verifica a Chave do Núcleo nas Configurações do Sistema.'
-        : 'Núcleo offline. A tentar reconectar...',
-      updateFiles: false,
-      apiDegraded: true,
-      needsApiKey: isOwner,
-      engineLabel: 'Motor Inteligente SARA',
+      mode: hasFiles ? 'builder' : lastParsed.meta?.mode || 'conversation',
+      reply: finalReply,
+      updateFiles: hasFiles,
+      files: hasFiles ? lastParsed.files : undefined,
+      actions: lastParsed.actions.length > 0 ? lastParsed.actions : undefined,
+      projectName: lastParsed.meta?.projectName,
+      projectType: lastParsed.meta?.projectType,
+      planSentence: lastParsed.meta?.plan,
+      architectureSummary: lastParsed.meta?.architecture,
+      voiceSummary: lastParsed.meta?.voiceSummary
+        ? sanitizeNonOwnerAiReply(lastParsed.meta.voiceSummary, isOwner)
+        : undefined,
+      nextStep: lastParsed.meta?.nextStep,
+      missingFeatures: lastParsed.meta?.missingFeatures,
+      strategicImprovements: lastParsed.meta?.strategicImprovements,
+      proactiveSuggestion: lastParsed.meta?.suggestion,
+      engineLabel: isOwner ? `${modelUsed}${customKey ? ' + TXT' : ''}` : 'SARA OS',
+      modelUsed,
+      codeBlocks: hasFiles ? filesToCodeBlocks(lastParsed.files) : undefined,
+      steps: stepLabels.map((label, idx) => ({
+        id: idx + 1,
+        label,
+        status: 'done',
+      })),
     };
   }
 
-  const hasFiles = Object.keys(lastParsed.files).length > 0;
-  const fallbackRawClean = extractSaraActionsFromText(
-    rawModelText.replace(/<[^>]+>[\s\S]*?<\/[^>]+>/g, '').trim()
-  ).cleanedText;
-  const finalReply = sanitizeNonOwnerAiReply(
-    lastParsed.reply ||
-      (!hasFiles && fallbackRawClean) ||
-      (hasFiles
-        ? `Pronto${voc}! Construí ${Object.keys(lastParsed.files).length} ficheiro(s) completo(s) para o teu projeto.`
-        : `Tudo tratado por aqui${voc}!`),
-    isOwner
-  );
-
-  const stepLabels = lastParsed.meta?.steps || [];
-
   return {
-    mode: hasFiles ? 'builder' : lastParsed.meta?.mode || 'conversation',
-    reply: finalReply,
-    updateFiles: hasFiles,
-    files: hasFiles ? lastParsed.files : undefined,
-    actions: lastParsed.actions.length > 0 ? lastParsed.actions : undefined,
-    projectName: lastParsed.meta?.projectName,
-    projectType: lastParsed.meta?.projectType,
-    planSentence: lastParsed.meta?.plan,
-    architectureSummary: lastParsed.meta?.architecture,
-    voiceSummary: lastParsed.meta?.voiceSummary
-      ? sanitizeNonOwnerAiReply(lastParsed.meta.voiceSummary, isOwner)
-      : undefined,
-    nextStep: lastParsed.meta?.nextStep,
-    missingFeatures: lastParsed.meta?.missingFeatures,
-    strategicImprovements: lastParsed.meta?.strategicImprovements,
-    proactiveSuggestion: lastParsed.meta?.suggestion,
-    engineLabel: isOwner ? `${modelUsed}${customKey ? ' + TXT' : ''}` : 'SARA OS',
-    modelUsed,
-    codeBlocks: hasFiles ? filesToCodeBlocks(lastParsed.files) : undefined,
-    steps: stepLabels.map((label, idx) => ({
-      id: idx + 1,
-      label,
-      status: 'done',
-    })),
+    mode: 'conversation',
+    reply: SARA_BUSY_RETRY_MSG,
+    updateFiles: false,
+    apiDegraded: true,
+    engineLabel: 'Motor Inteligente SARA',
   };
 }
 

@@ -6,6 +6,7 @@ import {
   formatFriendlyAiError,
   getGeminiClient,
   getSaraStreamPrompt,
+  isModelOnlyError,
   isRetryableModelError,
   readJsonBody,
   setCorsHeaders,
@@ -38,66 +39,81 @@ export default async function handler(req, res) {
     const headerKey = req.headers?.['x-gemini-api-key'];
     const customKey = typeof headerKey === 'string' ? headerKey : undefined;
     const ai = getGeminiClient(customKey);
+    const clients = Array.isArray(ai?.__saraRotatedClients) && ai.__saraRotatedClients.length > 0
+      ? ai.__saraRotatedClients
+      : [ai];
+    const maxClients = Math.min(clients.length, 6);
     const parts = buildStreamParts(body);
 
     let streamed = false;
     let lastError = null;
 
     for (const model of MODEL_PRIORITY_CHAIN) {
-      const streamStart = Date.now();
-      let chunkWatchdog;
-      try {
-        sendEvent({ type: 'status', model });
-        const streamResp = await withTimeout(
-          ai.models.generateContentStream({
-            model,
-            contents: { parts },
-            config: {
-              systemInstruction: getSaraStreamPrompt(body?.userIdentity) || SARA_STREAM_PROTOCOL,
-              ...(model.startsWith('gemini-4')
-                ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
-                : {}),
-            },
-          }),
-          9500,
-          model
-        );
+      let modelUnavailableGlobally = false;
 
-        let chunkCount = 0;
-        const iterator = streamResp[Symbol.asyncIterator]();
-        while (true) {
-          const nextStep = await Promise.race([
-            iterator.next(),
-            new Promise((_, reject) => {
-              chunkWatchdog = setTimeout(() => reject(new Error(`Timeout stream chunk em ${model}`)), 12000);
+      for (let kIdx = 0; kIdx < maxClients; kIdx++) {
+        const client = clients[kIdx];
+        let chunkWatchdog;
+        try {
+          sendEvent({ type: 'status', model });
+          const streamResp = await withTimeout(
+            client.models.generateContentStream({
+              model,
+              contents: { parts },
+              config: {
+                systemInstruction: getSaraStreamPrompt(body?.userIdentity) || SARA_STREAM_PROTOCOL,
+                ...(model.startsWith('gemini-4')
+                  ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
+                  : {}),
+              },
             }),
-          ]);
-          clearTimeout(chunkWatchdog);
-          if (nextStep.done) break;
-          const text = nextStep.value?.text || '';
-          if (text) {
-            chunkCount++;
-            sendEvent({ type: 'chunk', text, model });
-          }
-        }
+            9500,
+            model
+          );
 
-        if (chunkCount > 0) {
-          streamed = true;
-          console.log(`[Vercel Stream OK] ${model} enviou ${chunkCount} chunks em ${Date.now() - streamStart}ms`);
-          sendEvent({ type: 'done', model });
-          break;
+          let chunkCount = 0;
+          const iterator = streamResp[Symbol.asyncIterator]();
+          while (true) {
+            const nextStep = await Promise.race([
+              iterator.next(),
+              new Promise((_, reject) => {
+                chunkWatchdog = setTimeout(() => reject(new Error(`Timeout stream chunk em ${model}`)), 12000);
+              }),
+            ]);
+            clearTimeout(chunkWatchdog);
+            if (nextStep.done) break;
+            const text = nextStep.value?.text || '';
+            if (text) {
+              chunkCount++;
+              sendEvent({ type: 'chunk', text, model });
+            }
+          }
+
+          if (chunkCount > 0) {
+            streamed = true;
+            sendEvent({ type: 'done', model });
+            break;
+          }
+          lastError = new Error(`Streaming vazio em ${model}`);
+        } catch (err) {
+          clearTimeout(chunkWatchdog);
+          lastError = err;
+          if (isModelOnlyError(err)) {
+            modelUnavailableGlobally = true;
+            break;
+          }
+          if (!isRetryableModelError(err)) break;
         }
-      } catch (err) {
-        clearTimeout(chunkWatchdog);
-        lastError = err;
-        console.warn(`[Vercel Stream Failover] ${model} falhou:`, err?.message?.slice(0, 140));
-        if (!isRetryableModelError(err)) break;
       }
+
+      if (streamed) break;
+      if (modelUnavailableGlobally) continue;
     }
 
     if (!streamed) {
       sendEvent({
         type: 'error',
+        retryable: true,
         error: formatFriendlyAiError(lastError, Boolean(req.body?.userIdentity?.isOwner)),
       });
     }

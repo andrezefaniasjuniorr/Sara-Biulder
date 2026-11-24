@@ -184,18 +184,70 @@ export function jsonResponse(data, status = 200) {
   });
 }
 
-export function resolveEdgeApiKey(request, env) {
-  const headerKey = request.headers.get('x-gemini-api-key')?.trim();
-  const key =
-    headerKey ||
+let edgeKeyRotationCursor = Math.floor(Math.random() * 997);
+
+export function parseEdgeKeyList(rawValue) {
+  if (!rawValue) return [];
+  const items = Array.isArray(rawValue)
+    ? rawValue.flatMap((v) => String(v || '').split(/[\n,;]+/))
+    : String(rawValue).split(/[\n,;]+/);
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const clean = item.trim().replace(/^["']|["']$/g, '').trim();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+  }
+  return out;
+}
+
+export function resolveEdgeApiKeys(request, env) {
+  const headerKeys = parseEdgeKeyList(request?.headers?.get('x-gemini-api-key') || '');
+  const envRaw =
     env?.GEMINI_API_KEY ||
     env?.VITE_GEMINI_API_KEY ||
     env?.GOOGLE_API_KEY ||
     '';
-  if (!key) {
+  const envKeys = parseEdgeKeyList(envRaw);
+
+  const rotatedEnv =
+    envKeys.length > 1
+      ? (() => {
+          const startIdx = edgeKeyRotationCursor % envKeys.length;
+          edgeKeyRotationCursor = (edgeKeyRotationCursor + 1) % 1000000;
+          return [...envKeys.slice(startIdx), ...envKeys.slice(0, startIdx)];
+        })()
+      : envKeys;
+
+  const combined = [];
+  const seen = new Set();
+  for (const k of [...headerKeys, ...rotatedEnv]) {
+    if (!seen.has(k)) {
+      seen.add(k);
+      combined.push(k);
+    }
+  }
+
+  if (combined.length === 0) {
     throw new Error('CHAVE_NUCLEO_MISSING');
   }
-  return key;
+  return combined;
+}
+
+export function resolveEdgeApiKey(request, env) {
+  return resolveEdgeApiKeys(request, env)[0];
+}
+
+export function isModelOnlyError(status, msg = '') {
+  const lower = String(msg).toLowerCase();
+  return (
+    status === 404 ||
+    lower.includes('not_found') ||
+    lower.includes('is not found for api version') ||
+    (status === 400 && (lower.includes('thinking') || lower.includes('model') || lower.includes('schema'))) ||
+    lower.includes('thinking')
+  );
 }
 
 export function isRetryableHttpStatus(status, msg = '') {
@@ -207,16 +259,22 @@ export function isRetryableHttpStatus(status, msg = '') {
     status === 429 ||
     status === 408 ||
     status === 404 ||
+    status === 403 ||
+    status === 401 ||
     status === 500 ||
     (status === 400 && (lower.includes('thinking') || lower.includes('model') || lower.includes('schema'))) ||
     lower.includes('503') ||
     lower.includes('502') ||
     lower.includes('504') ||
     lower.includes('429') ||
+    lower.includes('401') ||
+    lower.includes('403') ||
     lower.includes('high demand') ||
     lower.includes('overloaded') ||
     lower.includes('unavailable') ||
     lower.includes('resource_exhausted') ||
+    lower.includes('quota') ||
+    lower.includes('rate limit') ||
     lower.includes('not_found') ||
     lower.includes('timeout') ||
     lower.includes('deadline') ||
@@ -225,34 +283,21 @@ export function isRetryableHttpStatus(status, msg = '') {
     lower.includes('network') ||
     lower.includes('empty') ||
     lower.includes('vazia') ||
-    lower.includes('thinking')
+    lower.includes('thinking') ||
+    lower.includes('api_key_invalid') ||
+    lower.includes('permission_denied') ||
+    lower.includes('unauthenticated')
   );
 }
 
 export function formatFriendlyEdgeError(err, isOwner = false) {
-  if (!isOwner) {
-    return 'Núcleo offline. A tentar reconectar...';
-  }
   const msg = String(err?.message || '');
-  if (msg.includes('CHAVE_NUCLEO_MISSING') || msg.includes('GEMINI_API_KEY')) {
-    return 'Chave do Núcleo não configurada no servidor.';
+  if (msg.includes('CHAVE_NUCLEO_MISSING')) {
+    return isOwner
+      ? 'Chave do Núcleo não configurada no servidor.'
+      : 'Núcleo SARA indisponível de momento.';
   }
-  if (
-    err?.status === 401 ||
-    err?.status === 403 ||
-    msg.includes('401') ||
-    msg.includes('403') ||
-    msg.includes('UNAUTHENTICATED') ||
-    msg.includes('ACCOUNT_STATE_INVALID') ||
-    msg.includes('PERMISSION_DENIED') ||
-    msg.includes('API_KEY_INVALID')
-  ) {
-    return 'Chave do Núcleo inválida ou desativada. Atualiza nas Configurações do Sistema.';
-  }
-  if (isRetryableHttpStatus(err?.status, msg)) {
-    return 'Núcleo com alta demanda neste segundo. A tentar reconectar...';
-  }
-  return 'Núcleo offline. A tentar reconectar...';
+  return 'Núcleo ocupado, a tentar de novo...';
 }
 
 export function safeParseJson(rawText) {
@@ -395,57 +440,83 @@ ${prompt || 'Analisa os ficheiros/imagem anexados e constrói o sistema completo
 }
 
 export async function callGeminiRestWithFailover(
-  apiKey,
+  apiKeyOrKeys,
   buildRequestBody,
   timeoutMs = 13000,
   modelChain = MODEL_PRIORITY_CHAIN
 ) {
+  const keyPool = parseEdgeKeyList(apiKeyOrKeys);
+  if (keyPool.length === 0) {
+    throw new Error('CHAVE_NUCLEO_MISSING');
+  }
+
   let lastError = null;
+  const maxKeyAttempts = Math.min(keyPool.length, 6);
 
   for (const model of modelChain) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-      const resp = await fetch(url, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': apiKey,
-          'User-Agent': 'aistudio-build',
-        },
-        body: JSON.stringify(buildRequestBody(model)),
-      });
+    let modelUnavailableGlobally = false;
 
-      if (!resp.ok) {
-        const err = new Error(`Motor HTTP ${resp.status}`);
-        err.status = resp.status;
-        throw err;
-      }
+    for (let kIdx = 0; kIdx < maxKeyAttempts; kIdx++) {
+      const activeKey = keyPool[kIdx];
+      const controller = new AbortController();
+      const perTryTimeout =
+        kIdx === 0 && model === modelChain[0] ? timeoutMs : Math.min(timeoutMs, 9000);
+      const timer = setTimeout(() => controller.abort(), perTryTimeout);
 
-      const json = await resp.json();
-      const text =
-        json?.candidates?.[0]?.content?.parts
-          ?.map((p) => p?.text || '')
-          .join('') || '';
-      if (!text) {
-        const err = new Error('Resposta vazia do Motor Inteligente.');
-        err.status = 500;
-        throw err;
+      try {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+        const resp = await fetch(url, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': activeKey,
+            'User-Agent': 'aistudio-build',
+          },
+          body: JSON.stringify(buildRequestBody(model)),
+        });
+
+        if (!resp.ok) {
+          const err = new Error(`Motor HTTP ${resp.status}`);
+          err.status = resp.status;
+          throw err;
+        }
+
+        const json = await resp.json();
+        const text =
+          json?.candidates?.[0]?.content?.parts
+            ?.map((p) => p?.text || '')
+            .join('') || '';
+        if (!text) {
+          const err = new Error('Resposta vazia do Núcleo SARA.');
+          err.status = 500;
+          throw err;
+        }
+        return { text, modelUsed: model };
+      } catch (err) {
+        lastError = err;
+        if (isModelOnlyError(err?.status, err?.message)) {
+          modelUnavailableGlobally = true;
+          break;
+        }
+        if (!isRetryableHttpStatus(err?.status, err?.message)) {
+          break;
+        }
+      } finally {
+        clearTimeout(timer);
       }
-      return { text, modelUsed: model };
-    } catch (err) {
-      lastError = err;
-      if (!isRetryableHttpStatus(err?.status, err?.message)) {
-        throw err;
-      }
-    } finally {
-      clearTimeout(timer);
+    }
+
+    if (modelUnavailableGlobally) {
+      continue;
     }
   }
 
-  throw lastError || new Error('Núcleo offline. A tentar reconectar...');
+  const exhaustedErr = new Error('Núcleo ocupado, a tentar de novo...');
+  exhaustedErr.status = 503;
+  exhaustedErr.allKeysExhausted = true;
+  exhaustedErr.cause = lastError;
+  throw exhaustedErr;
 }
 
 export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a SARA JARVIS, a Inteligência Artificial Ampla e assistente pessoal completa do utilizador.

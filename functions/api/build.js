@@ -5,7 +5,7 @@ import {
   getSaraCorePrompt,
   handleOptions,
   jsonResponse,
-  resolveEdgeApiKey,
+  resolveEdgeApiKeys,
   safeParseJson,
 } from './_saraEdge.js';
 
@@ -17,7 +17,7 @@ export async function onRequestPost(context) {
   const { request, env } = context;
 
   try {
-    const apiKey = resolveEdgeApiKey(request, env);
+    const apiKeys = resolveEdgeApiKeys(request, env);
     const body = await request.json();
     const {
       prompt = '',
@@ -141,7 +141,7 @@ ${prompt || 'Constrói o sistema pedido.'}`;
     };
 
     const { text, modelUsed } = await callGeminiRestWithFailover(
-      apiKey,
+      apiKeys,
       (model) => ({
         system_instruction: { parts: [{ text: getSaraCorePrompt(userIdentity) || SARA_CORE_SYSTEM_PROMPT }] },
         contents: [{ role: 'user', parts }],
@@ -170,6 +170,6 @@ ${prompt || 'Constrói o sistema pedido.'}`;
       modelUsed,
     });
   } catch (err) {
-    return jsonResponse({ error: formatFriendlyEdgeError(err) }, err?.status === 403 ? 403 : 500);
+    return jsonResponse({ error: formatFriendlyEdgeError(err) }, err?.status === 503 ? 503 : 500);
   }
 }

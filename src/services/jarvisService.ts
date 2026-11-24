@@ -772,6 +772,158 @@ export interface JarvisStreamCallbacks {
   onSpeakReady?: (speakText: string) => void;
   onReplyPartial?: (partialReply: string) => void;
   onModelStatus?: (model: string) => void;
+  onBusyRetry?: (message: string, attempt: number) => void;
+}
+
+const BUSY_RETRY_MESSAGE = 'Núcleo ocupado, a tentar de novo...';
+
+function isBusyStatusOrText(status?: number, errText?: string, retryable?: boolean): boolean {
+  if (retryable) return true;
+  if (status === 429 || status === 502 || status === 503 || status === 504) return true;
+  const s = String(errText || '');
+  return /ocupado|a tentar de novo|429|503|504|timeout|rate.?limit|quota|overloaded/i.test(s);
+}
+
+async function runSingleJarvisAttempt(
+  requestBody: string,
+  headers: Record<string, string>,
+  prompt: string,
+  callbacks: JarvisStreamCallbacks | undefined,
+  isOwner: boolean
+): Promise<
+  | { ok: true; response: JarvisAssistantResponse }
+  | { ok: false; busy: boolean }
+> {
+  let streamRetryable = false;
+  let streamError = '';
+
+  try {
+    const resp = await fetch('/api/jarvis-stream', {
+      method: 'POST',
+      headers,
+      body: requestBody,
+    });
+
+    if (!resp.ok) {
+      if (isBusyStatusOrText(resp.status)) {
+        streamRetryable = true;
+      }
+    } else if (resp.body) {
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let sseBuffer = '';
+      let rawAccum = '';
+      let modelUsed = '';
+      let speakEmitted = false;
+      let lastPartialReply = '';
+      let enrichedActionsFromServer: JarvisActionPayload[] | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        sseBuffer += decoder.decode(value, { stream: true });
+        const lines = sseBuffer.split('\n');
+        sseBuffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const rawJson = line.slice(6).trim();
+          if (!rawJson) continue;
+          try {
+            const evt = JSON.parse(rawJson);
+            if (evt.type === 'status' && evt.model) {
+              modelUsed = evt.model;
+              callbacks?.onModelStatus?.(evt.model);
+            } else if (evt.type === 'chunk' && evt.text) {
+              rawAccum += evt.text;
+              const parsed = parseStreamingJarvisTags(rawAccum);
+              if (!speakEmitted && parsed.speakComplete && parsed.speak) {
+                const cleanSpeak = sanitizeNonOwnerAiReply(
+                  sanitizeAssistantPlainText(parsed.speak),
+                  isOwner
+                );
+                if (cleanSpeak) {
+                  speakEmitted = true;
+                  callbacks?.onSpeakReady?.(cleanSpeak);
+                }
+              }
+              if (parsed.reply) {
+                const cleanPartial = sanitizeNonOwnerAiReply(
+                  sanitizeAssistantPlainText(parsed.reply),
+                  isOwner
+                );
+                if (cleanPartial && cleanPartial !== lastPartialReply) {
+                  lastPartialReply = cleanPartial;
+                  callbacks?.onReplyPartial?.(cleanPartial);
+                }
+              }
+            } else if (evt.type === 'enriched_actions' && Array.isArray(evt.actions)) {
+              enrichedActionsFromServer = evt.actions.map(normalizeJarvisAction);
+            } else if (evt.type === 'error' && evt.error) {
+              streamError = String(evt.error);
+              if (isBusyStatusOrText(undefined, streamError, Boolean(evt.retryable))) {
+                streamRetryable = true;
+              }
+            }
+          } catch {
+            // ignore incomplete SSE line
+          }
+        }
+      }
+
+      if (rawAccum.trim()) {
+        const finalParsed = parseStreamingJarvisTags(rawAccum);
+        const strippedFallback = rawAccum
+          .replace(/<JARVIS_SPEAK>[\s\S]*?<\/JARVIS_SPEAK>/gi, '')
+          .replace(/<JARVIS_CHAT>[\s\S]*?<\/JARVIS_CHAT>/gi, '')
+          .replace(/<JARVIS_ACTIONS>[\s\S]*?<\/JARVIS_ACTIONS>/gi, '')
+          .replace(/<JARVIS_MOOD>[\s\S]*?<\/JARVIS_MOOD>/gi, '')
+          .replace(/<\/?JARVIS_REPLY>/gi, '')
+          .trim();
+
+        const rawActions = enrichedActionsFromServer || finalParsed.actions;
+        const finalActions = maybeExtractVisualActions(
+          prompt,
+          finalParsed.reply || strippedFallback,
+          rawActions
+        );
+        const cleanReply =
+          sanitizeNonOwnerAiReply(
+            sanitizeAssistantPlainText(finalParsed.reply || strippedFallback || finalParsed.speak),
+            isOwner
+          ) || 'Mostrei no preview.';
+        const cleanChatSummary = sanitizeNonOwnerAiReply(
+          sanitizeAssistantPlainText(finalParsed.chatSummary || ''),
+          isOwner
+        );
+        const cleanSpeak =
+          sanitizeNonOwnerAiReply(
+            sanitizeAssistantPlainText(finalParsed.speak || cleanReply),
+            isOwner
+          ) || cleanReply;
+
+        if (!speakEmitted && cleanSpeak) {
+          callbacks?.onSpeakReady?.(cleanSpeak);
+        }
+
+        return {
+          ok: true,
+          response: {
+            reply: cleanReply,
+            chatSummary: cleanChatSummary || undefined,
+            voiceSummary: cleanSpeak,
+            mood: finalParsed.mood || 'speaking',
+            actions: finalActions,
+            modelUsed,
+          },
+        };
+      }
+    }
+  } catch {
+    // fallback para /api/jarvis padrão abaixo
+  }
+
+  return askJarvisAssistantFallbackJson(requestBody, headers, prompt, callbacks, isOwner, streamRetryable, streamError);
 }
 
 export async function askJarvisAssistantStream(
@@ -831,128 +983,40 @@ export async function askJarvisAssistantStream(
     nowIso: new Date().toISOString(),
   });
 
-  try {
-    const resp = await fetch('/api/jarvis-stream', {
-      method: 'POST',
+  let lastWasBusy = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const attemptResult = await runSingleJarvisAttempt(
+      requestBody,
       headers,
-      body: requestBody,
-    });
-
-    if (resp.ok && resp.body) {
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let sseBuffer = '';
-      let rawAccum = '';
-      let modelUsed = '';
-      let speakEmitted = false;
-      let lastPartialReply = '';
-      let enrichedActionsFromServer: JarvisActionPayload[] | null = null;
-      let streamError = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        sseBuffer += decoder.decode(value, { stream: true });
-        const lines = sseBuffer.split('\n');
-        sseBuffer = lines.pop() || '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const rawJson = line.slice(6).trim();
-          if (!rawJson) continue;
-          try {
-            const evt = JSON.parse(rawJson);
-            if (evt.type === 'status' && evt.model) {
-              modelUsed = evt.model;
-              callbacks?.onModelStatus?.(evt.model);
-            } else if (evt.type === 'chunk' && evt.text) {
-              rawAccum += evt.text;
-              const parsed = parseStreamingJarvisTags(rawAccum);
-              if (!speakEmitted && parsed.speakComplete && parsed.speak) {
-                const cleanSpeak = sanitizeNonOwnerAiReply(
-                  sanitizeAssistantPlainText(parsed.speak),
-                  isOwner
-                );
-                if (cleanSpeak) {
-                  speakEmitted = true;
-                  callbacks?.onSpeakReady?.(cleanSpeak);
-                }
-              }
-              if (parsed.reply) {
-                const cleanPartial = sanitizeNonOwnerAiReply(
-                  sanitizeAssistantPlainText(parsed.reply),
-                  isOwner
-                );
-                if (cleanPartial && cleanPartial !== lastPartialReply) {
-                  lastPartialReply = cleanPartial;
-                  callbacks?.onReplyPartial?.(cleanPartial);
-                }
-              }
-            } else if (evt.type === 'enriched_actions' && Array.isArray(evt.actions)) {
-              enrichedActionsFromServer = evt.actions.map(normalizeJarvisAction);
-            } else if (evt.type === 'error' && evt.error) {
-              streamError = evt.error;
-            }
-          } catch {
-            // ignore incomplete SSE line
-          }
-        }
-      }
-
-      if (rawAccum.trim()) {
-        const finalParsed = parseStreamingJarvisTags(rawAccum);
-        const strippedFallback = rawAccum
-          .replace(/<JARVIS_SPEAK>[\s\S]*?<\/JARVIS_SPEAK>/gi, '')
-          .replace(/<JARVIS_CHAT>[\s\S]*?<\/JARVIS_CHAT>/gi, '')
-          .replace(/<JARVIS_ACTIONS>[\s\S]*?<\/JARVIS_ACTIONS>/gi, '')
-          .replace(/<JARVIS_MOOD>[\s\S]*?<\/JARVIS_MOOD>/gi, '')
-          .replace(/<\/?JARVIS_REPLY>/gi, '')
-          .trim();
-
-        const rawActions = enrichedActionsFromServer || finalParsed.actions;
-        const finalActions = maybeExtractVisualActions(
-          params.prompt,
-          finalParsed.reply || strippedFallback,
-          rawActions
-        );
-        const cleanReply =
-          sanitizeNonOwnerAiReply(
-            sanitizeAssistantPlainText(finalParsed.reply || strippedFallback || finalParsed.speak),
-            isOwner
-          ) || 'Mostrei no preview.';
-        const cleanChatSummary = sanitizeNonOwnerAiReply(
-          sanitizeAssistantPlainText(finalParsed.chatSummary || ''),
-          isOwner
-        );
-        const cleanSpeak =
-          sanitizeNonOwnerAiReply(
-            sanitizeAssistantPlainText(finalParsed.speak || cleanReply),
-            isOwner
-          ) || cleanReply;
-
-        if (!speakEmitted && cleanSpeak) {
-          callbacks?.onSpeakReady?.(cleanSpeak);
-        }
-
-        return {
-          reply: cleanReply,
-          chatSummary: cleanChatSummary || undefined,
-          voiceSummary: cleanSpeak,
-          mood: finalParsed.mood || 'speaking',
-          actions: finalActions,
-          modelUsed,
-        };
-      }
-
-      if (streamError) {
-        // Fallback para endpoint JSON padrão antes de desistir
-      }
+      params.prompt,
+      callbacks,
+      isOwner
+    );
+    if (attemptResult.ok) {
+      return attemptResult.response;
     }
-  } catch {
-    // fallback para /api/jarvis padrão abaixo
+
+    lastWasBusy = attemptResult.busy;
+    const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+    if (!attemptResult.busy || attempt >= 2 || isOffline) {
+      break;
+    }
+
+    callbacks?.onBusyRetry?.(BUSY_RETRY_MESSAGE, attempt + 1);
+    await new Promise((resolve) => setTimeout(resolve, 3000));
   }
 
-  return askJarvisAssistantFallbackJson(requestBody, headers, params.prompt, callbacks, isOwner);
+  const finalUnavailable = lastWasBusy
+    ? BUSY_RETRY_MESSAGE
+    : 'Núcleo offline. A tentar reconectar...';
+  callbacks?.onSpeakReady?.(finalUnavailable);
+  return {
+    reply: finalUnavailable,
+    chatSummary: finalUnavailable,
+    voiceSummary: finalUnavailable,
+    mood: 'idle',
+    actions: [],
+  };
 }
 
 async function askJarvisAssistantFallbackJson(
@@ -960,8 +1024,10 @@ async function askJarvisAssistantFallbackJson(
   headers: Record<string, string>,
   prompt: string,
   callbacks?: JarvisStreamCallbacks,
-  isOwner = false
-): Promise<JarvisAssistantResponse> {
+  isOwner = false,
+  priorBusyHint = false,
+  priorErrorText = ''
+): Promise<{ ok: true; response: JarvisAssistantResponse } | { ok: false; busy: boolean }> {
   try {
     const resp = await fetch('/api/jarvis', {
       method: 'POST',
@@ -989,27 +1055,30 @@ async function askJarvisAssistantFallbackJson(
           ) || cleanReply;
         callbacks?.onSpeakReady?.(spoken);
         return {
-          ...data,
-          reply: cleanReply,
-          chatSummary: cleanChat || undefined,
-          voiceSummary: spoken,
-          actions: extractedActions,
+          ok: true,
+          response: {
+            ...data,
+            reply: cleanReply,
+            chatSummary: cleanChat || undefined,
+            voiceSummary: spoken,
+            actions: extractedActions,
+          },
         };
       }
+    } else {
+      const errBody = await resp.json().catch(() => ({} as any));
+      const busy = isBusyStatusOrText(
+        resp.status,
+        String(errBody?.error || priorErrorText || ''),
+        Boolean(errBody?.retryable) || priorBusyHint
+      );
+      return { ok: false, busy };
     }
   } catch {
-    // offline or external failure
+    // offline or timeout/abort failure
   }
 
-  const honestUnavailable = 'Núcleo offline. A tentar reconectar...';
-  callbacks?.onSpeakReady?.(honestUnavailable);
-  return {
-    reply: honestUnavailable,
-    chatSummary: 'Núcleo offline. A tentar reconectar...',
-    voiceSummary: honestUnavailable,
-    mood: 'idle',
-    actions: [],
-  };
+  return { ok: false, busy: priorBusyHint };
 }
 
 export async function askJarvisAssistant(params: {

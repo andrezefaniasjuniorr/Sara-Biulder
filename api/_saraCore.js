@@ -166,30 +166,97 @@ Se for conversa, ideia ou comando da plataforma sem alteração de código:
 Resposta viva, espontânea e criativa.
 </SARA_REPLY>`;
 
-export function resolveApiKey(overrideKey) {
-  const cleanOverride = typeof overrideKey === 'string' ? overrideKey.trim() : '';
-  const apiKey =
-    cleanOverride ||
+let coreKeyRotationCursor = Math.floor(Math.random() * 997);
+
+export function parseCoreKeyList(rawValue) {
+  if (!rawValue) return [];
+  const items = Array.isArray(rawValue)
+    ? rawValue.flatMap((v) => String(v || '').split(/[\n,;]+/))
+    : String(rawValue).split(/[\n,;]+/);
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const clean = item.trim().replace(/^["']|["']$/g, '').trim();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    out.push(clean);
+  }
+  return out;
+}
+
+export function resolveApiKeys(overrideKey) {
+  const overrideList = parseCoreKeyList(overrideKey);
+  const envRaw =
     process.env.GEMINI_API_KEY ||
     process.env.VITE_GEMINI_API_KEY ||
     process.env.GOOGLE_API_KEY ||
     '';
-  if (!apiKey) {
+  const envKeys = parseCoreKeyList(envRaw);
+
+  const rotatedEnv =
+    envKeys.length > 1
+      ? (() => {
+          const startIdx = coreKeyRotationCursor % envKeys.length;
+          coreKeyRotationCursor = (coreKeyRotationCursor + 1) % 1000000;
+          return [...envKeys.slice(startIdx), ...envKeys.slice(0, startIdx)];
+        })()
+      : envKeys;
+
+  const combined = [];
+  const seen = new Set();
+  for (const k of [...overrideList, ...rotatedEnv]) {
+    if (!seen.has(k)) {
+      seen.add(k);
+      combined.push(k);
+    }
+  }
+
+  if (combined.length === 0) {
     throw new Error('CHAVE_NUCLEO_MISSING');
   }
-  return apiKey;
+  return combined;
+}
+
+export function resolveApiKey(overrideKey) {
+  return resolveApiKeys(overrideKey)[0];
 }
 
 export function getGeminiClient(overrideKey) {
-  const apiKey = resolveApiKey(overrideKey);
-  return new GoogleGenAI({
-    apiKey,
-    httpOptions: {
-      headers: {
-        'User-Agent': 'aistudio-build',
-      },
-    },
-  });
+  const keys = resolveApiKeys(overrideKey);
+  const clients = keys.map(
+    (apiKey) =>
+      new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          },
+        },
+      })
+  );
+  const primary = clients[0];
+  try {
+    Object.defineProperty(primary, '__saraRotatedClients', {
+      value: clients,
+      enumerable: false,
+      configurable: true,
+    });
+  } catch {
+    primary.__saraRotatedClients = clients;
+  }
+  return primary;
+}
+
+export function isModelOnlyError(err) {
+  const status = err?.status || err?.code;
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    status === 404 ||
+    msg.includes('not_found') ||
+    msg.includes('is not found for api version') ||
+    (status === 400 && (msg.includes('thinking') || msg.includes('model') || msg.includes('schema'))) ||
+    msg.includes('thinking')
+  );
 }
 
 export function isRetryableModelError(err) {
@@ -202,16 +269,22 @@ export function isRetryableModelError(err) {
     status === 429 ||
     status === 408 ||
     status === 404 ||
+    status === 403 ||
+    status === 401 ||
     status === 500 ||
     (status === 400 && (msg.includes('thinking') || msg.includes('model') || msg.includes('schema'))) ||
     msg.includes('503') ||
     msg.includes('502') ||
     msg.includes('504') ||
     msg.includes('429') ||
+    msg.includes('401') ||
+    msg.includes('403') ||
     msg.includes('unavailable') ||
     msg.includes('high demand') ||
     msg.includes('overloaded') ||
     msg.includes('resource_exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit') ||
     msg.includes('not_found') ||
     msg.includes('timeout') ||
     msg.includes('deadline') ||
@@ -221,34 +294,21 @@ export function isRetryableModelError(err) {
     msg.includes('fetch failed') ||
     msg.includes('network') ||
     msg.includes('empty') ||
-    msg.includes('thinking')
+    msg.includes('thinking') ||
+    msg.includes('api_key_invalid') ||
+    msg.includes('permission_denied') ||
+    msg.includes('unauthenticated')
   );
 }
 
 export function formatFriendlyAiError(err, isOwner = false) {
-  if (!isOwner) {
-    return 'Núcleo offline. A tentar reconectar...';
-  }
   const msg = String(err?.message || '');
-  if (msg.includes('CHAVE_NUCLEO_MISSING') || msg.includes('GEMINI_API_KEY')) {
-    return 'Chave do Núcleo não configurada no servidor.';
+  if (msg.includes('CHAVE_NUCLEO_MISSING')) {
+    return isOwner
+      ? 'Chave do Núcleo não configurada no servidor.'
+      : 'Núcleo SARA indisponível de momento.';
   }
-  if (
-    err?.status === 401 ||
-    err?.status === 403 ||
-    msg.includes('401') ||
-    msg.includes('403') ||
-    msg.includes('UNAUTHENTICATED') ||
-    msg.includes('ACCOUNT_STATE_INVALID') ||
-    msg.includes('PERMISSION_DENIED') ||
-    msg.includes('API_KEY_INVALID')
-  ) {
-    return 'Chave do Núcleo inválida ou desativada. Atualiza nas Configurações do Sistema.';
-  }
-  if (isRetryableModelError(err)) {
-    return 'Núcleo com alta demanda neste segundo. A tentar reconectar...';
-  }
-  return 'Núcleo offline. A tentar reconectar...';
+  return 'Núcleo ocupado, a tentar de novo...';
 }
 
 export async function withTimeout(promise, ms, label) {
@@ -289,34 +349,52 @@ export async function generateWithFailover(
   timeoutMs = 13000,
   modelChain = MODEL_PRIORITY_CHAIN
 ) {
+  const clients = Array.isArray(ai?.__saraRotatedClients) && ai.__saraRotatedClients.length > 0
+    ? ai.__saraRotatedClients
+    : [ai];
   let lastError = null;
+  const maxClients = Math.min(clients.length, 6);
 
   for (const model of modelChain) {
-    const start = Date.now();
-    try {
-      const response = await withTimeout(
-        ai.models.generateContent(buildParams(model)),
-        timeoutMs,
-        model
-      );
-      if (!response?.text || !String(response.text).trim()) {
-        throw new Error(`Resposta vazia do modelo ${model}`);
+    let modelUnavailableGlobally = false;
+
+    for (let kIdx = 0; kIdx < maxClients; kIdx++) {
+      const client = clients[kIdx];
+      const start = Date.now();
+      const perTryTimeout =
+        kIdx === 0 && model === modelChain[0] ? timeoutMs : Math.min(timeoutMs, 9500);
+      try {
+        const response = await withTimeout(
+          client.models.generateContent(buildParams(model)),
+          perTryTimeout,
+          model
+        );
+        if (!response?.text || !String(response.text).trim()) {
+          throw new Error(`Resposta vazia do Núcleo (${model})`);
+        }
+        return { response, modelUsed: model };
+      } catch (err) {
+        lastError = err;
+        if (isModelOnlyError(err)) {
+          modelUnavailableGlobally = true;
+          break;
+        }
+        if (!isRetryableModelError(err)) {
+          break;
+        }
       }
-      console.log(`[IA OK] ${model} respondeu em ${Date.now() - start}ms`);
-      return { response, modelUsed: model };
-    } catch (err) {
-      lastError = err;
-      console.warn(
-        `[IA Failover] ${model} falhou em ${Date.now() - start}ms:`,
-        err?.message?.slice(0, 160)
-      );
-      if (!isRetryableModelError(err)) {
-        throw err;
-      }
+    }
+
+    if (modelUnavailableGlobally) {
+      continue;
     }
   }
 
-  throw lastError || new Error('Núcleo offline. A tentar reconectar...');
+  const exhaustedErr = new Error('Núcleo ocupado, a tentar de novo...');
+  exhaustedErr.status = 503;
+  exhaustedErr.allKeysExhausted = true;
+  exhaustedErr.cause = lastError;
+  throw exhaustedErr;
 }
 
 export function setCorsHeaders(res) {

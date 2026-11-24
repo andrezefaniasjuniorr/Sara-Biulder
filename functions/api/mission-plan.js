@@ -4,7 +4,7 @@ import {
   formatFriendlyEdgeError,
   handleOptions,
   jsonResponse,
-  resolveEdgeApiKey,
+  resolveEdgeApiKeys,
   safeParseJson,
 } from './_saraEdge.js';
 
@@ -16,7 +16,7 @@ export async function onRequestPost(context) {
   const { request, env } = context;
 
   try {
-    const apiKey = resolveEdgeApiKey(request, env);
+    const apiKeys = resolveEdgeApiKeys(request, env);
     const { goal, files, mode, projectState } = await request.json();
 
     const hasExistingFiles = Object.entries(files || {}).some(
@@ -49,7 +49,7 @@ export async function onRequestPost(context) {
     };
 
     const { text, modelUsed } = await callGeminiRestWithFailover(
-      apiKey,
+      apiKeys,
       (model) => ({
         system_instruction: { parts: [{ text: SARA_CORE_SYSTEM_PROMPT }] },
         contents: [
