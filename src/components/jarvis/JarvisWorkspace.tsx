@@ -29,6 +29,7 @@ import {
   HardDrive,
   LayoutDashboard,
   Loader2,
+  MapPin,
   Mic,
   MicOff,
   Music2,
@@ -39,6 +40,7 @@ import {
   Play,
   Plus,
   Radar,
+  Radio,
   RefreshCw,
   Send,
   Settings,
@@ -49,6 +51,7 @@ import {
   Sun,
   Trash2,
   Upload,
+  User,
   Volume2,
   VolumeX,
   Wifi,
@@ -152,6 +155,18 @@ import {
   sortAgendaItems,
   type TriggeredAgendaAlert,
 } from '../../utils/timeAgendaService';
+import type {
+  BackgroundReminder,
+  BackgroundSettings,
+  LocationRequestItem,
+  SaraDeviceRecord,
+  SharedPeerLocation,
+} from '../../types/location';
+import { RadarMapPanel } from '../map/RadarMapPanel';
+import {
+  ProfileAndFindPhonePanel,
+  type ProfileSubTab,
+} from '../profile/ProfileAndFindPhonePanel';
 
 interface JarvisWorkspaceProps {
   session: SaraSession;
@@ -237,6 +252,29 @@ interface JarvisWorkspaceProps {
   externalPanelRef?: React.MutableRefObject<((open: boolean) => void) | null>;
   externalRepeatRef: React.MutableRefObject<(() => void) | null>;
   externalContinueRef: React.MutableRefObject<(() => Promise<void>) | null>;
+  activeBottomTab?: 'assistente' | 'mapa' | 'perfil';
+  profileSubTab?: ProfileSubTab;
+  onChangeBottomTab?: (tab: 'assistente' | 'mapa' | 'perfil', profileSub?: ProfileSubTab) => void;
+  appearOnMap?: boolean;
+  ghostMode?: boolean;
+  myCoords?: { lat: number; lng: number; accuracyM?: number | null } | null;
+  incomingPending?: LocationRequestItem[];
+  outgoingGrants?: LocationRequestItem[];
+  sharedPeers?: SharedPeerLocation[];
+  devices?: SaraDeviceRecord[];
+  bgSettings?: BackgroundSettings;
+  reminders?: BackgroundReminder[];
+  notificationPermission?: NotificationPermission | 'unsupported';
+  onToggleAppearOnMap?: () => void;
+  onActivateGhostMode?: () => void;
+  onStopSharingAll?: () => void;
+  onUpdateMyCoords?: (coords: { lat: number; lng: number; accuracyM?: number | null }) => void;
+  onUpdateBgSettings?: (patch: Partial<BackgroundSettings>) => void;
+  onPermitBackground?: () => Promise<void>;
+  onStopBackground?: () => Promise<void>;
+  onRefreshDeviceNow?: () => Promise<void>;
+  onDeleteReminder?: (id: string) => void;
+  onScheduleBackgroundReminder?: (text: string) => { handled: boolean; reply?: string };
 }
 
 const IRON_MAN_PROCESS_LINES = [
@@ -372,6 +410,29 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   externalPanelRef,
   externalRepeatRef,
   externalContinueRef,
+  activeBottomTab = 'assistente',
+  profileSubTab = 'perfil',
+  onChangeBottomTab,
+  appearOnMap = false,
+  ghostMode = false,
+  myCoords = null,
+  incomingPending = [],
+  outgoingGrants = [],
+  sharedPeers = [],
+  devices = [],
+  bgSettings,
+  reminders = [],
+  notificationPermission = 'default',
+  onToggleAppearOnMap,
+  onActivateGhostMode,
+  onStopSharingAll,
+  onUpdateMyCoords,
+  onUpdateBgSettings,
+  onPermitBackground,
+  onStopBackground,
+  onRefreshDeviceNow,
+  onDeleteReminder,
+  onScheduleBackgroundReminder,
 }) => {
   const initialBundle = useMemo(
     () =>
@@ -2628,6 +2689,23 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         }
       }
 
+      // LEMBRETES EM SEGUNDO PLANO ("SARA lembra-me às 17h")
+      if (clean && !docToSend && onScheduleBackgroundReminder) {
+        const remRes = onScheduleBackgroundReminder(clean);
+        if (remRes.handled && remRes.reply) {
+          onUserActivity?.('agenda');
+          if (source === 'text') setInputText('');
+          const nowMaputo = getMaputoNowParts(new Date());
+          setConversation((prev) => [
+            ...prev.slice(-28),
+            { id: `usr_bgr_${Date.now()}`, sender: 'user', text: clean, timestamp: nowMaputo.timeHHmm },
+            { id: `sara_bgr_${Date.now()}`, sender: 'sara', text: remRes.reply!, timestamp: nowMaputo.timeHHmm },
+          ]);
+          speakAsSara(remRes.reply, voiceEnabled, { level: 'short', forceSpeak: true });
+          return;
+        }
+      }
+
       // AGENDA DETERMINÍSTICA (CRIAR E CONSULTAR): garante gravação real na Memória da SARA + Núcleo SARA
       if (clean && !docToSend) {
         if (isQueryAgendaCommand(clean)) {
@@ -4187,53 +4265,97 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         </div>
       )}
 
-      {/* Abas em Telemóvel (< lg) */}
-      {!focusMode && (
-        <nav className="lg:hidden grid grid-cols-3 bg-[#050C1D] border-b border-cyan-500/25 shrink-0">
-          <button
-            type="button"
-            onClick={() => setMobileSection('stage')}
-            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
-              mobileSection === 'stage'
-                ? 'border-[#00E5FF] text-cyan-300 bg-[#08152E]'
-                : 'border-transparent text-slate-400'
-            }`}
-          >
-            Holograma 3D
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileSection('hud')}
-            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
-              mobileSection === 'hud'
-                ? 'border-[#FF2A4B] text-rose-300 bg-[#08152E]'
-                : 'border-transparent text-slate-400'
-            }`}
-          >
-            Telemetria & Clima
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileSection('log')}
-            className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
-              mobileSection === 'log'
-                ? 'border-[#00E5FF] text-cyan-300 bg-[#08152E]'
-                : 'border-transparent text-slate-400'
-            }`}
-          >
-            Log & Rede
-          </button>
-        </nav>
-      )}
+      {activeBottomTab === 'mapa' ? (
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <RadarMapPanel
+            session={session}
+            appearOnMap={appearOnMap}
+            ghostMode={ghostMode}
+            myCoords={myCoords}
+            incomingPending={incomingPending}
+            outgoingGrants={outgoingGrants}
+            sharedPeers={sharedPeers}
+            onToggleAppearOnMap={() => onToggleAppearOnMap?.()}
+            onActivateGhostMode={() => onActivateGhostMode?.()}
+            onStopSharingAll={() => onStopSharingAll?.()}
+            onUpdateMyCoords={(c) => onUpdateMyCoords?.(c)}
+            onNotify={onNotify}
+            onClose={() => onChangeBottomTab?.('assistente')}
+          />
+        </div>
+      ) : activeBottomTab === 'perfil' && bgSettings ? (
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          <ProfileAndFindPhonePanel
+            session={session}
+            initialTab={profileSubTab}
+            devices={devices}
+            bgSettings={bgSettings}
+            reminders={reminders}
+            notificationPermission={notificationPermission}
+            onUpdateBgSettings={(patch) => onUpdateBgSettings?.(patch)}
+            onPermitBackground={async () => {
+              if (onPermitBackground) await onPermitBackground();
+            }}
+            onStopBackground={async () => {
+              if (onStopBackground) await onStopBackground();
+            }}
+            onRefreshDeviceNow={async () => {
+              if (onRefreshDeviceNow) await onRefreshDeviceNow();
+            }}
+            onDeleteReminder={(id) => onDeleteReminder?.(id)}
+            onNotify={onNotify}
+            onClose={() => onChangeBottomTab?.('assistente')}
+          />
+        </div>
+      ) : (
+        <>
+          {/* Abas em Telemóvel (< lg) */}
+          {!focusMode && (
+            <nav className="lg:hidden grid grid-cols-3 bg-[#050C1D] border-b border-cyan-500/25 shrink-0">
+              <button
+                type="button"
+                onClick={() => setMobileSection('stage')}
+                className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
+                  mobileSection === 'stage'
+                    ? 'border-[#00E5FF] text-cyan-300 bg-[#08152E]'
+                    : 'border-transparent text-slate-400'
+                }`}
+              >
+                Holograma 3D
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileSection('hud')}
+                className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
+                  mobileSection === 'hud'
+                    ? 'border-[#FF2A4B] text-rose-300 bg-[#08152E]'
+                    : 'border-transparent text-slate-400'
+                }`}
+              >
+                Telemetria & Clima
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobileSection('log')}
+                className={`py-2 text-xs font-bold border-b-2 transition cursor-pointer ${
+                  mobileSection === 'log'
+                    ? 'border-[#00E5FF] text-cyan-300 bg-[#08152E]'
+                    : 'border-transparent text-slate-400'
+                }`}
+              >
+                Log & Rede
+              </button>
+            </nav>
+          )}
 
-      {/* GRADE PRINCIPAL STARK HUD: 3 COLUNAS DENSAS E VIVAS (SEM ABAS DE MÓDULOS EXPOSTAS) */}
-      <div
-        className={`flex-1 min-h-0 flex flex-col ${
-          focusMode
-            ? 'lg:flex'
-            : 'lg:grid lg:grid-cols-[305px_1fr_315px] xl:grid-cols-[325px_1fr_335px]'
-        } overflow-hidden`}
-      >
+          {/* GRADE PRINCIPAL STARK HUD: 3 COLUNAS DENSAS E VIVAS (SEM ABAS DE MÓDULOS EXPOSTAS) */}
+          <div
+            className={`flex-1 min-h-0 flex flex-col ${
+              focusMode
+                ? 'lg:flex'
+                : 'lg:grid lg:grid-cols-[305px_1fr_315px] xl:grid-cols-[325px_1fr_335px]'
+            } overflow-hidden`}
+          >
         {/* =======================================================
             COLUNA ESQUERDA: NÚCLEO + DIAGNÓSTICO + CLIMA + TAREFAS + CALENDÁRIO + MOÇAMBIQUE AO VIVO
            ======================================================= */}
@@ -5542,6 +5664,76 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           </aside>
         )}
       </div>
+        </>
+      )}
+
+      {/* Barra Inferior Discreta: Assistente | Mapa | Perfil & Celular | 2.º Plano */}
+      {onChangeBottomTab && (
+        <nav className="shrink-0 bg-[#030814] border-t border-cyan-500/25 px-2 py-1 grid grid-cols-4 gap-1 z-20">
+          <button
+            type="button"
+            onClick={() => onChangeBottomTab('assistente')}
+            className={`py-1.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              activeBottomTab === 'assistente'
+                ? 'bg-cyan-500/20 border border-cyan-400/50 text-cyan-200'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Assistente</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onChangeBottomTab('mapa')}
+            className={`relative py-1.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              activeBottomTab === 'mapa'
+                ? 'bg-cyan-500/20 border border-cyan-400/50 text-cyan-200'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <MapPin className="w-3.5 h-3.5 text-[#00E5FF]" />
+            <span>Mapa</span>
+            {incomingPending.length > 0 && (
+              <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-rose-500 text-white text-[9px] font-black">
+                {incomingPending.length}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onChangeBottomTab('perfil', 'perfil')}
+            className={`py-1.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              activeBottomTab === 'perfil' && profileSubTab !== 'segundo_plano'
+                ? 'bg-cyan-500/20 border border-cyan-400/50 text-cyan-200'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <User className="w-3.5 h-3.5" />
+            <span>Perfil</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onChangeBottomTab('perfil', 'segundo_plano')}
+            className={`py-1.5 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 transition cursor-pointer ${
+              activeBottomTab === 'perfil' && profileSubTab === 'segundo_plano'
+                ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-200'
+                : bgSettings?.backgroundAllowed
+                ? 'text-emerald-300 border border-emerald-500/25 bg-emerald-500/10'
+                : 'text-slate-400 hover:text-white border border-transparent'
+            }`}
+          >
+            <Radio
+              className={`w-3.5 h-3.5 ${
+                bgSettings?.backgroundAllowed ? 'text-emerald-400 animate-pulse' : ''
+              }`}
+            />
+            <span className="truncate">2.º Plano</span>
+          </button>
+        </nav>
+      )}
     </div>
   );
 };

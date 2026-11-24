@@ -6,6 +6,12 @@ import type {
   SessionAccessLog,
   UserActivityStats,
 } from '../types/auth';
+import type {
+  LocationRequestItem,
+  RadarPresence,
+  RemoteDeviceCommand,
+  SaraDeviceRecord,
+} from '../types/location';
 
 // Configuração REAL e exclusiva do projeto Firebase sara-biulder
 export const firebaseConfig = {
@@ -660,4 +666,289 @@ export async function fetchAllAdminAlertsCloud(): Promise<AdminAlert[]> {
     return [];
   }
 }
+
+// =========================================================================
+// LOCALIZAÇÃO, RADAR E ACHAR MEU CELULAR (ZERO HISTÓRICO, PRIVACIDADE TOTAL)
+// =========================================================================
+
+export async function lookupUserBySaraIdCloud(
+  saraId: string
+): Promise<{ saraId: string; uid: string; callName: string } | null> {
+  const normalized = String(saraId || '').trim().toUpperCase();
+  if (!/^SARA-[A-Z0-9]{4}$/.test(normalized)) return null;
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const q = firestoreMod.query(
+      firestoreMod.collection(db, 'sara_accounts'),
+      firestoreMod.where('saraId', '==', normalized),
+      firestoreMod.limit(1)
+    );
+    const snap = await firestoreMod.getDocs(q);
+    let found: { saraId: string; uid: string; callName: string } | null = null;
+    snap.forEach((d: any) => {
+      const data = d.data();
+      if (data?.uid && data?.saraId) {
+        found = {
+          saraId: String(data.saraId),
+          uid: String(data.uid),
+          callName: String(data.callName || data.fullName || 'Utilizador SARA'),
+        };
+      }
+    });
+    return found;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveRadarPresenceCloud(presence: RadarPresence): Promise<void> {
+  if (!presence?.saraId || !presence?.uid || presence.uid.startsWith('guest_')) return;
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    // Guarda apenas o estado ATUAL / instante corrente — nunca arrays ou histórico
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_radar_presence', presence.saraId),
+      {
+        saraId: presence.saraId,
+        uid: presence.uid,
+        callName: presence.callName,
+        visible: Boolean(presence.visible && !presence.ghostMode),
+        ghostMode: Boolean(presence.ghostMode),
+        lat: presence.visible && !presence.ghostMode ? presence.lat : null,
+        lng: presence.visible && !presence.ghostMode ? presence.lng : null,
+        accuracyM: presence.visible && !presence.ghostMode ? presence.accuracyM ?? null : null,
+        updatedAt: presence.updatedAt || new Date().toISOString(),
+      },
+      { merge: false }
+    );
+  } catch {
+    // Fallback local silencioso
+  }
+}
+
+export async function fetchRadarPresenceCloud(saraId: string): Promise<RadarPresence | null> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const snap = await firestoreMod.getDoc(firestoreMod.doc(db, 'sara_radar_presence', saraId));
+    if (!snap.exists()) return null;
+    return snap.data() as RadarPresence;
+  } catch {
+    return null;
+  }
+}
+
+export function subscribeRadarPresenceByIdsCloud(
+  saraIds: string[],
+  onChange: (presences: Record<string, RadarPresence>) => void
+): () => void {
+  const uniqueIds = Array.from(new Set(saraIds.filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    onChange({});
+    return () => {};
+  }
+  const unsubs: Array<() => void> = [];
+  const stateMap: Record<string, RadarPresence> = {};
+  let active = true;
+
+  loadFirebaseRuntime()
+    .then(({ firestoreMod, db }) => {
+      if (!active) return;
+      for (const id of uniqueIds.slice(0, 12)) {
+        const ref = firestoreMod.doc(db, 'sara_radar_presence', id);
+        const u = firestoreMod.onSnapshot(
+          ref,
+          (docSnap: any) => {
+            if (!active) return;
+            if (docSnap.exists()) {
+              stateMap[id] = docSnap.data() as RadarPresence;
+            } else {
+              delete stateMap[id];
+            }
+            onChange({ ...stateMap });
+          },
+          () => {}
+        );
+        unsubs.push(u);
+      }
+    })
+    .catch(() => {});
+
+  return () => {
+    active = false;
+    unsubs.forEach((fn) => fn());
+  };
+}
+
+export async function saveLocationRequestCloud(req: LocationRequestItem): Promise<void> {
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_location_requests', req.id),
+      req,
+      { merge: true }
+    );
+  } catch {
+    // ignore offline
+  }
+}
+
+export function subscribeLocationRequestsForUserCloud(
+  saraId: string,
+  onRequests: (requests: LocationRequestItem[]) => void
+): () => void {
+  if (!saraId) return () => {};
+  let active = true;
+  let unsubIn: (() => void) | null = null;
+  let unsubOut: (() => void) | null = null;
+  const inMap = new Map<string, LocationRequestItem>();
+  const outMap = new Map<string, LocationRequestItem>();
+
+  const emitMerged = () => {
+    if (!active) return;
+    const combined = new Map<string, LocationRequestItem>([...inMap, ...outMap]);
+    onRequests(
+      Array.from(combined.values()).sort(
+        (a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0)
+      )
+    );
+  };
+
+  loadFirebaseRuntime()
+    .then(({ firestoreMod, db }) => {
+      if (!active) return;
+      const col = firestoreMod.collection(db, 'sara_location_requests');
+      const qIn = firestoreMod.query(col, firestoreMod.where('toSaraId', '==', saraId));
+      const qOut = firestoreMod.query(col, firestoreMod.where('fromSaraId', '==', saraId));
+
+      unsubIn = firestoreMod.onSnapshot(
+        qIn,
+        (snap: any) => {
+          inMap.clear();
+          snap.forEach((d: any) => {
+            const data = d.data() as LocationRequestItem;
+            if (data?.id) inMap.set(data.id, data);
+          });
+          emitMerged();
+        },
+        () => {}
+      );
+
+      unsubOut = firestoreMod.onSnapshot(
+        qOut,
+        (snap: any) => {
+          outMap.clear();
+          snap.forEach((d: any) => {
+            const data = d.data() as LocationRequestItem;
+            if (data?.id) outMap.set(data.id, data);
+          });
+          emitMerged();
+        },
+        () => {}
+      );
+    })
+    .catch(() => {});
+
+  return () => {
+    active = false;
+    if (unsubIn) unsubIn();
+    if (unsubOut) unsubOut();
+  };
+}
+
+export async function saveUserDeviceCloud(device: SaraDeviceRecord): Promise<void> {
+  if (!device?.ownerUid || !device?.deviceCode || device.ownerUid.startsWith('guest_')) return;
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    // Armazena apenas a localização atual / mais recente — nunca histórico
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_devices', `${device.ownerUid}_${device.deviceCode}`),
+      device,
+      { merge: true }
+    );
+  } catch {
+    // ignore offline
+  }
+}
+
+export async function fetchUserDevicesCloud(ownerUid: string): Promise<SaraDeviceRecord[]> {
+  if (!ownerUid || ownerUid.startsWith('guest_')) return [];
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const q = firestoreMod.query(
+      firestoreMod.collection(db, 'sara_devices'),
+      firestoreMod.where('ownerUid', '==', ownerUid)
+    );
+    const snap = await firestoreMod.getDocs(q);
+    const items: SaraDeviceRecord[] = [];
+    snap.forEach((d: any) => {
+      const data = d.data() as SaraDeviceRecord;
+      if (data?.ownerUid === ownerUid && data?.deviceCode) {
+        items.push(data);
+      }
+    });
+    return items.sort((a, b) => (Date.parse(b.lastUpdatedAt) || 0) - (Date.parse(a.lastUpdatedAt) || 0));
+  } catch {
+    return [];
+  }
+}
+
+export function subscribeUserDevicesCloud(
+  ownerUid: string,
+  onDevices: (devices: SaraDeviceRecord[]) => void
+): () => void {
+  if (!ownerUid || ownerUid.startsWith('guest_')) return () => {};
+  let active = true;
+  let unsub: (() => void) | null = null;
+
+  loadFirebaseRuntime()
+    .then(({ firestoreMod, db }) => {
+      if (!active) return;
+      const q = firestoreMod.query(
+        firestoreMod.collection(db, 'sara_devices'),
+        firestoreMod.where('ownerUid', '==', ownerUid)
+      );
+      unsub = firestoreMod.onSnapshot(
+        q,
+        (snap: any) => {
+          if (!active) return;
+          const items: SaraDeviceRecord[] = [];
+          snap.forEach((d: any) => {
+            const data = d.data() as SaraDeviceRecord;
+            if (data?.ownerUid === ownerUid && data?.deviceCode) {
+              items.push(data);
+            }
+          });
+          onDevices(
+            items.sort((a, b) => (Date.parse(b.lastUpdatedAt) || 0) - (Date.parse(a.lastUpdatedAt) || 0))
+          );
+        },
+        () => {}
+      );
+    })
+    .catch(() => {});
+
+  return () => {
+    active = false;
+    if (unsub) unsub();
+  };
+}
+
+export async function issueDeviceCommandCloud(
+  ownerUid: string,
+  deviceCode: string,
+  command: RemoteDeviceCommand | null
+): Promise<void> {
+  if (!ownerUid || !deviceCode || ownerUid.startsWith('guest_')) return;
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_devices', `${ownerUid}_${deviceCode}`),
+      { pendingCommand: command },
+      { merge: true }
+    );
+  } catch {
+    // ignore offline
+  }
+}
+
 

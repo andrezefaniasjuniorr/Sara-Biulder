@@ -1,5 +1,28 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MessageSquare, Eye, Code2, Terminal, Mic, MicOff, VolumeX, PhoneOff, Loader2, Play, Pause, Square, BookOpen } from 'lucide-react';
+import {
+  MessageSquare,
+  Eye,
+  Code2,
+  Terminal,
+  Mic,
+  MicOff,
+  VolumeX,
+  PhoneOff,
+  Loader2,
+  Play,
+  Pause,
+  Square,
+  BookOpen,
+  MapPin,
+  Radio,
+  Volume2,
+  Lock,
+  Unlock,
+  MessageSquareWarning,
+  Check,
+  X,
+  Phone,
+} from 'lucide-react';
 import type {
   AgentMode,
   AttachedFile,
@@ -35,6 +58,14 @@ import type {
   SaraSession,
   SaraUserIdentityPayload,
 } from './types/auth';
+import type {
+  BackgroundReminder,
+  BackgroundSettings,
+  DeviceLockState,
+  LocationRequestItem,
+  SaraDeviceRecord,
+  SharedPeerLocation,
+} from './types/location';
 import { createStarterProject } from './utils/starterProject';
 import {
   askSaraBuilderStep,
@@ -69,7 +100,51 @@ import {
   logoutCurrentSession,
   recordActivityEvent,
   updatePresenceHeartbeat,
+  verifySessionAccountPassword,
 } from './services/authService';
+import {
+  acknowledgeAndClearPendingCommand,
+  buildEmergencySmsUri,
+  evaluateOfflineSosCondition,
+  executeRemoteDeviceWipeLocal,
+  getSavedDeviceLockState,
+  hideFromRadarImmediately,
+  markCurrentDeviceOfflineOnLogout,
+  publishCurrentRadarPresence,
+  requestCurrentCoordinates,
+  respondToLocationRequest,
+  setSavedDeviceLockState,
+  setSavedRadarVisibilityPref,
+  stopAllOutgoingShares,
+  subscribeAccountDevices,
+  subscribeRadarRequestsAndPeers,
+  syncCurrentDeviceTelemetry,
+} from './services/locationRadarService';
+import {
+  consumeBrowserClosedBackgroundNotice,
+  isEiSaraWakePhrase,
+  loadBackgroundReminders,
+  loadBackgroundSettings,
+  markBrowserClosingWhileBackgroundActive,
+  parseBackgroundReminderInput,
+  playReminderBellChime,
+  postMessageToServiceWorker,
+  releaseScreenWakeLock,
+  requestNotificationPermissionIfNeeded,
+  requestScreenWakeLock,
+  saveBackgroundReminders,
+  saveBackgroundSettings,
+  setBackgroundActiveLifecycleFlag,
+  showSaraSystemNotification,
+  startBackgroundWorkerLoop,
+  startLoudDeviceAlarmLoop,
+  startSilentAudioKeepAlive,
+  stopBackgroundWorkerLoop,
+  stopLoudDeviceAlarmLoop,
+  stopSilentAudioKeepAlive,
+  syncPersistentBackgroundNotification,
+  syncReminderToServiceWorker,
+} from './services/backgroundService';
 import { buildStandaloneHtml, downloadProjectZip, importProjectZip } from './utils/zipService';
 import { getSavedGitHubToken, pushProjectToGitHub } from './utils/githubService';
 import {
@@ -130,6 +205,8 @@ import { PwaInstallBar } from './components/PwaInstallBar';
 import { JarvisWorkspace } from './components/jarvis/JarvisWorkspace';
 import { LoginGateScreen } from './components/auth/LoginGateScreen';
 import { AdminPanelModal } from './components/admin/AdminPanelModal';
+import { type ProfileSubTab } from './components/profile/ProfileAndFindPhonePanel';
+import { FloatingSaraBubble } from './components/background/FloatingSaraBubble';
 
 const WORKSPACE_MODE_KEY = 'sara_workspace_mode_v1';
 const PROJECTS_STORAGE_KEY = 'sara_biulder_projects_v2';
@@ -341,6 +418,49 @@ export default function App() {
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [unreadAlertsCount, setUnreadAlertsCount] = useState(0);
   const [guestSecondsLeft, setGuestSecondsLeft] = useState<number | null>(null);
+
+  // Estado de Localização, Radar, Achar Meu Celular & Segundo Plano
+  const [activeBottomTab, setActiveBottomTab] = useState<'assistente' | 'mapa' | 'perfil'>('assistente');
+  const [profileSubTab, setProfileSubTab] = useState<ProfileSubTab>('perfil');
+  const [appearOnMap, setAppearOnMap] = useState<boolean>(false);
+  const [ghostMode, setGhostMode] = useState<boolean>(false);
+  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number; accuracyM?: number | null } | null>(null);
+  const [incomingPending, setIncomingPending] = useState<LocationRequestItem[]>([]);
+  const [outgoingGrants, setOutgoingGrants] = useState<LocationRequestItem[]>([]);
+  const [sharedPeers, setSharedPeers] = useState<SharedPeerLocation[]>([]);
+  const [devices, setDevices] = useState<SaraDeviceRecord[]>([]);
+  const [bgSettings, setBgSettings] = useState<BackgroundSettings>(() => loadBackgroundSettings(session?.userId));
+  const [reminders, setReminders] = useState<BackgroundReminder[]>(() => loadBackgroundReminders(session?.userId));
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission | 'unsupported'>(() =>
+    typeof Notification === 'undefined' ? 'unsupported' : Notification.permission
+  );
+  const [deviceLockState, setDeviceLockState] = useState<DeviceLockState | null>(() => getSavedDeviceLockState());
+  const [unlockPasswordInput, setUnlockPasswordInput] = useState('');
+  const [unlockError, setUnlockError] = useState('');
+  const [activeAlarmRinging, setActiveAlarmRinging] = useState(false);
+  const [sosSmsBanner, setSosSmsBanner] = useState<{ uri: string; phone: string; offlineMinutes: number } | null>(null);
+  const [bubbleDismissed, setBubbleDismissed] = useState(false);
+  const [isPageHidden, setIsPageHidden] = useState(
+    () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  );
+  const seenIncomingReqIdsRef = useRef<Set<string>>(new Set());
+  const lastTelemetrySyncAtRef = useRef<number>(0);
+  const sessionRef = useRef<SaraSession | null>(session);
+  const bgSettingsRef = useRef<BackgroundSettings>(bgSettings);
+  const appearOnMapRef = useRef<boolean>(appearOnMap);
+  const ghostModeRef = useRef<boolean>(ghostMode);
+  const myCoordsRef = useRef(myCoords);
+  const devicesRef = useRef<SaraDeviceRecord[]>(devices);
+  const remindersRef = useRef<BackgroundReminder[]>(reminders);
+  const incomingPendingRef = useRef<LocationRequestItem[]>(incomingPending);
+  sessionRef.current = session;
+  bgSettingsRef.current = bgSettings;
+  appearOnMapRef.current = appearOnMap;
+  ghostModeRef.current = ghostMode;
+  myCoordsRef.current = myCoords;
+  devicesRef.current = devices;
+  remindersRef.current = reminders;
+  incomingPendingRef.current = incomingPending;
 
   const isOwner = Boolean(session?.isOwner);
   const effectiveStorageUid = session && !session.isGuest ? session.userId : null;
@@ -694,9 +814,25 @@ export default function App() {
       stopSaraSpeech();
       stopVoiceReading();
 
+      await hideFromRadarImmediately(session);
+      await markCurrentDeviceOfflineOnLogout(session);
+      setBackgroundActiveLifecycleFlag(false);
+      stopBackgroundWorkerLoop();
+      void releaseScreenWakeLock();
+      stopSilentAudioKeepAlive();
+      void syncPersistentBackgroundNotification(false);
+      stopLoudDeviceAlarmLoop();
+
       await logoutCurrentSession(session);
       hydratedUidRef.current = null;
       syncedUpdatedAtRef.current = {};
+      setAppearOnMap(false);
+      setGhostMode(false);
+      setIncomingPending([]);
+      setOutgoingGrants([]);
+      setSharedPeers([]);
+      setDevices([]);
+      setActiveBottomTab('assistente');
       setShowAdminModal(false);
       setShowProjectsModal(false);
       setShowSettingsModal(false);
@@ -751,6 +887,15 @@ export default function App() {
           : null
       );
 
+      // O mapa começa SEMPRE vazio/DESLIGADO ao iniciar sessão para máxima privacidade
+      setAppearOnMap(false);
+      setGhostMode(false);
+      setSavedRadarVisibilityPref(newSession.userId, false);
+      setBgSettings(loadBackgroundSettings(newSession.userId));
+      setReminders(loadBackgroundReminders(newSession.userId));
+      setBubbleDismissed(false);
+      setActiveBottomTab('assistente');
+
       setSession(newSession);
 
       const greeting = getLoginGreetingSpeech(
@@ -784,6 +929,577 @@ export default function App() {
     },
     [showToast]
   );
+
+  // Handlers de Localização, Radar, Achar Meu Celular e Segundo Plano
+  const handleChangeBottomTab = useCallback(
+    (tab: 'assistente' | 'mapa' | 'perfil', profileSub?: ProfileSubTab) => {
+      if (workspaceModeRef.current !== 'jarvis') {
+        setWorkspaceMode('jarvis');
+        workspaceModeRef.current = 'jarvis';
+      }
+      if (profileSub) {
+        setProfileSubTab(profileSub);
+      }
+      setActiveBottomTab(tab);
+    },
+    []
+  );
+
+  const handleUpdateMyCoords = useCallback(
+    (coords: { lat: number; lng: number; accuracyM?: number | null }) => {
+      setMyCoords(coords);
+      myCoordsRef.current = coords;
+    },
+    []
+  );
+
+  const handleToggleAppearOnMap = useCallback(async () => {
+    const activeSess = sessionRef.current;
+    if (!activeSess || activeSess.isGuest) {
+      showToast('Entra na tua conta para aparecer no mapa.');
+      return;
+    }
+    const next = !appearOnMapRef.current;
+    setAppearOnMap(next);
+    appearOnMapRef.current = next;
+    setSavedRadarVisibilityPref(activeSess.userId, next);
+
+    if (!next) {
+      setGhostMode(false);
+      ghostModeRef.current = false;
+      await hideFromRadarImmediately(activeSess);
+      showToast('Aparecer no Mapa: DESLIGADO. Já não estás visível.');
+      return;
+    }
+
+    setGhostMode(false);
+    ghostModeRef.current = false;
+    const coords = await requestCurrentCoordinates();
+    if (coords) {
+      handleUpdateMyCoords(coords);
+      await publishCurrentRadarPresence({
+        session: activeSess,
+        visible: true,
+        ghostMode: false,
+        coords,
+      });
+      showToast('Aparecer no Mapa: LIGADO (visível apenas mediante pedido aceite).');
+    } else {
+      await publishCurrentRadarPresence({
+        session: activeSess,
+        visible: true,
+        ghostMode: false,
+        coords: myCoordsRef.current,
+      });
+      showToast('Aparecer no Mapa ligado — ativa a localização do aparelho.');
+    }
+  }, [handleUpdateMyCoords, showToast]);
+
+  const handleActivateGhostMode = useCallback(async () => {
+    const activeSess = sessionRef.current;
+    if (!activeSess || activeSess.isGuest) return;
+    setGhostMode(true);
+    ghostModeRef.current = true;
+    setAppearOnMap(false);
+    appearOnMapRef.current = false;
+    setSavedRadarVisibilityPref(activeSess.userId, false);
+    await hideFromRadarImmediately(activeSess);
+    showToast('Modo Fantasma ativo — desapareceste imediatamente.');
+  }, [showToast]);
+
+  const handleStopSharingAll = useCallback(async () => {
+    const activeSess = sessionRef.current;
+    if (!activeSess || activeSess.isGuest) return;
+    setAppearOnMap(false);
+    appearOnMapRef.current = false;
+    setSavedRadarVisibilityPref(activeSess.userId, false);
+    await stopAllOutgoingShares(activeSess);
+    showToast('Todas as partilhas de localização foram paradas.');
+  }, [showToast]);
+
+  const handleRefreshDeviceNow = useCallback(async () => {
+    const activeSess = sessionRef.current;
+    if (!activeSess || activeSess.isGuest) return;
+    const coords = await requestCurrentCoordinates();
+    if (coords) {
+      handleUpdateMyCoords(coords);
+    }
+    const bg = bgSettingsRef.current;
+    await syncCurrentDeviceTelemetry({
+      session: activeSess,
+      findPhoneEnabled: bg.findPhoneEnabled,
+      lowBatteryAutoLocate: bg.lowBatteryAutoLocate,
+      sosSmsEnabled: bg.sosSmsEnabled,
+      sosPhoneNumber: bg.sosPhoneNumber,
+      includeGpsLocation: true,
+    });
+    lastTelemetrySyncAtRef.current = Date.now();
+    showToast('Posição e bateria do aparelho atualizadas.');
+  }, [handleUpdateMyCoords, showToast]);
+
+  const handleUpdateBgSettings = useCallback((patch: Partial<BackgroundSettings>) => {
+    const activeSess = sessionRef.current;
+    setBgSettings((prev) => {
+      const next = { ...prev, ...patch };
+      bgSettingsRef.current = next;
+      saveBackgroundSettings(activeSess?.userId, next);
+      if ('findPhoneEnabled' in patch && activeSess && !activeSess.isGuest) {
+        void syncCurrentDeviceTelemetry({
+          session: activeSess,
+          findPhoneEnabled: next.findPhoneEnabled,
+          lowBatteryAutoLocate: next.lowBatteryAutoLocate,
+          sosSmsEnabled: next.sosSmsEnabled,
+          sosPhoneNumber: next.sosPhoneNumber,
+          includeGpsLocation: false,
+        });
+      }
+      return next;
+    });
+  }, []);
+
+  const handlePermitBackground = useCallback(async () => {
+    const activeSess = sessionRef.current;
+    if (!activeSess || activeSess.isGuest) {
+      showToast('Cria ou entra numa conta para usar Segundo Plano.');
+      return;
+    }
+    const perm = await requestNotificationPermissionIfNeeded();
+    setNotificationPermission(perm);
+
+    const coords = await requestCurrentCoordinates();
+    if (coords) handleUpdateMyCoords(coords);
+
+    handleUpdateBgSettings({
+      backgroundAllowed: true,
+      persistentNotification: true,
+    });
+    setBackgroundActiveLifecycleFlag(true);
+    setBubbleDismissed(false);
+
+    await requestScreenWakeLock();
+    startSilentAudioKeepAlive();
+    await syncPersistentBackgroundNotification(true);
+    if (bgSettingsRef.current.continuousVoiceBg && !shouldKeepListeningRef.current) {
+      startHandsFreeMicRef.current?.();
+    }
+    showToast('Segundo Plano ativado! A SARA continua ativa.');
+  }, [handleUpdateBgSettings, handleUpdateMyCoords, showToast]);
+
+  const handleStopBackground = useCallback(async () => {
+    handleUpdateBgSettings({
+      backgroundAllowed: false,
+    });
+    setBackgroundActiveLifecycleFlag(false);
+    stopBackgroundWorkerLoop();
+    await releaseScreenWakeLock();
+    stopSilentAudioKeepAlive();
+    await syncPersistentBackgroundNotification(false);
+    showToast('Segundo Plano parado imediatamente.');
+  }, [handleUpdateBgSettings, showToast]);
+
+  const handleDeleteReminder = useCallback(
+    (id: string) => {
+      const activeSess = sessionRef.current;
+      setReminders((prev) => {
+        const next = prev.filter((r) => r.id !== id);
+        saveBackgroundReminders(activeSess?.userId, next);
+        return next;
+      });
+      showToast('Lembrete removido.');
+    },
+    [showToast]
+  );
+
+  const handleScheduleBackgroundReminder = useCallback(
+    (text: string): { handled: boolean; reply?: string } => {
+      const activeSess = sessionRef.current;
+      const parsed = parseBackgroundReminderInput(text);
+      if (!parsed) return { handled: false };
+      if (!activeSess || activeSess.isGuest) {
+        return {
+          handled: true,
+          reply: 'Entra numa conta para guardar lembretes em segundo plano.',
+        };
+      }
+      setReminders((prev) => {
+        const next = [...prev, parsed];
+        saveBackgroundReminders(activeSess.userId, next);
+        return next;
+      });
+      void requestNotificationPermissionIfNeeded().then(setNotificationPermission);
+      void syncReminderToServiceWorker(parsed);
+      showToast(`Lembrete agendado para as ${parsed.timeHHmm}`);
+      return {
+        handled: true,
+        reply: `Combinado! Lembrete em segundo plano marcado para as ${parsed.timeHHmm}: "${parsed.title}".`,
+      };
+    },
+    [showToast]
+  );
+
+  // Avisar se navegador fechou enquanto Segundo Plano estava ativo
+  useEffect(() => {
+    const closedMsg = consumeBrowserClosedBackgroundNotice();
+    if (closedMsg) {
+      showToast(closedMsg);
+      void showSaraSystemNotification({
+        title: 'SARA Segundo Plano',
+        body: closedMsg,
+        tag: 'sara-closed-notice',
+      });
+    }
+  }, [showToast]);
+
+  // Marcar encerramento se o navegador fechar com Segundo Plano ligado + visibilidade para mini-janela/bolha
+  useEffect(() => {
+    const handleVisibility = () => {
+      const hidden = document.visibilityState === 'hidden';
+      setIsPageHidden(hidden);
+      if (!hidden && bgSettingsRef.current.backgroundAllowed) {
+        void requestScreenWakeLock();
+      }
+    };
+    const handleBlur = () => setIsPageHidden(true);
+    const handleFocus = () => setIsPageHidden(false);
+    const handleUnload = () => {
+      const sess = sessionRef.current;
+      if (sess && !sess.isGuest && bgSettingsRef.current.backgroundAllowed) {
+        markBrowserClosingWhileBackgroundActive();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('blur', handleBlur);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
+    };
+  }, []);
+
+  // Escutar cliques em botões de Notificação do Service Worker (Aceitar 30min/1h/Recusar ou Voltar ao chat)
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const onSwMessage = (ev: MessageEvent) => {
+      const msg = ev.data;
+      if (!msg || msg.type !== 'SARA_NOTIFICATION_CLICK') return;
+      const activeSess = sessionRef.current;
+      if (msg.action === 'return_to_chat' || msg.tag === 'sara-persistent-bg') {
+        setWorkspaceMode('jarvis');
+        setActiveBottomTab('assistente');
+        return;
+      }
+      const reqId = msg.data?.requestId as string | undefined;
+      const targetReq = reqId ? incomingPendingRef.current.find((r) => r.id === reqId) : undefined;
+      if (!targetReq || !activeSess || activeSess.isGuest) return;
+      if (msg.action === 'accept_30m') {
+        void respondToLocationRequest(targetReq, '30m').then(async () => {
+          const coords = await requestCurrentCoordinates();
+          await publishCurrentRadarPresence({
+            session: activeSess,
+            visible: true,
+            ghostMode: false,
+            coords: coords || myCoordsRef.current,
+          });
+          showToast('Localização partilhada por 30 minutos.');
+        });
+      } else if (msg.action === 'accept_1h') {
+        void respondToLocationRequest(targetReq, '1h').then(async () => {
+          const coords = await requestCurrentCoordinates();
+          await publishCurrentRadarPresence({
+            session: activeSess,
+            visible: true,
+            ghostMode: false,
+            coords: coords || myCoordsRef.current,
+          });
+          showToast('Localização partilhada por 1 hora.');
+        });
+      } else if (msg.action === 'decline') {
+        void respondToLocationRequest(targetReq, 'decline').then(() => {
+          showToast('Pedido de localização recusado.');
+        });
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onSwMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onSwMessage);
+  }, [showToast]);
+
+  // Atalho global PC: CTRL + ESPAÇO acorda a SARA e começa a ouvir
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!sessionRef.current) return;
+      if (e.ctrlKey && e.code === 'Space') {
+        e.preventDefault();
+        isCallModeRef.current = false;
+        isSaraSilencedRef.current = false;
+        setSaraCallMode(false);
+        setSaraSilenced(false);
+        setIsCallModeState(false);
+        setIsSaraSilencedState(false);
+        setBubbleDismissed(false);
+        if (!shouldKeepListeningRef.current) {
+          startHandsFreeMicRef.current?.();
+        }
+        showToast('SARA acordada (CTRL + ESPAÇO) — estou a ouvir!');
+        speakAsSara('Estou a ouvir.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showToast]);
+
+  // Subscrições em tempo real de Radar (pedidos + localizações aceites) e Aparelhos (Achar Meu Celular)
+  useEffect(() => {
+    if (!session || session.isGuest) return;
+    const unsubRadar = subscribeRadarRequestsAndPeers({
+      session,
+      myCoords,
+      onUpdate: ({ incomingPending: inc, outgoingGrants: out, sharedPeers: peers }) => {
+        setIncomingPending(inc);
+        setOutgoingGrants(out);
+        setSharedPeers(peers);
+
+        // Notificar novos pedidos recebidos
+        for (const req of inc) {
+          if (!seenIncomingReqIdsRef.current.has(req.id)) {
+            seenIncomingReqIdsRef.current.add(req.id);
+            showToast(`${req.fromCallName} (${req.fromSaraId}) pediu a tua localização!`);
+            void postMessageToServiceWorker({
+              type: 'SARA_LOC_REQUEST_NOTIFY',
+              requestId: req.id,
+              fromName: req.fromCallName,
+              fromSaraId: req.fromSaraId,
+            });
+          }
+        }
+      },
+    });
+
+    const unsubDevices = subscribeAccountDevices(session, (devList) => {
+      setDevices(devList);
+      devicesRef.current = devList;
+      const myDev = devList.find((d) => d.deviceCode === session.deviceCode);
+      if (myDev?.pendingCommand && session.deviceCode) {
+        const cmd = myDev.pendingCommand;
+        if (cmd.type === 'ring') {
+          setActiveAlarmRinging(true);
+          startLoudDeviceAlarmLoop();
+          showToast('Alarme remoto Achar Meu Celular ativado!');
+          speakAsSara('Atenção! Alarme de localização Achar Meu Celular ativado.', true, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          void acknowledgeAndClearPendingCommand(session.userId, session.deviceCode);
+        } else if (cmd.type === 'lock') {
+          const nextLock: DeviceLockState = {
+            locked: true,
+            message: cmd.message || 'Aparelho perdido. Por favor devolva.',
+            contactPhone: cmd.contactPhone || '',
+            lockedAt: new Date().toISOString(),
+          };
+          setSavedDeviceLockState(nextLock);
+          setDeviceLockState(nextLock);
+          void acknowledgeAndClearPendingCommand(session.userId, session.deviceCode);
+        } else if (cmd.type === 'wipe') {
+          void acknowledgeAndClearPendingCommand(session.userId, session.deviceCode).finally(() => {
+            executeRemoteDeviceWipeLocal(session.userId);
+            void handleLogout('Os dados locais deste aparelho foram apagados remotamente.');
+          });
+        }
+      }
+    });
+
+    return () => {
+      unsubRadar();
+      unsubDevices();
+    };
+  }, [session, myCoords, showToast, handleLogout]);
+
+  // Telemetria inicial + Bateria Fraca (< 10%) + Ciclo de 5 minutos + Lembretes em Segundo Plano + SMS 1h offline
+  useEffect(() => {
+    if (!session || session.isGuest) return;
+
+    const syncOnce = async () => {
+      const coords = await requestCurrentCoordinates();
+      if (coords) handleUpdateMyCoords(coords);
+      const bg = bgSettingsRef.current;
+      await syncCurrentDeviceTelemetry({
+        session,
+        findPhoneEnabled: bg.findPhoneEnabled,
+        lowBatteryAutoLocate: bg.lowBatteryAutoLocate,
+        sosSmsEnabled: bg.sosSmsEnabled,
+        sosPhoneNumber: bg.sosPhoneNumber,
+        includeGpsLocation: true,
+      });
+      if (appearOnMapRef.current && !ghostModeRef.current) {
+        await publishCurrentRadarPresence({
+          session,
+          visible: true,
+          ghostMode: false,
+          coords: coords || myCoordsRef.current,
+        });
+      }
+      lastTelemetrySyncAtRef.current = Date.now();
+    };
+
+    void syncOnce();
+
+    // Bateria abaixo de 10% envia última localização imediatamente
+    let batteryObj: any = null;
+    const onBatteryChange = () => {
+      if (!batteryObj || !bgSettingsRef.current.lowBatteryAutoLocate) return;
+      const pct = Math.round((batteryObj.level || 1) * 100);
+      if (pct > 0 && pct < 10) {
+        void requestCurrentCoordinates().then((coords) => {
+          if (coords) handleUpdateMyCoords(coords);
+          const bg = bgSettingsRef.current;
+          void syncCurrentDeviceTelemetry({
+            session,
+            findPhoneEnabled: true,
+            lowBatteryAutoLocate: bg.lowBatteryAutoLocate,
+            sosSmsEnabled: bg.sosSmsEnabled,
+            sosPhoneNumber: bg.sosPhoneNumber,
+            includeGpsLocation: true,
+          });
+          showToast(`Bateria a ${pct}% — última localização enviada automaticamente.`);
+        });
+      }
+    };
+    const navAny = navigator as any;
+    if (typeof navAny.getBattery === 'function') {
+      navAny
+        .getBattery()
+        .then((bat: any) => {
+          batteryObj = bat;
+          bat?.addEventListener?.('levelchange', onBatteryChange);
+        })
+        .catch(() => {});
+    }
+
+    const runBackgroundOrPeriodicTick = () => {
+      const activeSess = sessionRef.current;
+      if (!activeSess || activeSess.isGuest) return;
+
+      // 1. Lembretes em Segundo Plano devidos
+      const now = Date.now();
+      const dueList = remindersRef.current.filter((r) => !r.fired && r.targetMs <= now);
+      if (dueList.length > 0) {
+        const updated = remindersRef.current.map((r) =>
+          !r.fired && r.targetMs <= now ? { ...r, fired: true } : r
+        );
+        remindersRef.current = updated;
+        setReminders(updated);
+        saveBackgroundReminders(activeSess.userId, updated);
+        for (const rem of dueList) {
+          playReminderBellChime();
+          showToast(`Lembrete SARA: ${rem.title}`);
+          void showSaraSystemNotification({
+            title: 'Lembrete SARA',
+            body: rem.title,
+            tag: `sara-rem-${rem.id}`,
+          });
+          speakAsSara(`Lembrete: ${rem.title}`, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        }
+      }
+
+      // 2. Enviar localização de 5 em 5 minutos se GPS e internet ativos
+      const elapsed = now - lastTelemetrySyncAtRef.current;
+      if (elapsed >= 5 * 60 * 1000 && navigator.onLine) {
+        lastTelemetrySyncAtRef.current = now;
+        const bg = bgSettingsRef.current;
+        void requestCurrentCoordinates().then((coords) => {
+          if (coords) handleUpdateMyCoords(coords);
+          void syncCurrentDeviceTelemetry({
+            session: activeSess,
+            findPhoneEnabled: bg.findPhoneEnabled,
+            lowBatteryAutoLocate: bg.lowBatteryAutoLocate,
+            sosSmsEnabled: bg.sosSmsEnabled,
+            sosPhoneNumber: bg.sosPhoneNumber,
+            includeGpsLocation: true,
+          });
+          if (appearOnMapRef.current && !ghostModeRef.current) {
+            void publishCurrentRadarPresence({
+              session: activeSess,
+              visible: true,
+              ghostMode: false,
+              coords: coords || myCoordsRef.current,
+            });
+          }
+        });
+      }
+
+      // 3. Verificar SMS de Socorro se aparelho ficar 1 hora sem internet
+      const bg = bgSettingsRef.current;
+      const sosEval = evaluateOfflineSosCondition({
+        isOnline: typeof navigator !== 'undefined' ? navigator.onLine : true,
+        sosSmsEnabled: bg.sosSmsEnabled,
+        sosPhoneNumber: bg.sosPhoneNumber,
+        nowMs: now,
+      });
+      if (sosEval.shouldTrigger) {
+        const myDev = devicesRef.current.find((d) => d.deviceCode === activeSess.deviceCode);
+        const smsUri = buildEmergencySmsUri({
+          phoneNumber: bg.sosPhoneNumber,
+          callName: activeSess.callName,
+          deviceCode: activeSess.deviceCode || 'CEL-0000',
+          lat: myDev?.lastLat ?? myCoordsRef.current?.lat ?? null,
+          lng: myDev?.lastLng ?? myCoordsRef.current?.lng ?? null,
+          lastUpdatedAt: myDev?.lastUpdatedAt || new Date(now).toISOString(),
+        });
+        setSosSmsBanner({
+          uri: smsUri,
+          phone: bg.sosPhoneNumber,
+          offlineMinutes: Math.max(60, Math.round(sosEval.offlineDurationMs / 60000)),
+        });
+        void showSaraSystemNotification({
+          title: 'SMS de Socorro SARA',
+          body: `Sem internet há 1 hora. Toca para enviar SMS com a última localização para ${bg.sosPhoneNumber}.`,
+          tag: `sara-sos-${activeSess.deviceCode || 'dev'}`,
+        });
+      }
+    };
+
+    setBackgroundActiveLifecycleFlag(bgSettings.backgroundAllowed);
+    if (bgSettings.backgroundAllowed) {
+      void syncPersistentBackgroundNotification(bgSettings.persistentNotification);
+      void requestScreenWakeLock();
+      startSilentAudioKeepAlive();
+      startBackgroundWorkerLoop(runBackgroundOrPeriodicTick);
+      if (bgSettings.continuousVoiceBg && !shouldKeepListeningRef.current) {
+        startHandsFreeMicRef.current?.();
+      }
+    } else {
+      stopBackgroundWorkerLoop();
+      void releaseScreenWakeLock();
+      stopSilentAudioKeepAlive();
+      void syncPersistentBackgroundNotification(false);
+    }
+
+    const fallbackInterval = window.setInterval(runBackgroundOrPeriodicTick, 15000);
+
+    return () => {
+      window.clearInterval(fallbackInterval);
+      stopBackgroundWorkerLoop();
+      batteryObj?.removeEventListener?.('levelchange', onBatteryChange);
+    };
+  }, [
+    session,
+    bgSettings.backgroundAllowed,
+    bgSettings.persistentNotification,
+    bgSettings.continuousVoiceBg,
+    handleUpdateMyCoords,
+    showToast,
+  ]);
 
   // Saudação falada automática ao entrar (também na reabertura de sessão já guardada após 1.º gesto)
   useEffect(() => {
@@ -2594,6 +3310,94 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      if (cmd.type === 'open_radar_map') {
+        handleChangeBottomTab('mapa');
+        showToast('Mapa / Radar aberto');
+        speakAsSara('Abri o mapa radar.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'open_profile_devices') {
+        handleChangeBottomTab('perfil', 'perfil');
+        showToast('Perfil e Meus Aparelhos aberto');
+        speakAsSara('Abri o teu perfil e a lista de aparelhos.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'open_find_phone') {
+        handleChangeBottomTab('perfil', 'achar_celular');
+        showToast('Achar Meu Celular aberto');
+        speakAsSara('Abri o rastreamento Achar Meu Celular.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'open_background_settings') {
+        handleChangeBottomTab('perfil', 'segundo_plano');
+        showToast('Definições de Segundo Plano abertas');
+        speakAsSara('Abri as definições de segundo plano.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'stop_location_sharing') {
+        await handleStopSharingAll();
+        speakAsSara('Localização desligada. Já não apareces no mapa.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'activate_ghost_mode') {
+        await handleActivateGhostMode();
+        speakAsSara('Modo fantasma ligado. Desapareceste do mapa.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'show_on_map_on') {
+        if (!appearOnMapRef.current) {
+          await handleToggleAppearOnMap();
+        }
+        handleChangeBottomTab('mapa');
+        speakAsSara('Aparecer no mapa ligado.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'enable_background_mode') {
+        await handlePermitBackground();
+        speakAsSara('Segundo plano ativado.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'stop_background_mode') {
+        await handleStopBackground();
+        speakAsSara('Segundo plano parado.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
       if (cmd.type === 'open_admin') {
         if (isOwner) {
           setShowAdminModal(true);
@@ -3910,6 +4714,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       lastCompletedReport,
       messages.length,
       liveBuild,
+      handleChangeBottomTab,
+      handleStopSharingAll,
+      handleActivateGhostMode,
+      handleToggleAppearOnMap,
+      handlePermitBackground,
+      handleStopBackground,
     ]
   );
 
@@ -4985,6 +5795,25 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           return;
         }
 
+        // Comando de despertar "Ei SARA" configurável nas definições de Segundo Plano
+        if (bgSettingsRef.current.eiSaraEnabled && isEiSaraWakePhrase(transcript)) {
+          setBubbleDismissed(false);
+          if (isSaraSilencedRef.current && !isCallModeRef.current) {
+            isSaraSilencedRef.current = false;
+            setSaraSilenced(false);
+            setIsSaraSilencedState(false);
+          }
+          const stripped = transcript.replace(/^(ei|hey|eh|oi)\s+sara[\s,.:!?-]*/i, '').trim();
+          if (!stripped) {
+            showToast('Ei SARA ativo — estou a ouvir!');
+            speakAsSara(`Estou a ouvir${callerShortVoc}.`, voiceEnabledRef.current, {
+              level: 'short',
+              forceSpeak: true,
+            });
+            return;
+          }
+        }
+
         // Bloqueio extra anti-eco: nunca despacha prompts normais enquanto a Sara fala ou logo após eco dos altifalantes
         if (isSaraSpeakingRef.current || isSaraActivelySpeaking() || isProbableSaraEcho(transcript)) {
           return;
@@ -5346,6 +6175,29 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           externalPanelRef={jarvisPanelRef}
           externalRepeatRef={jarvisRepeatRef}
           externalContinueRef={jarvisContinueRef}
+          activeBottomTab={activeBottomTab}
+          profileSubTab={profileSubTab}
+          onChangeBottomTab={handleChangeBottomTab}
+          appearOnMap={appearOnMap}
+          ghostMode={ghostMode}
+          myCoords={myCoords}
+          incomingPending={incomingPending}
+          outgoingGrants={outgoingGrants}
+          sharedPeers={sharedPeers}
+          devices={devices}
+          bgSettings={bgSettings}
+          reminders={reminders}
+          notificationPermission={notificationPermission}
+          onToggleAppearOnMap={handleToggleAppearOnMap}
+          onActivateGhostMode={handleActivateGhostMode}
+          onStopSharingAll={handleStopSharingAll}
+          onUpdateMyCoords={handleUpdateMyCoords}
+          onUpdateBgSettings={handleUpdateBgSettings}
+          onPermitBackground={handlePermitBackground}
+          onStopBackground={handleStopBackground}
+          onRefreshDeviceNow={handleRefreshDeviceNow}
+          onDeleteReminder={handleDeleteReminder}
+          onScheduleBackgroundReminder={handleScheduleBackgroundReminder}
         />
       ) : (
         <>
@@ -5690,6 +6542,216 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           </button>
         </div>
       )}
+
+      {/* Notificação em tempo real de Pedido de Localização recebido */}
+      {session && !session.isGuest && incomingPending.length > 0 && activeBottomTab !== 'mapa' && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-[78] w-[94vw] max-w-md p-3 rounded-2xl bg-[#071126]/95 border border-cyan-400/60 shadow-[0_12px_36px_rgba(0,0,0,0.75)] backdrop-blur-md space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-cyan-200">
+              <MapPin className="w-4 h-4 text-[#00E5FF]" />
+              <span>
+                {incomingPending[0].fromCallName} ({incomingPending[0].fromSaraId}) pediu a tua localização
+              </span>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            <button
+              type="button"
+              onClick={async () => {
+                await respondToLocationRequest(incomingPending[0], '30m');
+                const coords = await requestCurrentCoordinates();
+                if (coords) handleUpdateMyCoords(coords);
+                await publishCurrentRadarPresence({
+                  session,
+                  visible: true,
+                  ghostMode: false,
+                  coords: coords || myCoords,
+                });
+                showToast('Localização partilhada por 30 minutos.');
+              }}
+              className="py-1.5 rounded-xl bg-emerald-500/20 border border-emerald-400/60 text-emerald-200 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Aceitar 30min</span>
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await respondToLocationRequest(incomingPending[0], '1h');
+                const coords = await requestCurrentCoordinates();
+                if (coords) handleUpdateMyCoords(coords);
+                await publishCurrentRadarPresence({
+                  session,
+                  visible: true,
+                  ghostMode: false,
+                  coords: coords || myCoords,
+                });
+                showToast('Localização partilhada por 1 hora.');
+              }}
+              className="py-1.5 rounded-xl bg-cyan-500/20 border border-cyan-400/60 text-cyan-200 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+            >
+              <Check className="w-3.5 h-3.5" />
+              <span>Aceitar 1h</span>
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                await respondToLocationRequest(incomingPending[0], 'decline');
+                showToast('Pedido recusado.');
+              }}
+              className="py-1.5 rounded-xl bg-rose-500/20 border border-rose-400/60 text-rose-200 text-[11px] font-bold flex items-center justify-center gap-1 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+              <span>Recusar</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Banner de SMS de Socorro (1h offline) */}
+      {sosSmsBanner && (
+        <div className="fixed top-28 left-1/2 -translate-x-1/2 z-[79] w-[94vw] max-w-md p-3.5 rounded-2xl bg-[#1A080E]/95 border border-rose-400 shadow-2xl space-y-2">
+          <div className="flex items-start gap-2.5">
+            <MessageSquareWarning className="w-5 h-5 text-rose-300 shrink-0 mt-0.5" />
+            <div className="text-xs text-rose-100">
+              <div className="font-bold">SMS de Socorro pronto ({sosSmsBanner.phone})</div>
+              <div className="text-[11px] text-rose-200/80 mt-0.5">
+                Um aparelho ficou offline há mais de 1 hora. Envia a última posição conhecida agora.
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setSosSmsBanner(null)}
+              className="px-3 py-1.5 rounded-lg border border-slate-600 text-xs text-slate-300 cursor-pointer"
+            >
+              Fechar
+            </button>
+            <a
+              href={sosSmsBanner.uri}
+              onClick={() => setSosSmsBanner(null)}
+              className="px-3 py-1.5 rounded-lg bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5"
+            >
+              <Phone className="w-3.5 h-3.5" />
+              <span>Enviar SMS de Socorro</span>
+            </a>
+          </div>
+        </div>
+      )}
+
+      {/* Alarme Remoto Achar Meu Celular Ativo */}
+      {activeAlarmRinging && (
+        <div className="fixed inset-x-4 top-20 z-[85] max-w-md mx-auto p-4 rounded-2xl bg-rose-600 border-2 border-white text-white shadow-[0_0_50px_rgba(244,63,94,0.85)] flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Volume2 className="w-6 h-6 animate-bounce shrink-0" />
+            <div>
+              <div className="text-sm font-black uppercase tracking-wider">Alarme Achar Meu Celular</div>
+              <div className="text-xs text-rose-100">Acionado remotamente pela tua conta SARA.</div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              stopLoudDeviceAlarmLoop();
+              setActiveAlarmRinging(false);
+            }}
+            className="px-3 py-2 rounded-xl bg-white text-rose-700 font-black text-xs shrink-0 cursor-pointer"
+          >
+            Silenciar
+          </button>
+        </div>
+      )}
+
+      {/* Ecrã de Bloqueio Perdido ("Bloquear com Mensagem") */}
+      {deviceLockState?.locked && (
+        <div className="fixed inset-0 z-[95] bg-[#02050D] flex items-center justify-center p-4">
+          <div className="w-full max-w-md p-6 rounded-3xl bg-[#071124] border border-rose-500/60 shadow-[0_0_50px_rgba(244,63,94,0.3)] space-y-4 text-center">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-rose-500/20 border border-rose-400/60 flex items-center justify-center">
+              <Lock className="w-7 h-7 text-rose-300" />
+            </div>
+            <h2 className="text-lg font-extrabold text-white">Aparelho Bloqueado · SARA</h2>
+            <p className="text-sm text-rose-100 leading-relaxed bg-[#040916] border border-rose-500/25 rounded-2xl p-4">
+              {deviceLockState.message}
+            </p>
+            {deviceLockState.contactPhone && (
+              <div className="text-xs font-mono text-cyan-300">
+                Contacto para devolução: <span className="font-bold text-white">{deviceLockState.contactPhone}</span>
+              </div>
+            )}
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                setUnlockError('');
+                if (!session) return;
+                const ok = await verifySessionAccountPassword(session, unlockPasswordInput);
+                if (!ok && !session.isGuest) {
+                  setUnlockError('Palavra-passe incorreta.');
+                  return;
+                }
+                setSavedDeviceLockState(null);
+                setDeviceLockState(null);
+                setUnlockPasswordInput('');
+                showToast('Aparelho desbloqueado.');
+              }}
+              className="space-y-2 pt-2 text-left"
+            >
+              <label className="text-[11px] font-mono uppercase text-slate-400 block">
+                Palavra-passe da conta para desbloquear
+              </label>
+              <input
+                type="password"
+                value={unlockPasswordInput}
+                onChange={(e) => setUnlockPasswordInput(e.target.value)}
+                placeholder="Insere a palavra-passe..."
+                className="w-full px-3 py-2.5 rounded-xl bg-[#040916] border border-cyan-500/30 text-sm text-white focus:outline-none focus:border-cyan-400"
+              />
+              {unlockError && <p className="text-xs text-rose-300">{unlockError}</p>}
+              <button
+                type="submit"
+                className="w-full py-2.5 rounded-xl bg-cyan-500/25 border border-cyan-400/60 text-cyan-100 text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
+              >
+                <Unlock className="w-4 h-4" />
+                <span>Desbloquear Aparelho</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Bolha Flutuante Mobile / Mini-Janela Compacta PC (CTRL+ESPAÇO) */}
+      <FloatingSaraBubble
+        visible={Boolean(
+          session &&
+            !session.isGuest &&
+            bgSettings.backgroundAllowed &&
+            !bubbleDismissed &&
+            (bgSettings.floatingBubbleEnabled || (bgSettings.pcMiniWindowEnabled && isPageHidden))
+        )}
+        isPc={typeof window !== 'undefined' && window.innerWidth >= 1024}
+        isListening={isListening}
+        isSaraSpeaking={isSaraSpeaking}
+        backgroundActive={bgSettings.backgroundAllowed}
+        latestReply={
+          [...messages].reverse().find((m) => m.sender === 'sara')?.text || ''
+        }
+        onToggleMic={handleToggleMic}
+        onSilenceSara={handleForceSilenceSara}
+        onSendPrompt={(text) => {
+          if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
+            void jarvisPromptRef.current(text, 'text');
+          } else {
+            void handleSendMessageRef.current?.(text, undefined, undefined, 'text');
+          }
+        }}
+        onStopBackground={() => void handleStopBackground()}
+        onDismissBubble={() => setBubbleDismissed(true)}
+        onRestoreFullWindow={() => {
+          setWorkspaceMode('jarvis');
+          setActiveBottomTab('assistente');
+          window.focus?.();
+        }}
+      />
     </div>
   );
 }

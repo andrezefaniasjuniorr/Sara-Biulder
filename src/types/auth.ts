@@ -17,6 +17,7 @@ export interface SaraUserIdentityPayload {
 
 export interface SaraUserAccount {
   uid: string;
+  saraId?: string; // Formato único SARA-XXXX
   fullName: string;
   callName: string;
   email: string;
@@ -34,6 +35,8 @@ export interface SaraUserAccount {
 export interface SaraSession {
   sessionId: string;
   userId: string;
+  saraId?: string; // Formato único SARA-XXXX
+  deviceCode?: string; // Formato único CEL-XXXX por aparelho
   fullName: string;
   callName: string;
   email: string;

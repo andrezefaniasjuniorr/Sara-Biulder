@@ -38,6 +38,60 @@ const SESSIONS_KEY = 'sara_sessions_v1';
 const STATS_KEY = 'sara_activity_stats_v1';
 const ALERTS_KEY = 'sara_admin_alerts_v1';
 const ACTIVE_SESSION_KEY = 'sara_active_session_v1';
+const DEVICE_CODE_KEY = 'sara_device_code_v1';
+
+const SAFE_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+
+function generateRandomFourChars(): string {
+  const bytes = new Uint8Array(4);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < 4; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  return Array.from(bytes)
+    .map((b) => SAFE_ID_CHARS[b % SAFE_ID_CHARS.length])
+    .join('');
+}
+
+export function generateUniqueSaraId(existingIds?: Iterable<string>): string {
+  const taken = new Set<string>();
+  if (existingIds) {
+    for (const id of existingIds) {
+      if (id) taken.add(id.toUpperCase());
+    }
+  }
+  for (const acc of safeReadArray<SaraUserAccount>(ACCOUNTS_KEY)) {
+    if (acc.saraId) taken.add(acc.saraId.toUpperCase());
+  }
+  for (let i = 0; i < 64; i++) {
+    const candidate = `SARA-${generateRandomFourChars()}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+  return `SARA-${generateRandomFourChars()}`;
+}
+
+export function getOrCreateDeviceCode(): string {
+  try {
+    const existing = localStorage.getItem(DEVICE_CODE_KEY);
+    if (existing && /^CEL-[A-Z0-9]{4}$/.test(existing)) {
+      return existing;
+    }
+    const created = `CEL-${generateRandomFourChars()}`;
+    localStorage.setItem(DEVICE_CODE_KEY, created);
+    return created;
+  } catch {
+    return `CEL-${generateRandomFourChars()}`;
+  }
+}
+
+export function clearLocalDeviceRegistryCache(): void {
+  try {
+    localStorage.removeItem(DEVICE_CODE_KEY);
+  } catch {
+    // ignore
+  }
+}
 
 const ACTIVITY_LABELS: Record<ActivityCategory, string> = {
   builder: 'A usar Estúdio SARA',
@@ -222,9 +276,50 @@ export function getSavedActiveSession(): SaraSession | null {
     const parsed = JSON.parse(raw) as SaraSession;
     if (!parsed?.userId || !parsed?.sessionId) return null;
     if (parsed.isGuest) return null; // Convidado nunca sobrevive fora da sessão efémera
+
+    let changed = false;
+    if (!parsed.saraId || !/^SARA-[A-Z0-9]{4}$/.test(parsed.saraId)) {
+      const localAccounts = safeReadArray<SaraUserAccount>(ACCOUNTS_KEY);
+      const matched = localAccounts.find(
+        (a) => a.uid === parsed.userId || normalizeEmail(a.email) === normalizeEmail(parsed.email)
+      );
+      const assigned = matched?.saraId || generateUniqueSaraId();
+      parsed.saraId = assigned;
+      if (matched && matched.saraId !== assigned) {
+        const updatedAcc = { ...matched, saraId: assigned };
+        upsertAccountLocal(updatedAcc);
+        void saveAccountCloud(updatedAcc);
+      }
+      changed = true;
+    }
+    const deviceCode = getOrCreateDeviceCode();
+    if (parsed.deviceCode !== deviceCode) {
+      parsed.deviceCode = deviceCode;
+      changed = true;
+    }
+    if (changed) {
+      persistActiveSession(parsed);
+    }
     return parsed;
   } catch {
     return null;
+  }
+}
+
+export async function verifySessionAccountPassword(
+  session: SaraSession | null,
+  password: string
+): Promise<boolean> {
+  if (!session || session.isGuest || !password) return false;
+  const account = await resolveAccountByEmail(session.email);
+  if (!account) return false;
+  const matched = await verifyPasswordPBKDF2(password, account.passwordSalt, account.passwordHash);
+  if (matched) return true;
+  try {
+    await loginEmail(session.email, password);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -341,8 +436,11 @@ export async function registerAccount(input: {
   }
 
   const nowIso = new Date().toISOString();
+  const saraId = generateUniqueSaraId();
+  const deviceCode = getOrCreateDeviceCode();
   const account: SaraUserAccount = {
     uid,
+    saraId,
     fullName,
     callName: isOwner ? callName || 'Eletro-Júnior' : callName,
     email,
@@ -390,6 +488,8 @@ export async function registerAccount(input: {
   const session: SaraSession = {
     sessionId: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     userId: account.uid,
+    saraId,
+    deviceCode,
     fullName: account.fullName,
     callName: account.callName,
     email: account.email,
@@ -434,6 +534,7 @@ export async function loginAccount(input: {
         const nowIso = new Date().toISOString();
         account = {
           uid: fbUser.uid,
+          saraId: generateUniqueSaraId(),
           fullName: fbUser.displayName || (isOwner ? 'Eletro-Júnior' : loginNameInput || 'Utilizador'),
           callName:
             loginNameInput || fbUser.displayName || (isOwner ? 'Eletro-Júnior' : email.split('@')[0]),
@@ -538,8 +639,14 @@ export async function loginAccount(input: {
 
   const isOwner = normalizeEmail(account.email) === OWNER_EMAIL;
   const nowIso = new Date().toISOString();
+  const saraId =
+    account.saraId && /^SARA-[A-Z0-9]{4}$/.test(account.saraId)
+      ? account.saraId
+      : generateUniqueSaraId();
+  const deviceCode = getOrCreateDeviceCode();
   const cleanAccount: SaraUserAccount = {
     ...account,
+    saraId,
     role: isOwner ? 'owner' : 'user',
     failedAttempts: 0,
     lockedUntilMs: 0,
@@ -556,6 +663,8 @@ export async function loginAccount(input: {
   const session: SaraSession = {
     sessionId: `sess_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
     userId: cleanAccount.uid,
+    saraId,
+    deviceCode,
     fullName: cleanAccount.fullName,
     callName: effectiveCallName,
     email: cleanAccount.email,

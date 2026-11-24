@@ -130,6 +130,15 @@ export type VoiceCommandAction =
   | { type: 'media_seek'; seconds: number; raw: string }
   | { type: 'media_fullscreen'; enabled: boolean; raw: string }
   | { type: 'ask_media_source_ambiguity'; query?: string; kind: 'music' | 'video'; raw: string }
+  | { type: 'open_radar_map'; raw: string }
+  | { type: 'open_profile_devices'; raw: string }
+  | { type: 'open_find_phone'; raw: string }
+  | { type: 'open_background_settings'; raw: string }
+  | { type: 'stop_location_sharing'; raw: string }
+  | { type: 'activate_ghost_mode'; raw: string }
+  | { type: 'show_on_map_on'; raw: string }
+  | { type: 'enable_background_mode'; raw: string }
+  | { type: 'stop_background_mode'; raw: string }
   | { type: 'prompt'; text: string };
 
 export type VoiceDomainTopic =
@@ -1720,6 +1729,77 @@ export function parseVoiceCommand(
     }
     if (/\b(abre|abrir|mostra|vai\s+para|muda\s+para|ver)\s+(a\s+|o\s+)?voz\b/.test(lower)) {
       return { type: 'open_jarvis_module', moduleTab: 'voz', raw: clean };
+    }
+
+    // Mapa / Radar / Perfil / Meus Aparelhos / Achar Meu Celular / Segundo Plano
+    if (
+      /^(sara[,\s]+)?(abre|abrir|abres|mostra|vai\s+para|entra\s+no|muda\s+para|ver)\s+(o\s+|a\s+)?(mapa|radar|aba\s+do\s+mapa)(\s+da\s+sara)?$/i.test(
+        lower
+      ) ||
+      lower === 'mapa' ||
+      lower === 'radar'
+    ) {
+      return { type: 'open_radar_map', raw: clean };
+    }
+
+    if (
+      /\b(achar\s+(o\s+)?meu\s+celular|encontrar\s+(o\s+)?meu\s+(celular|telemovel|telefone)|onde\s+(esta|ta)\s+(o\s+)?meu\s+(celular|telemovel|telefone)|rastrear\s+(meu\s+)?(celular|telemovel))\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'open_find_phone', raw: clean };
+    }
+
+    if (
+      /\b(abre|abrir|mostra|ver|vai\s+para)\s+(o\s+|os\s+)?(meu\s+perfil|perfil|meus\s+aparelhos|meus\s+dispositivos)\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'open_profile_devices', raw: clean };
+    }
+
+    if (
+      /\b(modo\s+fantasma|ativa(r)?\s+(o\s+)?modo\s+fantasma|fica(r)?\s+invisivel\s+no\s+mapa)\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'activate_ghost_mode', raw: clean };
+    }
+
+    if (
+      /\b(para(r)?\s+de\s+partilhar|desliga(r)?\s+(a\s+)?localizacao|esconde(r)?\s+(a\s+)?minha\s+localizacao|aparecer\s+no\s+mapa\s+desligado|sai(r)?\s+do\s+mapa)\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'stop_location_sharing', raw: clean };
+    }
+
+    if (
+      /\b(aparecer\s+no\s+mapa|liga(r)?\s+(a\s+)?localizacao\s+no\s+mapa|fica(r)?\s+visivel\s+no\s+mapa)\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'show_on_map_on', raw: clean };
+    }
+
+    if (
+      /\b(para(r)?\s+(o\s+)?segundo\s+plano|desativa(r)?\s+(o\s+)?segundo\s+plano|desliga(r)?\s+(o\s+)?segundo\s+plano)\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'stop_background_mode', raw: clean };
+    }
+
+    if (
+      /\b(ativa(r)?|liga(r)?|permiti(r)?)\s+(o\s+)?segundo\s+plano\b/i.test(lower)
+    ) {
+      return { type: 'enable_background_mode', raw: clean };
+    }
+
+    if (
+      /\b(abre|abrir|mostra|ver)\s+(as\s+definicoes\s+do\s+|o\s+)?segundo\s+plano\b/i.test(lower)
+    ) {
+      return { type: 'open_background_settings', raw: clean };
     }
   }
 
