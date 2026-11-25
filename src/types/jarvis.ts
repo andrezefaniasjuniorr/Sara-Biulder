@@ -278,6 +278,9 @@ export interface JarvisConversationEntry {
   text: string;
   timestamp: string;
   stageAttachedTitle?: string;
+  imageUrl?: string;
+  generatedImagePrompt?: string;
+  isGeneratingImage?: boolean;
 }
 
 export type JarvisDomainTopic =

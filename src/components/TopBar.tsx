@@ -23,6 +23,7 @@ import type { AgentMode, FirebaseUserProfile, VoiceLevel } from '../types/builde
 import type { WorkspaceMode } from '../types/jarvis';
 import type { SaraSession } from '../types/auth';
 import { getMaputoNowParts } from '../utils/timeAgendaService';
+import { getUserProfilePhoto, PROFILE_PHOTO_EVENT } from '../services/imageGenService';
 
 interface TopBarProps {
   session: SaraSession;
@@ -101,6 +102,19 @@ export const TopBar: React.FC<TopBarProps> = ({
   const isOwner = Boolean(session?.isOwner);
 
   const [maputoHeaderClock, setMaputoHeaderClock] = useState(() => getMaputoNowParts().shortHeaderText);
+  const [profilePhoto, setProfilePhoto] = useState<string | null>(() =>
+    getUserProfilePhoto(session?.userId)
+  );
+
+  useEffect(() => {
+    setProfilePhoto(getUserProfilePhoto(session?.userId));
+    const onPhotoUpdate = () => {
+      setProfilePhoto(getUserProfilePhoto(session?.userId));
+    };
+    window.addEventListener(PROFILE_PHOTO_EVENT, onPhotoUpdate);
+    return () => window.removeEventListener(PROFILE_PHOTO_EVENT, onPhotoUpdate);
+  }, [session?.userId]);
+
   useEffect(() => {
     const refreshClock = () => setMaputoHeaderClock(getMaputoNowParts().shortHeaderText);
     refreshClock();
@@ -143,7 +157,14 @@ export const TopBar: React.FC<TopBarProps> = ({
           }`}
           title={isJarvis ? 'SARA JARVIS — Assistente IA Completa' : 'Sara — Construtora Inteligente'}
         >
-          <div className="w-full h-full rounded-[10px] bg-[#0A0A0F] flex items-center justify-center">
+          <div className="w-full h-full rounded-[10px] bg-[#0A0A0F] flex items-center justify-center overflow-hidden">
+            {profilePhoto ? (
+              <img
+                src={profilePhoto}
+                alt={session?.fullName || 'Foto de Perfil'}
+                className="w-full h-full object-cover"
+              />
+            ) : (
             <svg
               viewBox="0 0 32 32"
               className="w-5 h-5 sm:w-6 sm:h-6"
@@ -178,6 +199,7 @@ export const TopBar: React.FC<TopBarProps> = ({
                 strokeLinecap="round"
               />
             </svg>
+            )}
           </div>
         </div>
 

@@ -7,6 +7,7 @@ import type {
   LiveShareRecord,
   LocationRequestItem,
   MovementHistoryPoint,
+  RadarPlaceResult,
   RadarPresence,
   RemoteDeviceCommand,
   SaraDeviceRecord,
@@ -393,18 +394,8 @@ export async function reverseGeocodeCoords(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lat, lng }),
     });
-    if (res.status === 429) {
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
-      }
-      return null;
-    }
     if (!res.ok) return null;
-    const data = (await res.json()) as Partial<GeocodedAddressInfo> & { quotaExceeded?: boolean };
-    if (data.quotaExceeded && typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
-      return null;
-    }
+    const data = (await res.json()) as Partial<GeocodedAddressInfo>;
     const info: GeocodedAddressInfo = {
       formattedAddress: data.formattedAddress || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
       street: data.street || '',
@@ -416,6 +407,81 @@ export async function reverseGeocodeCoords(
     };
     reverseGeocodeMemoryCache.set(cacheKey, info);
     return info;
+  } catch {
+    return null;
+  }
+}
+
+export async function searchFreeRadarPlaces(
+  query: string,
+  biasCoords?: { lat: number; lng: number } | null
+): Promise<RadarPlaceResult[]> {
+  const clean = query.trim();
+  if (clean.length < 2) return [];
+  try {
+    const res = await fetch('/api/maps/search-places', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: clean,
+        lat: biasCoords?.lat,
+        lng: biasCoords?.lng,
+      }),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      results?: Array<{
+        id: string;
+        name: string;
+        address?: string;
+        lat: number;
+        lng: number;
+        categoryLabel?: string;
+      }>;
+    };
+    return (data?.results || []).map((item) => ({
+      ...item,
+      distanceMeters: biasCoords
+        ? calcDistanceMeters(biasCoords.lat, biasCoords.lng, item.lat, item.lng)
+        : null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export async function computeFreeRadarRoute(
+  origin: { lat: number; lng: number },
+  destination: { lat: number; lng: number }
+): Promise<{
+  distanceMeters: number;
+  durationSeconds: number;
+  chapaDurationSeconds: number;
+  path: Array<[number, number]>;
+} | null> {
+  try {
+    const res = await fetch('/api/maps/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ origin, destination }),
+    });
+    if (!res.ok) return null;
+    const data = (await res.json()) as {
+      ok?: boolean;
+      distanceMeters?: number;
+      durationSeconds?: number;
+      path?: Array<[number, number]>;
+    };
+    if (!data?.ok || !Array.isArray(data.path) || data.path.length < 2) return null;
+    const distanceMeters = Math.round(Number(data.distanceMeters ?? 0));
+    const durationSeconds = Math.max(60, Math.round(Number(data.durationSeconds ?? 60)));
+    const chapaDurationSeconds = Math.round(durationSeconds * 1.55 + 180);
+    return {
+      distanceMeters,
+      durationSeconds,
+      chapaDurationSeconds,
+      path: data.path,
+    };
   } catch {
     return null;
   }
@@ -1401,7 +1467,7 @@ export function buildEmergencySmsUri(params: {
   const cleanPhone = String(params.phoneNumber || '').replace(/[^\d+]/g, '');
   const coordsText =
     params.lat !== null && params.lng !== null
-      ? `https://maps.google.com/?q=${params.lat},${params.lng}`
+      ? `https://www.openstreetmap.org/?mlat=${params.lat}&mlon=${params.lng}#map=16/${params.lat}/${params.lng}`
       : 'localização indisponível';
   const body = `SOS SARA (${params.callName} - ${params.deviceCode}): Aparelho sem internet há 1h. Última posição (${formatTimeAgoPt(
     params.lastUpdatedAt

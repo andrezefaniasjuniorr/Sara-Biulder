@@ -18,6 +18,7 @@ import {
   MessageSquareWarning,
   Clock,
   RefreshCw,
+  Image as ImageIcon,
 } from 'lucide-react';
 import type { SaraSession } from '../../types/auth';
 import type {
@@ -30,8 +31,15 @@ import {
   issueRemoteDeviceCommand,
   verifyPasswordAndIssueWipeCommand,
 } from '../../services/locationRadarService';
-import { GoogleMapsWrapper } from '../map/GoogleMapsWrapper';
-import { GoogleSaraMapView, type SaraMapMarker } from '../map/GoogleSaraMapView';
+import {
+  getSavedImageCoreKey,
+  getUserProfilePhoto,
+  PROFILE_PHOTO_EVENT,
+  saveImageCoreKey,
+} from '../../services/imageGenService';
+import { FreeSaraMapView, type SaraMapMarker } from '../map/FreeSaraMapView';
+
+const MASKED_KEY = '••••••••';
 
 export type ProfileSubTab = 'perfil' | 'achar_celular' | 'segundo_plano';
 
@@ -84,6 +92,34 @@ export const ProfileAndFindPhonePanel: React.FC<ProfileAndFindPhonePanelProps> =
   const [wipeTargetDevice, setWipeTargetDevice] = useState<SaraDeviceRecord | null>(null);
   const [wipePassword, setWipePassword] = useState('');
   const [wipeError, setWipeError] = useState('');
+
+  const [profilePhoto, setProfilePhoto] = useState<string | null>(() =>
+    getUserProfilePhoto(session.userId)
+  );
+  const [hasImageKey, setHasImageKey] = useState(() => Boolean(getSavedImageCoreKey()));
+  const [imageKeyInput, setImageKeyInput] = useState(() =>
+    getSavedImageCoreKey() ? MASKED_KEY : ''
+  );
+  const [imageKeyTouched, setImageKeyTouched] = useState(false);
+
+  useEffect(() => {
+    setProfilePhoto(getUserProfilePhoto(session.userId));
+    const onPhotoUpdated = () => setProfilePhoto(getUserProfilePhoto(session.userId));
+    window.addEventListener(PROFILE_PHOTO_EVENT, onPhotoUpdated);
+    return () => window.removeEventListener(PROFILE_PHOTO_EVENT, onPhotoUpdated);
+  }, [session.userId]);
+
+  const handleSaveProfileImageKey = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (imageKeyTouched) {
+      const clean = imageKeyInput.trim();
+      saveImageCoreKey(clean);
+      setHasImageKey(Boolean(clean));
+      setImageKeyInput(clean ? MASKED_KEY : '');
+      setImageKeyTouched(false);
+    }
+    onNotify('Chave de Imagem SARA guardada na Memória da SARA.');
+  };
 
   const handleCopySaraId = () => {
     const id = session.saraId || '';
@@ -274,14 +310,27 @@ export const ProfileAndFindPhonePanel: React.FC<ProfileAndFindPhonePanelProps> =
       {subTab === 'perfil' && (
         <div className="space-y-4">
           <div className="p-4 rounded-2xl bg-[#071125] border border-cyan-500/35 flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-1">
-              <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
-                Identidade Única SARA
+            <div className="flex items-center gap-3">
+              <div className="w-14 h-14 rounded-2xl border border-cyan-400/50 bg-[#030815] overflow-hidden flex items-center justify-center shrink-0 shadow-[0_0_18px_rgba(0,229,255,0.2)]">
+                {profilePhoto ? (
+                  <img
+                    src={profilePhoto}
+                    alt={session.fullName}
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <User className="w-6 h-6 text-[#00E5FF]" />
+                )}
               </div>
-              <div className="text-base font-extrabold text-white">{session.fullName}</div>
-              <div className="text-xs text-slate-400">
-                Chamado por: <span className="text-cyan-200 font-semibold">{session.callName}</span> •{' '}
-                {session.email}
+              <div className="space-y-1">
+                <div className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
+                  Identidade Única SARA
+                </div>
+                <div className="text-base font-extrabold text-white">{session.fullName}</div>
+                <div className="text-xs text-slate-400">
+                  Chamado por: <span className="text-cyan-200 font-semibold">{session.callName}</span> •{' '}
+                  {session.email}
+                </div>
               </div>
             </div>
 
@@ -486,21 +535,19 @@ export const ProfileAndFindPhonePanel: React.FC<ProfileAndFindPhonePanelProps> =
           </div>
 
           {/* Mapa Grande no PC e Telemóvel com todos os aparelhos reais da conta */}
-          <GoogleMapsWrapper>
-            <GoogleSaraMapView
-              centerLat={mapCenter.lat}
-              centerLng={mapCenter.lng}
-              zoom={14}
-              viewMode="roadmap"
-              markers={findPhoneMarkers}
-              showPlacesSearch={false}
-              heightClassName="h-[340px] sm:h-[400px] lg:h-[470px]"
-              emptyNotice="A aguardar primeira posição GPS real de um dos teus aparelhos. Toca em Atualizar Posição Agora."
-              onRecenterMyLocation={() => {
-                void onRefreshDeviceNow();
-              }}
-            />
-          </GoogleMapsWrapper>
+          <FreeSaraMapView
+            centerLat={mapCenter.lat}
+            centerLng={mapCenter.lng}
+            zoom={14}
+            viewMode="roadmap"
+            markers={findPhoneMarkers}
+            showPlacesSearch={false}
+            heightClassName="h-[340px] sm:h-[400px] lg:h-[470px]"
+            emptyNotice="A aguardar primeira posição GPS real de um dos teus aparelhos. Toca em Atualizar Posição Agora."
+            onRecenterMyLocation={() => {
+              void onRefreshDeviceNow();
+            }}
+          />
 
           {/* Cartões dos Aparelhos com 3 botões: Tocar Alarme, Bloquear com Mensagem, Apagar Tudo */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
@@ -710,6 +757,50 @@ export const ProfileAndFindPhonePanel: React.FC<ProfileAndFindPhonePanelProps> =
               </label>
             </div>
           </div>
+
+          {/* Chave de Imagem SARA (Núcleo SARA) */}
+          <form
+            onSubmit={handleSaveProfileImageKey}
+            className="p-4 rounded-2xl bg-[#071125] border border-cyan-500/30 space-y-2.5"
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs font-mono uppercase tracking-widest text-cyan-300 font-bold">
+                <ImageIcon className="w-4 h-4 text-[#00E5FF]" />
+                <span>Chave de Imagem SARA</span>
+              </div>
+              {hasImageKey && (
+                <span className="text-[10px] font-mono text-emerald-300">Ativa (••••••••)</span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-300">
+              Guardada de forma privada na Memória da SARA e sempre mascarada. Cola a tua Chave de Imagem SARA (começa por hf_) para gerar imagens no chat pelo Núcleo SARA.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="password"
+                value={imageKeyInput}
+                onFocus={() => {
+                  if (!imageKeyTouched && imageKeyInput === MASKED_KEY) {
+                    setImageKeyInput('');
+                    setImageKeyTouched(true);
+                  }
+                }}
+                onChange={(e) => {
+                  setImageKeyTouched(true);
+                  setImageKeyInput(e.target.value);
+                }}
+                placeholder={hasImageKey ? '••••••••' : 'Chave de Imagem SARA (hf_...)'}
+                autoComplete="new-password"
+                className="flex-1 px-3 py-2 rounded-xl bg-[#030815] border border-cyan-500/35 text-xs font-mono text-white focus:outline-none focus:border-[#00E5FF]"
+              />
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-xl bg-gradient-to-r from-[#00E5FF] to-cyan-400 text-[#020612] text-xs font-extrabold cursor-pointer shrink-0"
+              >
+                Guardar Chave
+              </button>
+            </div>
+          </form>
 
           {/* Lembretes Agendados em Segundo Plano */}
           <div className="p-4 rounded-2xl bg-[#071125] border border-cyan-500/30 space-y-2.5">

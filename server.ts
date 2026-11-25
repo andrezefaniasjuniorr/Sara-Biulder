@@ -319,69 +319,35 @@ async function startServer() {
   app.post('/api/jarvis', handleJarvisRequest);
   app.post('/api/jarvis-stream', handleJarvisStream);
 
-  // Google Maps Platform endpoints (servidor evita CORS e mantém chave segura em proxies)
-  const getMapsApiKey = () =>
-    (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '').trim();
-
-  app.get('/api/maps/client-config', (_req, res) => {
-    res.json({ mapsApiKey: getMapsApiKey() });
-  });
-
+  // Endpoints de Mapa Aberto Gratuito do Núcleo SARA (zero chaves, zero verificação)
   app.post('/api/maps/reverse-geocode', async (req, res) => {
     const lat = Number(req.body?.lat);
     const lng = Number(req.body?.lng);
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       return res.status(400).json({ error: 'Coordenadas inválidas.' });
     }
-    const mapsKey = getMapsApiKey();
-    if (!mapsKey) {
-      return res.status(503).json({ error: 'Serviço de mapas indisponível no servidor.' });
-    }
 
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
     try {
-      const url = new URL('https://geocode.googleapis.com/v4/geocode/location');
-      url.searchParams.set('location.latitude', String(lat));
-      url.searchParams.set('location.longitude', String(lng));
-      url.searchParams.set('languageCode', 'pt');
-      url.searchParams.set('regionCode', 'MZ');
+      const url = new URL('https://nominatim.openstreetmap.org/reverse');
+      url.searchParams.set('format', 'jsonv2');
+      url.searchParams.set('lat', String(lat));
+      url.searchParams.set('lon', String(lng));
+      url.searchParams.set('zoom', '18');
+      url.searchParams.set('addressdetails', '1');
+      url.searchParams.set('accept-language', 'pt');
 
       const geoRes = await fetch(url.toString(), {
-        method: 'GET',
         headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': mapsKey,
-          'X-Goog-FieldMask':
-            'results.placeId,results.formattedAddress,results.addressComponents,results.types',
-          'X-Goog-Maps-Solution-ID': 'gmp_mcp_codeassist_v1_aistudio',
+          'User-Agent': 'SARA-OS-Radar/2.0 (Nucleo SARA Open Map)',
+          Accept: 'application/json',
         },
+        signal: controller.signal,
       });
+      clearTimeout(timer);
 
-      const bodyText = await geoRes.text();
       if (!geoRes.ok) {
-        const isQuota =
-          geoRes.status === 429 ||
-          /RESOURCE_EXHAUSTED|OVER_QUERY_LIMIT|Quota/i.test(bodyText);
-        return res.status(isQuota ? 429 : geoRes.status).json({
-          quotaExceeded: isQuota,
-          error: isQuota ? 'QUOTA_EXCEEDED' : 'Falha ao obter endereço real.',
-        });
-      }
-
-      const data = JSON.parse(bodyText) as {
-        results?: Array<{
-          placeId?: string;
-          formattedAddress?: string;
-          addressComponents?: Array<{
-            longText?: string;
-            shortText?: string;
-            types?: string[];
-          }>;
-        }>;
-      };
-
-      const results = Array.isArray(data.results) ? data.results : [];
-      const first = results[0];
-      if (!first) {
         return res.json({
           formattedAddress: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
           street: '',
@@ -391,45 +357,202 @@ async function startServer() {
         });
       }
 
-      const pickComp = (acceptedTypes: string[]) => {
-        for (const r of results) {
-          for (const c of r.addressComponents || []) {
-            const types = c.types || [];
-            if (acceptedTypes.some((t) => types.includes(t))) {
-              return c.longText || c.shortText || '';
-            }
-          }
-        }
-        return '';
+      const data = (await geoRes.json()) as {
+        display_name?: string;
+        address?: Record<string, string | undefined>;
       };
-
-      const route = pickComp(['route']);
-      const streetNum = pickComp(['street_number']);
-      const street = [route, streetNum].filter(Boolean).join(', ');
-      const neighborhood = pickComp([
-        'sublocality_level_1',
-        'sublocality',
-        'neighborhood',
-        'administrative_area_level_3',
-      ]);
-      const city = pickComp([
-        'locality',
-        'administrative_area_level_2',
-        'administrative_area_level_1',
-      ]);
-      const country = pickComp(['country']);
+      const addr = data?.address || {};
+      const street = [addr.road || addr.pedestrian || addr.footway || addr.path || '', addr.house_number || '']
+        .filter(Boolean)
+        .join(', ');
+      const neighborhood =
+        addr.suburb ||
+        addr.neighbourhood ||
+        addr.quarter ||
+        addr.city_district ||
+        addr.residential ||
+        '';
+      const city =
+        addr.city ||
+        addr.town ||
+        addr.village ||
+        addr.municipality ||
+        addr.county ||
+        addr.state ||
+        '';
+      const country = addr.country || '';
+      const compactParts = [street, neighborhood, city, country].filter(Boolean);
 
       return res.json({
-        formattedAddress: first.formattedAddress || [street, neighborhood, city].filter(Boolean).join(', '),
+        formattedAddress:
+          compactParts.length > 0
+            ? compactParts.join(', ')
+            : data?.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
         street,
         neighborhood,
         city,
         country,
-        placeId: first.placeId || undefined,
       });
     } catch {
-      return res.status(502).json({ error: 'Sem resposta do serviço de endereços.' });
+      clearTimeout(timer);
+      return res.json({
+        formattedAddress: `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+        street: '',
+        neighborhood: '',
+        city: '',
+        country: '',
+      });
     }
+  });
+
+  app.post('/api/maps/search-places', async (req, res) => {
+    const query = String(req.body?.query || '').trim();
+    const lat = Number(req.body?.lat);
+    const lng = Number(req.body?.lng);
+    if (query.length < 2 || query.length > 160) {
+      return res.json({ results: [] });
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const url = new URL('https://nominatim.openstreetmap.org/search');
+      url.searchParams.set('format', 'jsonv2');
+      url.searchParams.set('q', query);
+      url.searchParams.set('addressdetails', '1');
+      url.searchParams.set('accept-language', 'pt');
+      url.searchParams.set('limit', '6');
+
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        url.searchParams.set(
+          'viewbox',
+          `${(lng - 0.3).toFixed(4)},${(lat + 0.3).toFixed(4)},${(lng + 0.3).toFixed(4)},${(lat - 0.3).toFixed(4)}`
+        );
+        url.searchParams.set('bounded', '0');
+      }
+
+      const searchRes = await fetch(url.toString(), {
+        headers: {
+          'User-Agent': 'SARA-OS-Radar/2.0 (Nucleo SARA Open Map)',
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!searchRes.ok) {
+        return res.json({ results: [] });
+      }
+
+      const list = (await searchRes.json()) as Array<{
+        place_id?: number | string;
+        display_name?: string;
+        name?: string;
+        lat?: string;
+        lon?: string;
+        type?: string;
+        category?: string;
+        address?: Record<string, string | undefined>;
+      }>;
+
+      const results = (Array.isArray(list) ? list : [])
+        .map((item, idx) => {
+          const rLat = Number(item.lat);
+          const rLng = Number(item.lon);
+          if (!Number.isFinite(rLat) || !Number.isFinite(rLng)) return null;
+          const addr = item.address || {};
+          const shortName =
+            item.name ||
+            addr.road ||
+            addr.suburb ||
+            addr.neighbourhood ||
+            (item.display_name ? item.display_name.split(',')[0] : query);
+          return {
+            id: String(item.place_id || `osm_${idx}_${Date.now()}`),
+            name: String(shortName || query).trim(),
+            address: item.display_name || undefined,
+            lat: rLat,
+            lng: rLng,
+            categoryLabel: item.type || item.category || undefined,
+          };
+        })
+        .filter(Boolean);
+
+      return res.json({ results });
+    } catch {
+      clearTimeout(timer);
+      return res.json({ results: [] });
+    }
+  });
+
+  app.post('/api/maps/route', async (req, res) => {
+    const oLat = Number(req.body?.origin?.lat);
+    const oLng = Number(req.body?.origin?.lng);
+    const dLat = Number(req.body?.destination?.lat);
+    const dLng = Number(req.body?.destination?.lng);
+
+    if (
+      !Number.isFinite(oLat) ||
+      !Number.isFinite(oLng) ||
+      !Number.isFinite(dLat) ||
+      !Number.isFinite(dLng)
+    ) {
+      return res.status(400).json({ ok: false, error: 'Coordenadas de rota inválidas.' });
+    }
+
+    const R = 6371000;
+    const toRad = (deg: number) => (deg * Math.PI) / 180;
+    const dPhi = toRad(dLat - oLat);
+    const dLambda = toRad(dLng - oLng);
+    const a =
+      Math.sin(dPhi / 2) ** 2 +
+      Math.cos(toRad(oLat)) * Math.cos(toRad(dLat)) * Math.sin(dLambda / 2) ** 2;
+    const straightMeters = Math.round(2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9000);
+    try {
+      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${oLng},${oLat};${dLng},${dLat}?overview=full&geometries=geojson`;
+      const routeRes = await fetch(osrmUrl, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (routeRes.ok) {
+        const data = (await routeRes.json()) as {
+          routes?: Array<{
+            distance?: number;
+            duration?: number;
+            geometry?: { coordinates?: Array<[number, number]> };
+          }>;
+        };
+        const first = data?.routes?.[0];
+        const coords = first?.geometry?.coordinates;
+        if (first && Array.isArray(coords) && coords.length >= 2) {
+          const path = coords.map(([lngVal, latVal]) => [latVal, lngVal] as [number, number]);
+          return res.json({
+            ok: true,
+            distanceMeters: Math.round(Number(first.distance ?? straightMeters)),
+            durationSeconds: Math.max(60, Math.round(Number(first.duration ?? straightMeters / 8))),
+            path,
+          });
+        }
+      }
+    } catch {
+      clearTimeout(timer);
+    }
+
+    return res.json({
+      ok: true,
+      fallback: true,
+      distanceMeters: straightMeters,
+      durationSeconds: Math.max(60, Math.round(straightMeters / 8.5)),
+      path: [
+        [oLat, oLng],
+        [dLat, dLng],
+      ],
+    });
   });
 
   app.get('/api/maps/approx-location', async (req, res) => {
@@ -471,6 +594,107 @@ async function startServer() {
     } catch {
       return res.status(503).json({ error: 'Sem ligação de rede para localização aproximada.' });
     }
+  });
+
+  app.post('/api/image/generate', async (req, res) => {
+    const rawKey = String(req.headers['x-sara-image-key'] || '').trim();
+    const prompt = String(req.body?.prompt || '').trim();
+
+    if (!rawKey || !rawKey.startsWith('hf_') || rawKey.length < 10) {
+      return res.status(401).json({
+        ok: false,
+        code: 'INVALID_KEY',
+        error: 'Coloca a tua chave de imagem nas Definições para gerar imagens.',
+      });
+    }
+
+    if (!prompt || prompt.length > 1000) {
+      return res.status(400).json({
+        ok: false,
+        error: 'Descrição inválida para gerar a imagem.',
+      });
+    }
+
+    const models = [
+      'black-forest-labs/FLUX.1-schnell',
+      'stabilityai/stable-diffusion-xl-base-1.0',
+    ];
+
+    for (let i = 0; i < models.length; i++) {
+      const modelId = models[i];
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 45000);
+
+      try {
+        const upstream = await fetch(
+          `https://router.huggingface.co/hf-inference/models/${modelId}`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${rawKey}`,
+              'Content-Type': 'application/json',
+              Accept: 'image/png',
+            },
+            body: JSON.stringify({
+              inputs: prompt,
+              options: { wait_for_model: true },
+            }),
+            signal: controller.signal,
+          }
+        );
+
+        clearTimeout(timer);
+
+        if (upstream.status === 401 || upstream.status === 403) {
+          return res.status(401).json({
+            ok: false,
+            code: 'INVALID_KEY',
+            error: 'Coloca a tua chave de imagem nas Definições para gerar imagens.',
+          });
+        }
+
+        const contentType = String(upstream.headers.get('content-type') || '').toLowerCase();
+        if (upstream.ok && contentType.startsWith('image/')) {
+          const buf = Buffer.from(await upstream.arrayBuffer());
+          if (buf.length > 0) {
+            const mime = contentType.split(';')[0] || 'image/png';
+            return res.json({
+              ok: true,
+              dataUrl: `data:${mime};base64,${buf.toString('base64')}`,
+            });
+          }
+        }
+
+        // Em caso de falha transitória ou modelo indisponível, tenta o próximo modelo
+        if (i < models.length - 1 && [404, 410, 429, 500, 502, 503, 504].includes(upstream.status)) {
+          continue;
+        }
+
+        if (upstream.status === 402) {
+          return res.status(402).json({
+            ok: false,
+            error: 'Núcleo SARA atingiu o limite temporário de criação de imagens.',
+          });
+        }
+
+        return res.status(503).json({
+          ok: false,
+          error: 'Núcleo SARA ocupado ao criar a imagem. Tenta novamente dentro de instantes.',
+        });
+      } catch {
+        clearTimeout(timer);
+        if (i < models.length - 1) continue;
+        return res.status(504).json({
+          ok: false,
+          error: 'Núcleo SARA demorou a responder. Tenta novamente.',
+        });
+      }
+    }
+
+    return res.status(503).json({
+      ok: false,
+      error: 'Núcleo SARA ocupado ao criar a imagem. Tenta novamente.',
+    });
   });
 
   if (process.env.NODE_ENV !== 'production') {

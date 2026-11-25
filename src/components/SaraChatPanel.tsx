@@ -38,6 +38,8 @@ import type {
   PendingVoiceConfirmation,
 } from '../types/builder';
 import { convertFileToMultimodalImage, type ConvertedImage } from '../services/saraAiService';
+import { GeneratedChatImageCard } from './GeneratedChatImageCard';
+import { downloadImageDataUrl } from '../services/imageGenService';
 
 interface SaraChatPanelProps {
   messages: ChatMessage[];
@@ -75,6 +77,8 @@ interface SaraChatPanelProps {
   onApplySuggestion: (suggestion: string) => void;
   onListenMessageDetail: (text: string) => void;
   onSilenceSara: () => void;
+  onRegenerateGeneratedImage?: (msgId: string, prompt: string) => void;
+  onUseGeneratedImageAsProfile?: (imageUrl: string) => Promise<void> | void;
   callName?: string;
   isOwner?: boolean;
 }
@@ -199,6 +203,8 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   onApplySuggestion,
   onListenMessageDetail,
   onSilenceSara,
+  onRegenerateGeneratedImage,
+  onUseGeneratedImageAsProfile,
 }) => {
   const [input, setInput] = useState('');
   const [selectedImage, setSelectedImage] = useState<ConvertedImage | null>(null);
@@ -742,7 +748,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                   </div>
                 </div>
 
-                {msg.imageUrl && (
+                {msg.imageUrl && !msg.generatedImagePrompt && (
                   <img
                     src={msg.imageUrl}
                     alt="Anexo visual"
@@ -821,6 +827,27 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                     >
                       {msg.text}
                     </ReactMarkdown>
+                    {(msg.isGeneratingImage || (msg.generatedImagePrompt && msg.imageUrl)) && (
+                      <GeneratedChatImageCard
+                        imageUrl={msg.imageUrl}
+                        isGenerating={msg.isGeneratingImage}
+                        prompt={msg.generatedImagePrompt || ''}
+                        onDownload={() =>
+                          msg.imageUrl &&
+                          downloadImageDataUrl(msg.imageUrl, msg.generatedImagePrompt)
+                        }
+                        onRegenerate={() => {
+                          if (msg.generatedImagePrompt && onRegenerateGeneratedImage) {
+                            onRegenerateGeneratedImage(msg.id, msg.generatedImagePrompt);
+                          }
+                        }}
+                        onUseAsProfilePhoto={async () => {
+                          if (msg.imageUrl && onUseGeneratedImageAsProfile) {
+                            await onUseGeneratedImageAsProfile(msg.imageUrl);
+                          }
+                        }}
+                      />
+                    )}
                   </div>
                 )}
 

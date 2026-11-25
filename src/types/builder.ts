@@ -135,6 +135,8 @@ export interface ChatMessage {
   sender: 'sara' | 'user';
   text: string;
   imageUrl?: string;
+  generatedImagePrompt?: string;
+  isGeneratingImage?: boolean;
   attachedFileName?: string;
   timestamp: string;
   mode?: 'conversation' | 'builder' | 'mission' | 'error-fix' | 'manual-proposal';

@@ -249,7 +249,22 @@ export function saveJarvisDocuments(docs: JarvisDocumentItem[], userId?: string,
 
 export function saveJarvisConversation(entries: JarvisConversationEntry[], userId?: string, isGuest = false) {
   if (isGuest || userId?.startsWith('guest_')) return;
-  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.chat, userId), entries.slice(-40));
+  const recent = entries.slice(-40);
+  let keptImages = 0;
+  const compact: JarvisConversationEntry[] = [...recent]
+    .reverse()
+    .map((entry) => {
+      if (entry.imageUrl && entry.imageUrl.startsWith('data:image/')) {
+        if (keptImages < 2) {
+          keptImages += 1;
+          return { ...entry, isGeneratingImage: false };
+        }
+        return { ...entry, imageUrl: undefined, isGeneratingImage: false };
+      }
+      return entry.isGeneratingImage ? { ...entry, isGeneratingImage: false } : entry;
+    })
+    .reverse();
+  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.chat, userId), compact);
 }
 
 export function saveJarvisPlaylist(tracks: JarvisTrack[], userId?: string, isGuest = false) {

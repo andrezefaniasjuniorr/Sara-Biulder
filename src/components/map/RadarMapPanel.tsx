@@ -68,12 +68,11 @@ import {
   stopRadarSonarPing,
   stopSingleShare,
 } from '../../services/locationRadarService';
-import { GoogleMapsWrapper } from './GoogleMapsWrapper';
 import {
-  GoogleSaraMapView,
+  FreeSaraMapView,
   type ComputedRouteInfo,
   type SaraMapMarker,
-} from './GoogleSaraMapView';
+} from './FreeSaraMapView';
 
 export interface RadarExternalControlHandle {
   setViewMode: (mode: RadarMapViewMode) => void;
@@ -1120,48 +1119,46 @@ export const RadarMapPanel: React.FC<RadarMapPanelProps> = ({
       {/* MAPA REAL INTERATIVO + HOLOGRAMA SONAR                            */}
       {/* ================================================================= */}
       <div ref={mapWrapperRef} className="relative rounded-2xl">
-        <GoogleMapsWrapper>
-          <GoogleSaraMapView
-            centerLat={activeTargetSummary?.lat ?? myCoords?.lat ?? null}
-            centerLng={activeTargetSummary?.lng ?? myCoords?.lng ?? null}
-            zoom={15}
-            viewMode={viewMode}
-            markers={mapMarkers}
-            sonarActive={sonarActive}
-            showPlacesSearch={true}
-            movementHistory={movementHistory}
-            showMovementHistory={showMovementHistory}
-            geofence={geofence}
-            routeOrigin={routeEnabled && myCoords ? { lat: myCoords.lat, lng: myCoords.lng } : null}
-            routeDestination={
-              routeEnabled && activeTargetSummary
-                ? { lat: activeTargetSummary.lat, lng: activeTargetSummary.lng }
-                : null
+        <FreeSaraMapView
+          centerLat={activeTargetSummary?.lat ?? myCoords?.lat ?? null}
+          centerLng={activeTargetSummary?.lng ?? myCoords?.lng ?? null}
+          zoom={15}
+          viewMode={viewMode}
+          markers={mapMarkers}
+          sonarActive={sonarActive}
+          showPlacesSearch={true}
+          movementHistory={movementHistory}
+          showMovementHistory={showMovementHistory}
+          geofence={geofence}
+          routeOrigin={routeEnabled && myCoords ? { lat: myCoords.lat, lng: myCoords.lng } : null}
+          routeDestination={
+            routeEnabled && activeTargetSummary
+              ? { lat: activeTargetSummary.lat, lng: activeTargetSummary.lng }
+              : null
+          }
+          navigationActive={navigationActive}
+          streetViewTarget={streetViewTarget}
+          heightClassName="h-[360px] sm:h-[420px] lg:h-[470px]"
+          emptyNotice={
+            !myCoords
+              ? 'Sem sinal GPS neste momento. Ativa o GPS do dispositivo para mostrar a tua posição real.'
+              : 'Mapa privado. Liga "Aparecer no Mapa", pesquisa um lugar ou pede um Identificador SARA.'
+          }
+          onSelectMarker={(id) => {
+            if (id.startsWith('peer_') || id.startsWith('dev_') || id.startsWith('place_')) {
+              triggerSonarLockSequence(id);
             }
-            navigationActive={navigationActive}
-            streetViewTarget={streetViewTarget}
-            heightClassName="h-[360px] sm:h-[420px] lg:h-[470px]"
-            emptyNotice={
-              !myCoords
-                ? 'Sem sinal GPS neste momento. Ativa o GPS do dispositivo para mostrar a tua posição real.'
-                : 'Mapa privado. Liga "Aparecer no Mapa", pesquisa um lugar ou pede um Identificador SARA.'
-            }
-            onSelectMarker={(id) => {
-              if (id.startsWith('peer_') || id.startsWith('dev_') || id.startsWith('place_')) {
-                triggerSonarLockSequence(id);
-              }
-            }}
-            onSelectPlace={(place) => {
-              setSelectedPlace(place);
-              setLockedTargetId(`place_${place.id}`);
-              setRouteEnabled(false);
-            }}
-            onRouteComputed={setComputedRoute}
-            onRecenterMyLocation={() => void refreshRealGps()}
-            onOpenStreetViewAt={(lat, lng, label) => setStreetViewTarget({ lat, lng, label })}
-            onCloseStreetView={() => setStreetViewTarget(null)}
-          />
-        </GoogleMapsWrapper>
+          }}
+          onSelectPlace={(place) => {
+            setSelectedPlace(place);
+            setLockedTargetId(`place_${place.id}`);
+            setRouteEnabled(false);
+          }}
+          onRouteComputed={setComputedRoute}
+          onRecenterMyLocation={() => void refreshRealGps()}
+          onOpenStreetViewAt={(lat, lng, label) => setStreetViewTarget({ lat, lng, label })}
+          onCloseStreetView={() => setStreetViewTarget(null)}
+        />
       </div>
 
       {/* ================================================================= */}

@@ -104,6 +104,14 @@ import {
   salvarJarvisStateFirebase,
 } from '../../services/firebaseService';
 import { evaluateNonOwnerGuard } from '../../services/authService';
+import { GeneratedChatImageCard } from '../GeneratedChatImageCard';
+import {
+  downloadImageDataUrl,
+  extractImageGenPrompt,
+  generateSaraImage,
+  IMAGE_CREATING_MESSAGE,
+  saveUserProfilePhoto,
+} from '../../services/imageGenService';
 import type {
   ActivityCategory,
   SaraSession,
@@ -622,6 +630,102 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       onPanelOpenChange?.(next);
     },
     [onPanelOpenChange]
+  );
+
+  const runJarvisImageGeneration = useCallback(
+    async (
+      imgPrompt: string,
+      options?: { targetMessageId?: string; userDisplayText?: string; variationSeed?: number }
+    ) => {
+      const nowTime = getMaputoNowParts().timeHHmm;
+      const targetId =
+        options?.targetMessageId ||
+        `sara_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+      onUserActivity?.('chat');
+      if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+        setMobileSection('log');
+      }
+
+      if (options?.targetMessageId) {
+        setConversation((prev) =>
+          prev.map((entry) =>
+            entry.id === targetId
+              ? {
+                  ...entry,
+                  text: IMAGE_CREATING_MESSAGE,
+                  imageUrl: undefined,
+                  isGeneratingImage: true,
+                  generatedImagePrompt: imgPrompt,
+                }
+              : entry
+          )
+        );
+      } else {
+        const entriesToAppend: JarvisConversationEntry[] = [];
+        if (options?.userDisplayText) {
+          entriesToAppend.push({
+            id: `usr_img_${Date.now()}`,
+            sender: 'user',
+            text: options.userDisplayText,
+            timestamp: nowTime,
+          });
+        }
+        entriesToAppend.push({
+          id: targetId,
+          sender: 'sara',
+          text: IMAGE_CREATING_MESSAGE,
+          timestamp: nowTime,
+          generatedImagePrompt: imgPrompt,
+          isGeneratingImage: true,
+        });
+        setConversation((prev) => [...prev.slice(-26), ...entriesToAppend]);
+      }
+
+      setMood('thinking');
+      const res = await generateSaraImage(imgPrompt, { variationSeed: options?.variationSeed });
+
+      if (res.ok) {
+        setMood('happy');
+        setConversation((prev) =>
+          prev.map((entry) =>
+            entry.id === targetId
+              ? {
+                  ...entry,
+                  text: `Imagem criada: ${imgPrompt}`,
+                  imageUrl: res.dataUrl,
+                  isGeneratingImage: false,
+                  generatedImagePrompt: imgPrompt,
+                }
+              : entry
+          )
+        );
+        speakAsSara('Aqui está a tua imagem.', voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      } else {
+        setMood('idle');
+        setConversation((prev) =>
+          prev.map((entry) =>
+            entry.id === targetId
+              ? {
+                  ...entry,
+                  text: res.error,
+                  imageUrl: undefined,
+                  isGeneratingImage: false,
+                  generatedImagePrompt: imgPrompt,
+                }
+              : entry
+          )
+        );
+        speakAsSara(res.error, voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+    },
+    [onUserActivity, voiceEnabled]
   );
 
   useEffect(() => subscribeVoiceReadingStatus(setReadingStatus), []);
@@ -2684,6 +2788,16 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           lastDomainRef.current = detectedDom;
         }
         recentUserUtterancesRef.current = [...recentUserUtterancesRef.current, clean].slice(-5);
+      }
+
+      // GERADOR DE IMAGENS SARA: "SARA, gera uma imagem de..."
+      if (clean && !docToSend) {
+        const imgPrompt = extractImageGenPrompt(clean);
+        if (imgPrompt) {
+          if (source === 'text') setInputText('');
+          await runJarvisImageGeneration(imgPrompt, { userDisplayText: clean });
+          return;
+        }
       }
 
       // TIPO A - [SISTEMA]: Verifica comandos determinísticos antes da IA
@@ -5557,6 +5671,33 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           ? sanitizeAssistantPlainText(entry.text)
                           : entry.text}
                       </div>
+                      {entry.sender === 'sara' &&
+                        (entry.isGeneratingImage || entry.imageUrl) && (
+                          <GeneratedChatImageCard
+                            imageUrl={entry.imageUrl}
+                            isGenerating={entry.isGeneratingImage}
+                            prompt={entry.generatedImagePrompt || ''}
+                            compact
+                            onDownload={() =>
+                              entry.imageUrl &&
+                              downloadImageDataUrl(entry.imageUrl, entry.generatedImagePrompt)
+                            }
+                            onRegenerate={() => {
+                              if (entry.generatedImagePrompt) {
+                                void runJarvisImageGeneration(entry.generatedImagePrompt, {
+                                  targetMessageId: entry.id,
+                                  variationSeed: Date.now(),
+                                });
+                              }
+                            }}
+                            onUseAsProfilePhoto={async () => {
+                              if (entry.imageUrl) {
+                                await saveUserProfilePhoto(session.userId, entry.imageUrl);
+                                onNotify('Foto de perfil atualizada!');
+                              }
+                            }}
+                          />
+                        )}
                     </div>
                   ))}
 

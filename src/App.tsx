@@ -105,6 +105,12 @@ import {
   verifySessionAccountPassword,
 } from './services/authService';
 import {
+  extractImageGenPrompt,
+  generateSaraImage,
+  IMAGE_CREATING_MESSAGE,
+  saveUserProfilePhoto,
+} from './services/imageGenService';
+import {
   acknowledgeAndClearPendingCommand,
   buildEmergencySmsUri,
   evaluateOfflineSosCondition,
@@ -215,8 +221,7 @@ import { AdminPanelModal } from './components/admin/AdminPanelModal';
 import { type ProfileSubTab } from './components/profile/ProfileAndFindPhonePanel';
 import { FloatingSaraBubble } from './components/background/FloatingSaraBubble';
 import { type RadarExternalControlHandle } from './components/map/RadarMapPanel';
-import { GoogleMapsWrapper } from './components/map/GoogleMapsWrapper';
-import { GoogleSaraMapView } from './components/map/GoogleSaraMapView';
+import { FreeSaraMapView } from './components/map/FreeSaraMapView';
 
 const WORKSPACE_MODE_KEY = 'sara_workspace_mode_v1';
 const PROJECTS_STORAGE_KEY = 'sara_biulder_projects_v2';
@@ -516,18 +521,16 @@ const LiveShareViewerScreen: React.FC<{
             </div>
           </div>
           <div className="flex-1 min-h-0 relative">
-            <GoogleMapsWrapper>
-              <GoogleSaraMapView
-                centerLat={liveData.lat}
-                centerLng={liveData.lng}
-                zoom={16}
-                viewMode="hybrid"
-                markers={markers}
-                sonarActive
-                showPlacesSearch={false}
-                heightClassName="h-full"
-              />
-            </GoogleMapsWrapper>
+            <FreeSaraMapView
+              centerLat={liveData.lat}
+              centerLng={liveData.lng}
+              zoom={16}
+              viewMode="hybrid"
+              markers={markers}
+              sonarActive
+              showPlacesSearch={false}
+              heightClassName="h-full"
+            />
           </div>
         </div>
       )}
@@ -555,8 +558,6 @@ export default function App() {
     source?: LocationSignalSource;
     timestamp?: number;
   } | null>(null);
-  const [mapsQuotaExceeded, setMapsQuotaExceeded] = useState(false);
-  const [quotaBannerDismissed, setQuotaBannerDismissed] = useState(false);
   const [liveShareId, setLiveShareId] = useState<string | null>(() => {
     try {
       return new URLSearchParams(window.location.search).get('live');
@@ -1401,15 +1402,6 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [showToast]);
-
-  // Escuta eventos globais de limite de cota Google Maps (Tier 1 & Tier 2)
-  useEffect(() => {
-    const onQuotaExceeded = () => {
-      setMapsQuotaExceeded(true);
-    };
-    window.addEventListener('gmp-quota-exceeded', onQuotaExceeded);
-    return () => window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
-  }, []);
 
   // Subscrições em tempo real de Radar (pedidos + localizações aceites) e Aparelhos (Achar Meu Celular)
   useEffect(() => {
@@ -5275,6 +5267,94 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     ]
   );
 
+  const runBuilderImageGeneration = useCallback(
+    async (
+      imgPrompt: string,
+      options?: { targetMessageId?: string; userDisplayText?: string; variationSeed?: number }
+    ) => {
+      const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      const targetId =
+        options?.targetMessageId ||
+        `sara_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+      if (options?.targetMessageId) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === targetId
+              ? {
+                  ...m,
+                  text: IMAGE_CREATING_MESSAGE,
+                  imageUrl: undefined,
+                  isGeneratingImage: true,
+                  generatedImagePrompt: imgPrompt,
+                }
+              : m
+          )
+        );
+      } else {
+        const nextMsgs: ChatMessage[] = [];
+        if (options?.userDisplayText) {
+          nextMsgs.push({
+            id: `usr_img_${Date.now()}`,
+            sender: 'user',
+            text: options.userDisplayText,
+            timestamp: nowTime,
+          });
+        }
+        nextMsgs.push({
+          id: targetId,
+          sender: 'sara',
+          text: IMAGE_CREATING_MESSAGE,
+          timestamp: nowTime,
+          mode: 'conversation',
+          generatedImagePrompt: imgPrompt,
+          isGeneratingImage: true,
+        });
+        setMessages((prev) => [...prev, ...nextMsgs]);
+      }
+
+      const res = await generateSaraImage(imgPrompt, { variationSeed: options?.variationSeed });
+      if (res.ok) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === targetId
+              ? {
+                  ...m,
+                  text: `Imagem criada: ${imgPrompt}`,
+                  imageUrl: res.dataUrl,
+                  isGeneratingImage: false,
+                  generatedImagePrompt: imgPrompt,
+                }
+              : m
+          )
+        );
+        speakAsSara('Aqui está a tua imagem.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      } else {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === targetId
+              ? {
+                  ...m,
+                  text: res.error,
+                  imageUrl: undefined,
+                  isGeneratingImage: false,
+                  generatedImagePrompt: imgPrompt,
+                }
+              : m
+          )
+        );
+        speakAsSara(res.error, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+    },
+    []
+  );
+
   const handleSendMessage = useCallback(
     async (
       text: string,
@@ -5342,6 +5422,15 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         : rawTrimmed;
       if (trimmed) {
         pushRecentUtterance(trimmed);
+      }
+
+      const imgPrompt =
+        !image && (!attachments || attachments.length === 0)
+          ? extractImageGenPrompt(trimmed)
+          : null;
+      if (imgPrompt) {
+        await runBuilderImageGeneration(imgPrompt, { userDisplayText: trimmed });
+        return;
       }
 
       const cmd = parseVoiceCommand(trimmed, voiceContextRef.current);
@@ -6000,6 +6089,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       replaceCurrentProjectFiles,
       addConsoleLog,
       showToast,
+      runBuilderImageGeneration,
     ]
   );
 
@@ -6355,45 +6445,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
   if (liveShareId) {
     return (
-      <>
-        {mapsQuotaExceeded && !quotaBannerDismissed && (
-          <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm flex items-center justify-center gap-3 shrink-0">
-            <span>
-              Google Maps Platform quota reached. If you are the app owner, visit{' '}
-              <a
-                href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline font-semibold text-amber-950 hover:text-amber-800"
-              >
-                maps developer site
-              </a>{' '}
-              for instructions to update your account.
-            </span>
-            <button
-              type="button"
-              onClick={() => setQuotaBannerDismissed(true)}
-              className="text-amber-800 hover:text-amber-950 font-semibold px-1.5 py-0.5 rounded cursor-pointer"
-              title="Dispensar"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-        <LiveShareViewerScreen
-          shareId={liveShareId}
-          onExit={() => {
-            setLiveShareId(null);
-            try {
-              const nextUrl = new URL(window.location.href);
-              nextUrl.searchParams.delete('live');
-              window.history.replaceState({}, '', nextUrl.toString());
-            } catch {
-              // ignore
-            }
-          }}
-        />
-      </>
+      <LiveShareViewerScreen
+        shareId={liveShareId}
+        onExit={() => {
+          setLiveShareId(null);
+          try {
+            const nextUrl = new URL(window.location.href);
+            nextUrl.searchParams.delete('live');
+            window.history.replaceState({}, '', nextUrl.toString());
+          } catch {
+            // ignore
+          }
+        }}
+      />
     );
   }
 
@@ -6403,30 +6467,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#0A0A0F] text-white overflow-hidden">
-      {mapsQuotaExceeded && !quotaBannerDismissed && (
-        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm flex items-center justify-center gap-3 shrink-0">
-          <span>
-            Google Maps Platform quota reached. If you are the app owner, visit{' '}
-            <a
-              href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline font-semibold text-amber-950 hover:text-amber-800"
-            >
-              maps developer site
-            </a>{' '}
-            for instructions to update your account.
-          </span>
-          <button
-            type="button"
-            onClick={() => setQuotaBannerDismissed(true)}
-            className="text-amber-800 hover:text-amber-950 font-semibold px-1.5 py-0.5 rounded cursor-pointer"
-            title="Dispensar"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      )}
       {/* Barra Superior */}
       <TopBar
         session={session}
@@ -6668,6 +6708,16 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             onApplySuggestion={(sug) => handleSendMessage(`Aplica esta melhoria mantendo tudo funcional: ${sug}`)}
             onListenMessageDetail={handleListenMessageDetail}
             onSilenceSara={handleForceSilenceSara}
+            onRegenerateGeneratedImage={(msgId, prompt) => {
+              void runBuilderImageGeneration(prompt, {
+                targetMessageId: msgId,
+                variationSeed: Date.now(),
+              });
+            }}
+            onUseGeneratedImageAsProfile={async (imgUrl) => {
+              await saveUserProfilePhoto(session.userId, imgUrl);
+              showToast('Foto de perfil atualizada!');
+            }}
           />
         </div>
 

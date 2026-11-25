@@ -8,6 +8,7 @@ import {
   Loader2,
   LogOut,
   FileText,
+  Image as ImageIcon,
 } from 'lucide-react';
 import type { FirebaseUserProfile } from '../types/builder';
 import {
@@ -22,6 +23,7 @@ import {
   getSavedGeminiKey,
   saveGeminiKey,
 } from '../services/saraAiService';
+import { getSavedImageCoreKey, saveImageCoreKey } from '../services/imageGenService';
 import { toSafeCoreOfflineMessage } from '../utils/timeAgendaService';
 
 interface SettingsModalProps {
@@ -58,6 +60,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   });
   const [vaultKeyTouched, setVaultKeyTouched] = useState(false);
+
+  const [hasImageKey, setHasImageKey] = useState(() => Boolean(getSavedImageCoreKey()));
+  const [imageKeyInput, setImageKeyInput] = useState(() =>
+    getSavedImageCoreKey() ? MASKED_SECRET : ''
+  );
+  const [imageKeyTouched, setImageKeyTouched] = useState(false);
+
   const [savedNotice, setSavedNotice] = useState('');
 
   const [coreTesting, setCoreTesting] = useState(false);
@@ -96,6 +105,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setHasVaultKey(Boolean(cleanVault));
       setVaultKeyInput(cleanVault ? MASKED_SECRET : '');
       setVaultKeyTouched(false);
+    }
+
+    if (imageKeyTouched) {
+      const cleanImg = imageKeyInput.trim();
+      saveImageCoreKey(cleanImg);
+      setHasImageKey(Boolean(cleanImg));
+      setImageKeyInput(cleanImg ? MASKED_SECRET : '');
+      setImageKeyTouched(false);
     }
 
     setSavedNotice('Configurações guardadas na Memória da SARA.');
@@ -367,6 +384,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 placeholder={hasVaultKey ? '••••••••' : 'Chave do Cofre (••••••••)'}
                 autoComplete="new-password"
                 className="w-full bg-[#12121A] border border-[#1F1F2E] focus:border-[#3B82F6] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
+              />
+            </div>
+
+            <div className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <ImageIcon className="w-4 h-4 text-[#00E5FF]" />
+                  <span className="text-sm font-bold text-white">Chave de Imagem SARA</span>
+                </div>
+                {hasImageKey && (
+                  <span className="text-[10px] font-mono text-emerald-300">Ativa (••••••••)</span>
+                )}
+              </div>
+              <p className="text-[11px] text-[#A1A1AA]">
+                Guardada de forma privada na Memória da SARA e sempre mascarada. Cola a tua Chave de Imagem SARA (começa por hf_) ligada ao Núcleo SARA.
+              </p>
+              <input
+                type="password"
+                value={imageKeyInput}
+                onFocus={() => {
+                  if (!imageKeyTouched && imageKeyInput === MASKED_SECRET) {
+                    setImageKeyInput('');
+                    setImageKeyTouched(true);
+                  }
+                }}
+                onChange={(e) => {
+                  setImageKeyTouched(true);
+                  setImageKeyInput(e.target.value);
+                }}
+                placeholder={hasImageKey ? '••••••••' : 'Chave de Imagem SARA (hf_...)'}
+                autoComplete="new-password"
+                className="w-full bg-[#12121A] border border-[#1F1F2E] focus:border-[#00E5FF] rounded-lg px-3 py-2 text-xs text-white outline-none font-mono"
               />
             </div>
 
