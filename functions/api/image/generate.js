@@ -1,3 +1,7 @@
+import { getBackendImageKey, isValidImageCoreKey } from '../_coreImageVault.js';
+
+const UNAVAILABLE_MSG = 'Geração de imagens indisponível no momento.';
+
 function arrayBufferToBase64(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = '';
@@ -9,8 +13,7 @@ function arrayBufferToBase64(buffer) {
 }
 
 export async function onRequestPost(context) {
-  const { request } = context;
-  const rawKey = String(request.headers.get('x-sara-image-key') || '').trim();
+  const { request, env } = context;
   const body = await request.json().catch(() => ({}));
   const prompt = String(body?.prompt || '').trim();
 
@@ -20,19 +23,20 @@ export async function onRequestPost(context) {
       headers: { 'Content-Type': 'application/json' },
     });
 
-  if (!rawKey || !rawKey.startsWith('hf_') || rawKey.length < 10) {
+  if (!prompt || prompt.length > 1000) {
+    return json({ ok: false, error: 'Descrição inválida para gerar a imagem.' }, 400);
+  }
+
+  const { imageKey } = await getBackendImageKey(env);
+  if (!isValidImageCoreKey(imageKey)) {
     return json(
       {
         ok: false,
-        code: 'INVALID_KEY',
-        error: 'Coloca a tua chave de imagem nas Definições para gerar imagens.',
+        notConfigured: true,
+        error: UNAVAILABLE_MSG,
       },
-      401
+      503
     );
-  }
-
-  if (!prompt || prompt.length > 1000) {
-    return json({ ok: false, error: 'Descrição inválida para gerar a imagem.' }, 400);
   }
 
   const models = [
@@ -49,7 +53,7 @@ export async function onRequestPost(context) {
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${rawKey}`,
+            Authorization: `Bearer ${imageKey}`,
             'Content-Type': 'application/json',
             Accept: 'image/png',
           },
@@ -66,10 +70,10 @@ export async function onRequestPost(context) {
         return json(
           {
             ok: false,
-            code: 'INVALID_KEY',
-            error: 'Coloca a tua chave de imagem nas Definições para gerar imagens.',
+            notConfigured: true,
+            error: UNAVAILABLE_MSG,
           },
-          401
+          503
         );
       }
 

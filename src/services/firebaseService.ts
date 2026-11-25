@@ -154,6 +154,18 @@ export async function logout(): Promise<void> {
   await authMod.signOut(auth);
 }
 
+export async function getCurrentFirebaseIdToken(): Promise<string | null> {
+  try {
+    const { auth } = await loadFirebaseRuntime();
+    if (auth?.currentUser && typeof auth.currentUser.getIdToken === 'function') {
+      return await auth.currentUser.getIdToken();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export function verificarUsuario(
   callback: (user: FirebaseUserProfile | null) => void
 ): () => void {

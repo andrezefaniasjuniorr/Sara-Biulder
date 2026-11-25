@@ -6,8 +6,14 @@ import {
   Ban,
   CheckCheck,
   Clock,
+  Eye,
+  EyeOff,
   FileBarChart2,
+  Image as ImageIcon,
+  KeyRound,
+  Lock,
   RefreshCw,
+  Save,
   Search,
   Shield,
   Trash2,
@@ -25,6 +31,14 @@ import {
   kickUserById,
   markAllAlertsRead,
 } from '../../services/authService';
+import {
+  clearAdminImageCoreKey,
+  fetchAdminImageCoreStatus,
+  maskImageKeyPreview,
+  saveAdminImageCoreKey,
+  unlockAdminImageCoreWithPassword,
+  type AdminImageCoreStatus,
+} from '../../services/imageGenService';
 import type {
   AdminDashboardSnapshot,
   DailyAdminReport,
@@ -83,8 +97,28 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
   const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null);
   const [actionBusyId, setActionBusyId] = useState<string | null>(null);
 
+  // Estado privado do Núcleo SARA (Geração de Imagens — exclusivo Admin)
+  const [coreImageStatus, setCoreImageStatus] = useState<AdminImageCoreStatus | null>(null);
+  const [coreImageLoading, setCoreImageLoading] = useState(true);
+  const [coreImageDraft, setCoreImageDraft] = useState('');
+  const [showMaskedPreview, setShowMaskedPreview] = useState(false);
+  const [coreImageSaving, setCoreImageSaving] = useState(false);
+  const [coreImageFeedback, setCoreImageFeedback] = useState<string | null>(null);
+  const [adminUnlockPass, setAdminUnlockPass] = useState('');
+  const [adminUnlockBusy, setAdminUnlockBusy] = useState(false);
+
   const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
+
+  const refreshCoreImageStatus = useCallback(async () => {
+    setCoreImageLoading(true);
+    try {
+      const status = await fetchAdminImageCoreStatus();
+      setCoreImageStatus(status);
+    } finally {
+      setCoreImageLoading(false);
+    }
+  }, []);
 
   const refreshData = useCallback(async () => {
     try {
@@ -98,11 +132,12 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
 
   useEffect(() => {
     void refreshData();
+    void refreshCoreImageStatus();
     const timer = setInterval(() => {
       void refreshData();
     }, 5000);
     return () => clearInterval(timer);
-  }, [refreshData]);
+  }, [refreshData, refreshCoreImageStatus]);
 
   // Gráfico Chart.js de sessões por hora hoje
   useEffect(() => {
@@ -296,6 +331,65 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
     onAlertsUpdated?.();
   };
 
+  const handleUnlockCoreVault = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminUnlockPass.trim()) return;
+    setAdminUnlockBusy(true);
+    setCoreImageFeedback(null);
+    try {
+      const res = await unlockAdminImageCoreWithPassword(session.email, adminUnlockPass);
+      if (!res.ok) {
+        setCoreImageFeedback(res.error || 'Senha de administrador inválida.');
+        return;
+      }
+      setAdminUnlockPass('');
+      await refreshCoreImageStatus();
+    } finally {
+      setAdminUnlockBusy(false);
+    }
+  };
+
+  const handleSaveCoreImageKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = coreImageDraft.trim();
+    if (!trimmed) {
+      setCoreImageFeedback('Cola a credencial de imagem antes de guardar.');
+      return;
+    }
+    setCoreImageSaving(true);
+    setCoreImageFeedback(null);
+    try {
+      const res = await saveAdminImageCoreKey(trimmed);
+      setCoreImageStatus(res);
+      if (res.ok) {
+        setCoreImageDraft('');
+        setShowMaskedPreview(false);
+        setCoreImageFeedback('Credencial guardada com segurança no Núcleo SARA.');
+      } else {
+        setCoreImageFeedback(res.error || 'Não foi possível guardar no Núcleo SARA.');
+      }
+    } finally {
+      setCoreImageSaving(false);
+    }
+  };
+
+  const handleClearCoreImageKey = async () => {
+    setCoreImageSaving(true);
+    setCoreImageFeedback(null);
+    try {
+      const res = await clearAdminImageCoreKey();
+      setCoreImageStatus(res);
+      if (res.ok) {
+        setCoreImageDraft('');
+        setCoreImageFeedback('Credencial removida do Núcleo SARA.');
+      } else {
+        setCoreImageFeedback(res.error || 'Não foi possível remover.');
+      }
+    } finally {
+      setCoreImageSaving(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[90] bg-[#020612]/92 backdrop-blur-md flex items-center justify-center p-2 sm:p-4">
       <div className="w-full max-w-[1440px] h-[92vh] bg-[#040a17] border border-cyan-500/30 rounded-2xl shadow-[0_24px_90px_rgba(0,0,0,0.85)] flex flex-col overflow-hidden text-slate-100">
@@ -366,8 +460,127 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
 
         {/* 3-Column Body */}
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-800/80 overflow-hidden">
-          {/* COLUNA 1: VISÃO GERAL + GRÁFICO + RELATÓRIO */}
+          {/* COLUNA 1: NÚCLEO SARA + VISÃO GERAL + GRÁFICO + RELATÓRIO */}
           <section className="lg:col-span-4 flex flex-col min-h-0 overflow-y-auto p-4 gap-4 bg-[#030814]">
+            {/* Secção Privada Núcleo SARA — Exclusiva Admin */}
+            <div className="p-3.5 rounded-xl bg-[#071022] border border-purple-500/35 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold tracking-[0.14em] uppercase text-purple-300 flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5 text-cyan-300" />
+                  Núcleo SARA
+                </span>
+                {coreImageLoading ? (
+                  <span className="text-[10px] font-mono text-slate-400">A verificar...</span>
+                ) : coreImageStatus?.configured ? (
+                  <span className="text-[10px] font-mono text-emerald-300">
+                    Ativo · {coreImageStatus.maskedKey || 'hf_****'}
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-mono text-amber-300">Não configurado</span>
+                )}
+              </div>
+
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Configuração privada do motor de criação de imagens. Todos os utilizadores geram imagens em segundo plano sem acesso a credenciais.
+              </p>
+
+              {coreImageStatus?.needsUnlock ? (
+                <form onSubmit={(e) => void handleUnlockCoreVault(e)} className="space-y-2">
+                  <div className="text-[11px] text-amber-200 flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 shrink-0" />
+                    <span>Confirma a tua senha Admin para desbloquear esta secção privada.</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="password"
+                      value={adminUnlockPass}
+                      onChange={(e) => setAdminUnlockPass(e.target.value)}
+                      placeholder="Senha da conta Admin..."
+                      autoComplete="current-password"
+                      className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[#040916] border border-slate-700 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+                    />
+                    <button
+                      type="submit"
+                      disabled={adminUnlockBusy || !adminUnlockPass.trim()}
+                      className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-200 text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      {adminUnlockBusy ? 'A validar...' : 'Desbloquear'}
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                <form onSubmit={(e) => void handleSaveCoreImageKey(e)} className="space-y-2">
+                  <label className="block text-[11px] font-semibold text-slate-300">
+                    Credencial de Imagem SARA
+                  </label>
+                  <div className="flex items-center gap-1.5">
+                    <div className="relative flex-1 min-w-0">
+                      <KeyRound className="w-3.5 h-3.5 text-purple-300 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="password"
+                        value={coreImageDraft}
+                        onChange={(e) => setCoreImageDraft(e.target.value)}
+                        placeholder={
+                          coreImageStatus?.configured && coreImageStatus.maskedKey
+                            ? `Guardada (${coreImageStatus.maskedKey}) — cola nova para atualizar`
+                            : 'Cola aqui a nova credencial (hf_...)'
+                        }
+                        autoComplete="off"
+                        spellCheck={false}
+                        className="w-full pl-8 pr-2.5 py-1.5 rounded-lg bg-[#040916] border border-slate-700 text-xs font-mono text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowMaskedPreview((v) => !v)}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-semibold flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+                      title={showMaskedPreview ? 'Esconder pré-visualização' : 'Mostrar pré-visualização mascarada'}
+                    >
+                      {showMaskedPreview ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                      <span>{showMaskedPreview ? 'Esconder' : 'Mostrar'}</span>
+                    </button>
+                  </div>
+
+                  {showMaskedPreview && (
+                    <div className="px-2.5 py-1.5 rounded-lg bg-[#040916] border border-cyan-500/30 text-[11px] font-mono text-cyan-200 flex items-center justify-between">
+                      <span>Máscara ativa:</span>
+                      <span className="font-bold">
+                        {coreImageDraft.trim()
+                          ? maskImageKeyPreview(coreImageDraft)
+                          : coreImageStatus?.maskedKey || 'Sem credencial'}
+                      </span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between gap-2 pt-0.5">
+                    <button
+                      type="submit"
+                      disabled={coreImageSaving || !coreImageDraft.trim()}
+                      className="px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-200 text-xs font-semibold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-45"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>{coreImageSaving ? 'A guardar...' : 'Guardar'}</span>
+                    </button>
+
+                    {coreImageStatus?.configured && (
+                      <button
+                        type="button"
+                        disabled={coreImageSaving}
+                        onClick={() => void handleClearCoreImageKey()}
+                        className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/35 text-rose-200 text-[11px] font-semibold whitespace-nowrap shrink-0 cursor-pointer disabled:opacity-45"
+                      >
+                        Remover
+                      </button>
+                    )}
+                  </div>
+                </form>
+              )}
+
+              {coreImageFeedback && (
+                <div className="text-[11px] text-cyan-200 pt-0.5">{coreImageFeedback}</div>
+              )}
+            </div>
+
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-bold tracking-[0.14em] uppercase text-cyan-300 flex items-center gap-1.5">
                 <Activity className="w-3.5 h-3.5" />

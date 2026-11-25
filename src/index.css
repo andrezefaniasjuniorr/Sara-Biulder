@@ -147,3 +147,89 @@
   border: none !important;
 }
 
+/* Controlo de camadas, geocoder e clusters no tema escuro SARA */
+.sara-leaflet-container .leaflet-control-layers {
+  background: rgba(4, 11, 27, 0.94);
+  border: 1px solid rgba(0, 229, 255, 0.45);
+  border-radius: 12px;
+  color: #e2e8f0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(8px);
+}
+
+.sara-leaflet-container .leaflet-control-layers-toggle {
+  filter: invert(0.92) hue-rotate(175deg) brightness(1.15);
+}
+
+.sara-leaflet-container .leaflet-control-layers-expanded {
+  padding: 8px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 178px;
+}
+
+.sara-leaflet-container .leaflet-control-layers-separator {
+  border-top-color: rgba(0, 229, 255, 0.22);
+  margin: 6px 0;
+}
+
+.sara-leaflet-container .leaflet-control-layers label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  cursor: pointer;
+}
+
+.sara-leaflet-container .leaflet-control-layers input[type='radio'],
+.sara-leaflet-container .leaflet-control-layers input[type='checkbox'] {
+  accent-color: #00e5ff;
+}
+
+.sara-leaflet-container .leaflet-control-geocoder {
+  background: rgba(4, 11, 27, 0.94);
+  border: 1px solid rgba(139, 92, 246, 0.55);
+  border-radius: 10px;
+  color: #f8fafc;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+}
+
+.sara-leaflet-container .leaflet-control-geocoder-icon {
+  background-color: transparent;
+  filter: invert(0.92) hue-rotate(170deg) brightness(1.1);
+}
+
+.sara-leaflet-container .leaflet-control-geocoder-form input {
+  color: #f8fafc;
+  background: transparent;
+  font-size: 11px;
+}
+
+.sara-leaflet-container .leaflet-control-geocoder-alternatives {
+  background: rgba(4, 11, 27, 0.98);
+  border-top: 1px solid rgba(0, 229, 255, 0.25);
+  color: #e2e8f0;
+}
+
+.sara-leaflet-container .leaflet-control-geocoder-alternatives li a:hover,
+.sara-leaflet-container .leaflet-control-geocoder-selected {
+  background: rgba(0, 229, 255, 0.16);
+}
+
+.sara-leaflet-container .leaflet-routing-container {
+  display: none;
+}
+
+.sara-cluster-badge {
+  width: 38px;
+  height: 38px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgba(0, 229, 255, 0.92) 0%, rgba(139, 92, 246, 0.92) 100%);
+  border: 2px solid #ffffff;
+  color: #020612;
+  font: 800 12px/34px 'JetBrains Mono', monospace;
+  text-align: center;
+  box-shadow: 0 0 18px rgba(0, 229, 255, 0.65);
+}
+
+

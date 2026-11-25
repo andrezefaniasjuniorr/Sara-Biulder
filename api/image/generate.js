@@ -1,24 +1,28 @@
+import { getBackendImageKey, isValidImageCoreKey } from '../_coreImageVault.js';
+
+const UNAVAILABLE_MSG = 'Geração de imagens indisponível no momento.';
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ ok: false, error: 'Método não permitido.' });
   }
 
-  const rawKey = String(req.headers['x-sara-image-key'] || '').trim();
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
   const prompt = String(body?.prompt || '').trim();
-
-  if (!rawKey || !rawKey.startsWith('hf_') || rawKey.length < 10) {
-    return res.status(401).json({
-      ok: false,
-      code: 'INVALID_KEY',
-      error: 'Coloca a tua chave de imagem nas Definições para gerar imagens.',
-    });
-  }
 
   if (!prompt || prompt.length > 1000) {
     return res.status(400).json({
       ok: false,
       error: 'Descrição inválida para gerar a imagem.',
+    });
+  }
+
+  const { imageKey } = await getBackendImageKey();
+  if (!isValidImageCoreKey(imageKey)) {
+    return res.status(503).json({
+      ok: false,
+      notConfigured: true,
+      error: UNAVAILABLE_MSG,
     });
   }
 
@@ -36,7 +40,7 @@ export default async function handler(req, res) {
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${rawKey}`,
+            Authorization: `Bearer ${imageKey}`,
             'Content-Type': 'application/json',
             Accept: 'image/png',
           },
@@ -50,10 +54,10 @@ export default async function handler(req, res) {
       clearTimeout(timer);
 
       if (upstream.status === 401 || upstream.status === 403) {
-        return res.status(401).json({
+        return res.status(503).json({
           ok: false,
-          code: 'INVALID_KEY',
-          error: 'Coloca a tua chave de imagem nas Definições para gerar imagens.',
+          notConfigured: true,
+          error: UNAVAILABLE_MSG,
         });
       }
 

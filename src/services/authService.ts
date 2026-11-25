@@ -40,6 +40,35 @@ const ALERTS_KEY = 'sara_admin_alerts_v1';
 const ACTIVE_SESSION_KEY = 'sara_active_session_v1';
 const DEVICE_CODE_KEY = 'sara_device_code_v1';
 
+// Token de sessão privada do Admin apenas em memória JS (nunca em localStorage/sessionStorage)
+let inMemoryAdminVaultToken: string | null = null;
+
+export function getInMemoryAdminVaultToken(): string | null {
+  return inMemoryAdminVaultToken;
+}
+
+export function setInMemoryAdminVaultToken(token: string | null): void {
+  inMemoryAdminVaultToken = token;
+}
+
+async function mintInMemoryAdminToken(email: string, password: string): Promise<void> {
+  try {
+    const res = await fetch('/api/admin/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    if (res.ok) {
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; token?: string } | null;
+      if (data?.ok && data.token) {
+        inMemoryAdminVaultToken = data.token;
+      }
+    }
+  } catch {
+    // ignore if offline
+  }
+}
+
 const SAFE_ID_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 function generateRandomFourChars(): string {
@@ -502,6 +531,9 @@ export async function registerAccount(input: {
 
   persistActiveSession(session);
   createOrUpdateSessionLog(session);
+  if (isOwner) {
+    void mintInMemoryAdminToken(email, password);
+  }
 
   return { session, account };
 }
@@ -677,6 +709,10 @@ export async function loginAccount(input: {
 
   persistActiveSession(session);
   createOrUpdateSessionLog(session);
+  if (isOwner) {
+    void loginEmail(email, password).catch(() => {});
+    void mintInMemoryAdminToken(email, password);
+  }
 
   return { session, account: cleanAccount };
 }
@@ -721,6 +757,7 @@ export async function logoutCurrentSession(session: SaraSession | null): Promise
       void saveSessionLogCloud(updated);
     }
   }
+  inMemoryAdminVaultToken = null;
   persistActiveSession(null);
   try {
     await firebaseSignOut();

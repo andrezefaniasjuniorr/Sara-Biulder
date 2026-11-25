@@ -1154,6 +1154,7 @@ export const RadarMapPanel: React.FC<RadarMapPanelProps> = ({
             setLockedTargetId(`place_${place.id}`);
             setRouteEnabled(false);
           }}
+          onViewModeChange={setViewMode}
           onRouteComputed={setComputedRoute}
           onRecenterMyLocation={() => void refreshRealGps()}
           onOpenStreetViewAt={(lat, lng, label) => setStreetViewTarget({ lat, lng, label })}

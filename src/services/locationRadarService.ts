@@ -377,6 +377,24 @@ export async function requestCurrentCoordinates(
 // ENDEREÇO REAL (REVERSE GEOCODING VIA PROXY SERVIDOR - MOÇAMBIQUE PT)
 // =========================================================================
 
+const MZ_GEO_BOUNDS = {
+  minLat: -26.95,
+  maxLat: -10.35,
+  minLng: 30.15,
+  maxLng: 41.05,
+};
+
+function isInsideMzBounds(lat: number, lng: number): boolean {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    lat >= MZ_GEO_BOUNDS.minLat &&
+    lat <= MZ_GEO_BOUNDS.maxLat &&
+    lng >= MZ_GEO_BOUNDS.minLng &&
+    lng <= MZ_GEO_BOUNDS.maxLng
+  );
+}
+
 const reverseGeocodeMemoryCache = new Map<string, GeocodedAddressInfo>();
 
 export async function reverseGeocodeCoords(
@@ -394,15 +412,74 @@ export async function reverseGeocodeCoords(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ lat, lng }),
     });
-    if (!res.ok) return null;
-    const data = (await res.json()) as Partial<GeocodedAddressInfo>;
+    if (res.ok) {
+      const data = (await res.json()) as Partial<GeocodedAddressInfo>;
+      const info: GeocodedAddressInfo = {
+        formattedAddress: data.formattedAddress || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+        street: data.street || '',
+        neighborhood: data.neighborhood || '',
+        city: data.city || '',
+        country: data.country || '',
+        placeId: data.placeId,
+        updatedAt: new Date().toISOString(),
+      };
+      reverseGeocodeMemoryCache.set(cacheKey, info);
+      return info;
+    }
+  } catch {
+    // Fallback direto OpenStreetMap Nominatim
+  }
+
+  try {
+    const nomUrl = new URL('https://nominatim.openstreetmap.org/reverse');
+    nomUrl.searchParams.set('format', 'jsonv2');
+    nomUrl.searchParams.set('lat', String(lat));
+    nomUrl.searchParams.set('lon', String(lng));
+    nomUrl.searchParams.set('zoom', '18');
+    nomUrl.searchParams.set('addressdetails', '1');
+    nomUrl.searchParams.set('accept-language', 'pt');
+    const directRes = await fetch(nomUrl.toString(), {
+      headers: { Accept: 'application/json' },
+    });
+    if (!directRes.ok) return null;
+    const direct = (await directRes.json()) as {
+      display_name?: string;
+      address?: Record<string, string>;
+    };
+    const addr = direct.address || {};
+    const street = [
+      addr.road || addr.pedestrian || addr.footway || addr.path || addr.cycleway || '',
+      addr.house_number || '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    const neighborhood =
+      addr.suburb ||
+      addr.neighbourhood ||
+      addr.quarter ||
+      addr.city_district ||
+      addr.residential ||
+      addr.hamlet ||
+      '';
+    const city =
+      addr.city ||
+      addr.town ||
+      addr.village ||
+      addr.municipality ||
+      addr.county ||
+      addr.state ||
+      '';
+    const country = addr.country || '';
+    const compactParts = [street, neighborhood, city, country].filter(Boolean);
     const info: GeocodedAddressInfo = {
-      formattedAddress: data.formattedAddress || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
-      street: data.street || '',
-      neighborhood: data.neighborhood || '',
-      city: data.city || '',
-      country: data.country || '',
-      placeId: data.placeId,
+      formattedAddress:
+        compactParts.length > 0
+          ? compactParts.join(', ')
+          : direct.display_name || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+      street,
+      neighborhood,
+      city,
+      country,
       updatedAt: new Date().toISOString(),
     };
     reverseGeocodeMemoryCache.set(cacheKey, info);
@@ -412,12 +489,32 @@ export async function reverseGeocodeCoords(
   }
 }
 
-export async function searchFreeRadarPlaces(
+export async function searchFreeRadarPlacesDetailed(
   query: string,
   biasCoords?: { lat: number; lng: number } | null
-): Promise<RadarPlaceResult[]> {
+): Promise<{ results: RadarPlaceResult[]; notFoundMessage: string }> {
   const clean = query.trim();
-  if (clean.length < 2) return [];
+  if (clean.length < 2) return { results: [], notFoundMessage: '' };
+
+  const attachDistance = (
+    items: Array<{
+      id: string;
+      name: string;
+      address?: string;
+      lat: number;
+      lng: number;
+      categoryLabel?: string;
+    }>
+  ): RadarPlaceResult[] =>
+    items
+      .filter((item) => isInsideMzBounds(item.lat, item.lng))
+      .map((item) => ({
+        ...item,
+        distanceMeters: biasCoords
+          ? calcDistanceMeters(biasCoords.lat, biasCoords.lng, item.lat, item.lng)
+          : null,
+      }));
+
   try {
     const res = await fetch('/api/maps/search-places', {
       method: 'POST',
@@ -428,26 +525,151 @@ export async function searchFreeRadarPlaces(
         lng: biasCoords?.lng,
       }),
     });
-    if (!res.ok) return [];
-    const data = (await res.json()) as {
-      results?: Array<{
-        id: string;
-        name: string;
-        address?: string;
-        lat: number;
-        lng: number;
-        categoryLabel?: string;
-      }>;
-    };
-    return (data?.results || []).map((item) => ({
-      ...item,
-      distanceMeters: biasCoords
-        ? calcDistanceMeters(biasCoords.lat, biasCoords.lng, item.lat, item.lng)
-        : null,
-    }));
+    if (res.ok) {
+      const data = (await res.json()) as {
+        results?: Array<{
+          id: string;
+          name: string;
+          address?: string;
+          lat: number;
+          lng: number;
+          categoryLabel?: string;
+        }>;
+        notFoundMessage?: string;
+      };
+      const results = attachDistance(data?.results || []);
+      return {
+        results,
+        notFoundMessage:
+          results.length === 0 ? data?.notFoundMessage || 'Não encontrado em Moçambique' : '',
+      };
+    }
   } catch {
-    return [];
+    // Fallback direto Nominatim + Photon focado em Moçambique
   }
+
+  const hasBias = Boolean(biasCoords && isInsideMzBounds(biasCoords.lat, biasCoords.lng));
+  const biasLat = hasBias && biasCoords ? biasCoords.lat : -25.9692;
+  const biasLng = hasBias && biasCoords ? biasCoords.lng : 32.5732;
+
+  const nomUrl = new URL('https://nominatim.openstreetmap.org/search');
+  nomUrl.searchParams.set('format', 'jsonv2');
+  nomUrl.searchParams.set('q', clean);
+  nomUrl.searchParams.set('countrycodes', 'mz');
+  nomUrl.searchParams.set('addressdetails', '1');
+  nomUrl.searchParams.set('accept-language', 'pt');
+  nomUrl.searchParams.set('limit', '8');
+  nomUrl.searchParams.set('viewbox', '32.30,-26.15,32.78,-25.75');
+  nomUrl.searchParams.set('bounded', '0');
+
+  const phoUrl = new URL('https://photon.komoot.io/api/');
+  phoUrl.searchParams.set('q', clean);
+  phoUrl.searchParams.set('lat', String(biasLat));
+  phoUrl.searchParams.set('lon', String(biasLng));
+  phoUrl.searchParams.set('limit', '10');
+
+  const [nomRes, phoRes] = await Promise.allSettled([
+    fetch(nomUrl.toString(), { headers: { Accept: 'application/json' } }).then((r) =>
+      r.ok ? r.json() : []
+    ),
+    fetch(phoUrl.toString(), { headers: { Accept: 'application/json' } }).then((r) =>
+      r.ok ? r.json() : { features: [] }
+    ),
+  ]);
+
+  const rawItems: Array<{
+    id: string;
+    name: string;
+    address?: string;
+    lat: number;
+    lng: number;
+    categoryLabel?: string;
+  }> = [];
+
+  if (nomRes.status === 'fulfilled' && Array.isArray(nomRes.value)) {
+    nomRes.value.forEach((item: Record<string, unknown>, idx: number) => {
+      const rLat = Number(item?.lat);
+      const rLng = Number(item?.lon);
+      if (!isInsideMzBounds(rLat, rLng)) return;
+      const addr = (item.address as Record<string, string>) || {};
+      const displayName = typeof item.display_name === 'string' ? item.display_name : '';
+      const shortName =
+        (typeof item.name === 'string' && item.name) ||
+        addr.road ||
+        addr.suburb ||
+        addr.neighbourhood ||
+        (displayName ? displayName.split(',')[0] : clean);
+      rawItems.push({
+        id: String(item.place_id || `nom_${idx}`),
+        name: String(shortName || clean).trim(),
+        address: displayName || undefined,
+        lat: rLat,
+        lng: rLng,
+        categoryLabel: typeof item.type === 'string' ? item.type : undefined,
+      });
+    });
+  }
+
+  if (phoRes.status === 'fulfilled' && Array.isArray(phoRes.value?.features)) {
+    phoRes.value.features.forEach((feat: Record<string, unknown>, idx: number) => {
+      const geom = feat?.geometry as { coordinates?: number[] } | undefined;
+      const props = (feat?.properties as Record<string, string | number>) || {};
+      if (!Array.isArray(geom?.coordinates) || geom.coordinates.length < 2) return;
+      const rLng = Number(geom.coordinates[0]);
+      const rLat = Number(geom.coordinates[1]);
+      if (!isInsideMzBounds(rLat, rLng)) return;
+      const cc = String(props.countrycode || '').toUpperCase();
+      if (cc && cc !== 'MZ') return;
+      const name = String(props.name || props.street || props.district || clean).trim();
+      const addrParts = [props.street, props.district || props.locality, props.city, props.country]
+        .filter(Boolean)
+        .map(String);
+      rawItems.push({
+        id: String(props.osm_id ? `pho_${props.osm_id}` : `pho_${idx}`),
+        name,
+        address: addrParts.length > 0 ? addrParts.join(', ') : undefined,
+        lat: rLat,
+        lng: rLng,
+        categoryLabel: typeof props.osm_value === 'string' ? props.osm_value : undefined,
+      });
+    });
+  }
+
+  const deduped: typeof rawItems = [];
+  for (const item of rawItems) {
+    const exists = deduped.some(
+      (x) =>
+        Math.abs(x.lat - item.lat) < 0.0004 &&
+        Math.abs(x.lng - item.lng) < 0.0004 &&
+        x.name.toLowerCase() === item.name.toLowerCase()
+    );
+    if (!exists) deduped.push(item);
+  }
+
+  deduped.sort((a, b) => {
+    const aText = `${a.name} ${a.address || ''}`.toLowerCase();
+    const bText = `${b.name} ${b.address || ''}`.toLowerCase();
+    const aPri = /maputo|matola/.test(aText) ? 0 : 1;
+    const bPri = /maputo|matola/.test(bText) ? 0 : 1;
+    if (aPri !== bPri) return aPri - bPri;
+    const da = (a.lat - biasLat) ** 2 + (a.lng - biasLng) ** 2;
+    const db = (b.lat - biasLat) ** 2 + (b.lng - biasLng) ** 2;
+    return da - db;
+  });
+
+  const finalResults = attachDistance(deduped.slice(0, 8));
+  return {
+    results: finalResults,
+    notFoundMessage: finalResults.length === 0 ? 'Não encontrado em Moçambique' : '',
+  };
+}
+
+export async function searchFreeRadarPlaces(
+  query: string,
+  biasCoords?: { lat: number; lng: number } | null
+): Promise<RadarPlaceResult[]> {
+  const { results } = await searchFreeRadarPlacesDetailed(query, biasCoords);
+  return results;
 }
 
 export async function computeFreeRadarRoute(
@@ -465,26 +687,68 @@ export async function computeFreeRadarRoute(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ origin, destination }),
     });
-    if (!res.ok) return null;
-    const data = (await res.json()) as {
-      ok?: boolean;
-      distanceMeters?: number;
-      durationSeconds?: number;
-      path?: Array<[number, number]>;
-    };
-    if (!data?.ok || !Array.isArray(data.path) || data.path.length < 2) return null;
-    const distanceMeters = Math.round(Number(data.distanceMeters ?? 0));
-    const durationSeconds = Math.max(60, Math.round(Number(data.durationSeconds ?? 60)));
-    const chapaDurationSeconds = Math.round(durationSeconds * 1.55 + 180);
-    return {
-      distanceMeters,
-      durationSeconds,
-      chapaDurationSeconds,
-      path: data.path,
-    };
+    if (res.ok) {
+      const data = (await res.json()) as {
+        ok?: boolean;
+        distanceMeters?: number;
+        durationSeconds?: number;
+        path?: Array<[number, number]>;
+      };
+      if (data?.ok && Array.isArray(data.path) && data.path.length >= 2) {
+        const distanceMeters = Math.round(Number(data.distanceMeters ?? 0));
+        const durationSeconds = Math.max(60, Math.round(Number(data.durationSeconds ?? 60)));
+        const chapaDurationSeconds = Math.round(durationSeconds * 1.55 + 180);
+        return {
+          distanceMeters,
+          durationSeconds,
+          chapaDurationSeconds,
+          path: data.path,
+        };
+      }
+    }
   } catch {
-    return null;
+    // Fallback direto OSRM público
   }
+
+  try {
+    const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`;
+    const r = await fetch(osrmUrl, { headers: { Accept: 'application/json' } });
+    if (r.ok) {
+      const json = (await r.json()) as {
+        routes?: Array<{
+          distance?: number;
+          duration?: number;
+          geometry?: { coordinates?: Array<[number, number]> };
+        }>;
+      };
+      const first = json.routes?.[0];
+      const coords = first?.geometry?.coordinates;
+      if (first && Array.isArray(coords) && coords.length >= 2) {
+        const distanceMeters = Math.round(Number(first.distance ?? 0));
+        const durationSeconds = Math.max(60, Math.round(Number(first.duration ?? 60)));
+        return {
+          distanceMeters,
+          durationSeconds,
+          chapaDurationSeconds: Math.round(durationSeconds * 1.55 + 180),
+          path: coords.map(([lngVal, latVal]) => [latVal, lngVal]),
+        };
+      }
+    }
+  } catch {
+    // fallback linha direta
+  }
+
+  const straight = calcDistanceMeters(origin.lat, origin.lng, destination.lat, destination.lng);
+  const dur = Math.max(60, Math.round(straight / 8.5));
+  return {
+    distanceMeters: straight,
+    durationSeconds: dur,
+    chapaDurationSeconds: Math.round(dur * 1.55 + 180),
+    path: [
+      [origin.lat, origin.lng],
+      [destination.lat, destination.lng],
+    ],
+  };
 }
 
 // =========================================================================

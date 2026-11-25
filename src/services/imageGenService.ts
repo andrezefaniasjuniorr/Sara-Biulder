@@ -1,40 +1,32 @@
-export const IMAGE_CORE_KEY_STORAGE = 'sara_image_core_key_v1';
-export const IMAGE_MISSING_KEY_MESSAGE =
-  'Coloca a tua chave de imagem nas Definições para gerar imagens.';
+import { getInMemoryAdminVaultToken, setInMemoryAdminVaultToken } from './authService';
+import { getCurrentFirebaseIdToken } from './firebaseService';
+
+export const IMAGE_MISSING_KEY_MESSAGE = 'Geração de imagens indisponível no momento.';
 export const IMAGE_CREATING_MESSAGE = 'A criar a tua imagem...';
 export const PROFILE_PHOTO_EVENT = 'sara-profile-photo-updated';
 
+const LEGACY_IMAGE_KEY_STORAGE = 'sara_image_core_key_v1';
 const PROFILE_PHOTO_PREFIX = 'sara_profile_photo_v1_';
 
-export function getSavedImageCoreKey(): string {
-  try {
-    return (localStorage.getItem(IMAGE_CORE_KEY_STORAGE) || '').trim();
-  } catch {
-    return '';
+// Limpa imediatamente qualquer chave antiga guardada localmente no navegador
+try {
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem(LEGACY_IMAGE_KEY_STORAGE);
   }
+} catch {
+  // ignore
 }
 
-export function saveImageCoreKey(key: string): void {
-  const clean = key.trim();
-  try {
-    if (clean) {
-      localStorage.setItem(IMAGE_CORE_KEY_STORAGE, clean);
-    } else {
-      localStorage.removeItem(IMAGE_CORE_KEY_STORAGE);
-    }
-  } catch {
-    // ignore storage quota errors
-  }
-}
-
-export function hasValidImageKeyFormat(key?: string): boolean {
-  const clean = (key ?? getSavedImageCoreKey()).trim();
-  return clean.startsWith('hf_') && clean.length >= 10;
+export function maskImageKeyPreview(rawKey: string): string {
+  const clean = String(rawKey || '').trim();
+  if (!clean) return '';
+  const suffix = clean.length >= 4 ? clean.slice(-4) : '••••';
+  return `hf_****${suffix}`;
 }
 
 /**
  * Deteta pedidos espontâneos para gerar imagem no chat ou por voz.
- * Exemplo: "SARA, gera uma imagem de um leão dourado", "cria uma imagem de..."
+ * Exemplo: "SARA, cria uma imagem de um leão dourado", "SARA, gera uma imagem de..."
  */
 export function extractImageGenPrompt(rawText: string): string | null {
   const clean = String(rawText || '')
@@ -47,7 +39,7 @@ export function extractImageGenPrompt(rawText: string): string | null {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 
-  // Evita confundir edição ou abertura de ficheiros locais ("abre a minha imagem", "mostra as minhas fotos")
+  // Evita confundir edição ou abertura de ficheiros locais
   if (
     /^(?:sara[,\s]+)?(?:abre|abrir|mostra|mostrar|ver|edita|apaga|apagar)\b/i.test(normalized)
   ) {
@@ -89,16 +81,6 @@ export async function generateSaraImage(
     };
   }
 
-  const key = getSavedImageCoreKey();
-  if (!hasValidImageKeyFormat(key)) {
-    return {
-      ok: false,
-      missingOrInvalidKey: true,
-      error: IMAGE_MISSING_KEY_MESSAGE,
-    };
-  }
-
-  // Para "Gerar Outra", adicionamos uma leve variação invisível de semente textual
   const effectivePrompt = options?.variationSeed
     ? `${cleanPrompt} (variação visual ${options.variationSeed})`
     : cleanPrompt;
@@ -108,7 +90,6 @@ export async function generateSaraImage(
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-sara-image-key': key,
       },
       body: JSON.stringify({ prompt: effectivePrompt }),
     });
@@ -116,11 +97,15 @@ export async function generateSaraImage(
     const data = (await response.json().catch(() => null)) as {
       ok?: boolean;
       dataUrl?: string;
-      code?: string;
+      notConfigured?: boolean;
       error?: string;
     } | null;
 
-    if (response.status === 401 || response.status === 403 || data?.code === 'INVALID_KEY') {
+    if (
+      data?.notConfigured ||
+      response.status === 401 ||
+      response.status === 403
+    ) {
       return {
         ok: false,
         missingOrInvalidKey: true,
@@ -128,7 +113,12 @@ export async function generateSaraImage(
       };
     }
 
-    if (!response.ok || !data?.ok || typeof data.dataUrl !== 'string' || !data.dataUrl.startsWith('data:image/')) {
+    if (
+      !response.ok ||
+      !data?.ok ||
+      typeof data.dataUrl !== 'string' ||
+      !data.dataUrl.startsWith('data:image/')
+    ) {
       return {
         ok: false,
         missingOrInvalidKey: false,
@@ -142,6 +132,192 @@ export async function generateSaraImage(
       ok: false,
       missingOrInvalidKey: false,
       error: 'Núcleo SARA indisponível no momento. Verifica a tua ligação e tenta novamente.',
+    };
+  }
+}
+
+// =========================================================================
+// FUNÇÕES PRIVADAS EXCLUSIVAS DO PAINEL DO ADMIN (NÚCLEO SARA)
+// =========================================================================
+
+async function resolveAdminBearerToken(): Promise<string | null> {
+  const fbToken = await getCurrentFirebaseIdToken();
+  if (fbToken) return fbToken;
+  return getInMemoryAdminVaultToken();
+}
+
+export interface AdminImageCoreStatus {
+  ok: boolean;
+  needsUnlock?: boolean;
+  configured: boolean;
+  maskedKey: string | null;
+  updatedAt: string | null;
+  error?: string;
+}
+
+export async function unlockAdminImageCoreWithPassword(
+  email: string,
+  password: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/admin/auth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      token?: string;
+      error?: string;
+    } | null;
+    if (!res.ok || !data?.ok || !data.token) {
+      return { ok: false, error: data?.error || 'Senha de administrador incorreta.' };
+    }
+    setInMemoryAdminVaultToken(data.token);
+    return { ok: true };
+  } catch {
+    return { ok: false, error: 'Núcleo SARA indisponível neste momento.' };
+  }
+}
+
+export async function fetchAdminImageCoreStatus(): Promise<AdminImageCoreStatus> {
+  const token = await resolveAdminBearerToken();
+  if (!token) {
+    return { ok: false, needsUnlock: true, configured: false, maskedKey: null, updatedAt: null };
+  }
+  try {
+    const res = await fetch('/api/admin/core-image-key', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      code?: string;
+      configured?: boolean;
+      maskedKey?: string | null;
+      updatedAt?: string | null;
+      error?: string;
+    } | null;
+
+    if (res.status === 401 || data?.code === 'ADMIN_AUTH_REQUIRED') {
+      return { ok: false, needsUnlock: true, configured: false, maskedKey: null, updatedAt: null };
+    }
+    if (!res.ok || !data?.ok) {
+      return {
+        ok: false,
+        configured: false,
+        maskedKey: null,
+        updatedAt: null,
+        error: data?.error || 'Erro ao consultar o Núcleo SARA.',
+      };
+    }
+    return {
+      ok: true,
+      configured: Boolean(data.configured),
+      maskedKey: data.maskedKey || null,
+      updatedAt: data.updatedAt || null,
+    };
+  } catch {
+    return {
+      ok: false,
+      configured: false,
+      maskedKey: null,
+      updatedAt: null,
+      error: 'Sem ligação ao Núcleo SARA.',
+    };
+  }
+}
+
+export async function saveAdminImageCoreKey(rawKey: string): Promise<AdminImageCoreStatus> {
+  const token = await resolveAdminBearerToken();
+  if (!token) {
+    return { ok: false, needsUnlock: true, configured: false, maskedKey: null, updatedAt: null };
+  }
+  try {
+    const res = await fetch('/api/admin/core-image-key', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ key: rawKey.trim() }),
+    });
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      code?: string;
+      configured?: boolean;
+      maskedKey?: string | null;
+      updatedAt?: string | null;
+      error?: string;
+    } | null;
+
+    if (res.status === 401 || data?.code === 'ADMIN_AUTH_REQUIRED') {
+      return { ok: false, needsUnlock: true, configured: false, maskedKey: null, updatedAt: null };
+    }
+    if (!res.ok || !data?.ok) {
+      return {
+        ok: false,
+        configured: false,
+        maskedKey: null,
+        updatedAt: null,
+        error: data?.error || 'Não foi possível guardar no Núcleo SARA.',
+      };
+    }
+    return {
+      ok: true,
+      configured: Boolean(data.configured),
+      maskedKey: data.maskedKey || null,
+      updatedAt: data.updatedAt || null,
+    };
+  } catch {
+    return {
+      ok: false,
+      configured: false,
+      maskedKey: null,
+      updatedAt: null,
+      error: 'Sem ligação ao Núcleo SARA.',
+    };
+  }
+}
+
+export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
+  const token = await resolveAdminBearerToken();
+  if (!token) {
+    return { ok: false, needsUnlock: true, configured: false, maskedKey: null, updatedAt: null };
+  }
+  try {
+    const res = await fetch('/api/admin/core-image-key', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = (await res.json().catch(() => null)) as {
+      ok?: boolean;
+      configured?: boolean;
+      maskedKey?: string | null;
+      updatedAt?: string | null;
+      error?: string;
+    } | null;
+    if (!res.ok || !data?.ok) {
+      return {
+        ok: false,
+        configured: false,
+        maskedKey: null,
+        updatedAt: null,
+        error: data?.error || 'Não foi possível remover do Núcleo SARA.',
+      };
+    }
+    return {
+      ok: true,
+      configured: Boolean(data.configured),
+      maskedKey: data.maskedKey || null,
+      updatedAt: data.updatedAt || null,
+    };
+  } catch {
+    return {
+      ok: false,
+      configured: false,
+      maskedKey: null,
+      updatedAt: null,
+      error: 'Sem ligação ao Núcleo SARA.',
     };
   }
 }
