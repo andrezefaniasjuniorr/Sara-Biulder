@@ -1,5 +1,28 @@
 export type DeviceCommandType = 'ring' | 'lock' | 'wipe';
 
+export type RadarMapViewMode = 'roadmap' | 'hybrid' | 'terrain';
+
+export type LocationSignalSource = 'gps' | 'network' | 'ip_approx' | 'last_known' | 'none';
+
+export interface GpsCoordinateResult {
+  lat: number;
+  lng: number;
+  accuracyM: number | null;
+  speedMps: number | null;
+  timestamp: number;
+  source: 'gps' | 'network' | 'ip_approx';
+}
+
+export interface GeocodedAddressInfo {
+  formattedAddress: string;
+  street: string;
+  neighborhood: string;
+  city: string;
+  country: string;
+  placeId?: string;
+  updatedAt: string;
+}
+
 export interface RemoteDeviceCommand {
   id: string;
   type: DeviceCommandType;
@@ -24,10 +47,11 @@ export interface SaraDeviceRecord {
   lowBatteryAutoLocate: boolean;
   sosSmsEnabled: boolean;
   sosPhoneNumber: string;
-  // Apenas a posição atual / mais recente — nunca guarda histórico de deslocações
+  // Apenas a posição atual / mais recente
   lastLat: number | null;
   lastLng: number | null;
   lastAccuracyM: number | null;
+  speedMps?: number | null;
   pendingCommand?: RemoteDeviceCommand | null;
 }
 
@@ -37,10 +61,13 @@ export interface RadarPresence {
   callName: string;
   visible: boolean;
   ghostMode: boolean;
-  // Apenas localização ao vivo no momento — nunca histórico
+  // Localização ao vivo no momento
   lat: number | null;
   lng: number | null;
   accuracyM?: number | null;
+  speedMps?: number | null;
+  batteryPct?: number | null;
+  stationedSince?: string | null;
   updatedAt: string;
 }
 
@@ -73,29 +100,58 @@ export interface SharedPeerLocation {
   lat: number;
   lng: number;
   accuracyM?: number | null;
+  speedMps?: number | null;
+  batteryPct?: number | null;
+  stationedSince?: string | null;
   updatedAt: string;
   expiresAt: number;
   distanceMeters: number | null;
   direction: 'incoming_grant' | 'outgoing_grant';
 }
 
-export type OsmPoiCategory =
-  | 'perto'
-  | 'comida'
-  | 'farmacia'
-  | 'atm'
-  | 'chapa'
-  | 'negocios';
-
-export interface OsmPoiItem {
+export interface RadarPlaceResult {
   id: string;
   name: string;
-  category: OsmPoiCategory;
-  categoryLabel: string;
+  address?: string;
   lat: number;
   lng: number;
-  distanceMeters: number;
-  address?: string;
+  distanceMeters: number | null;
+  categoryLabel?: string;
+}
+
+export interface MovementHistoryPoint {
+  lat: number;
+  lng: number;
+  timestamp: number;
+  speedMps?: number | null;
+  addressLabel?: string;
+}
+
+export interface GeofenceZone {
+  id: string;
+  label: string;
+  centerLat: number;
+  centerLng: number;
+  radiusMeters: number;
+  active: boolean;
+  lastStatus?: 'inside' | 'outside';
+}
+
+export interface LiveShareRecord {
+  shareId: string;
+  ownerUid: string;
+  saraId: string;
+  callName: string;
+  deviceCode: string;
+  lat: number;
+  lng: number;
+  speedMps: number | null;
+  batteryPct: number | null;
+  addressLabel: string;
+  active: boolean;
+  createdAt: string;
+  expiresAt: number;
+  updatedAt: string;
 }
 
 export interface BackgroundSettings {

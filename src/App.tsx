@@ -62,7 +62,9 @@ import type {
   BackgroundReminder,
   BackgroundSettings,
   DeviceLockState,
+  LiveShareRecord,
   LocationRequestItem,
+  LocationSignalSource,
   SaraDeviceRecord,
   SharedPeerLocation,
 } from './types/location';
@@ -107,16 +109,21 @@ import {
   buildEmergencySmsUri,
   evaluateOfflineSosCondition,
   executeRemoteDeviceWipeLocal,
+  formatSpeedKmh,
+  formatTimeAgoPt,
   getSavedDeviceLockState,
   hideFromRadarImmediately,
   markCurrentDeviceOfflineOnLogout,
   publishCurrentRadarPresence,
   requestCurrentCoordinates,
+  requestRealCoordinatesWithFallback,
   respondToLocationRequest,
+  reverseGeocodeCoords,
   setSavedDeviceLockState,
   setSavedRadarVisibilityPref,
   stopAllOutgoingShares,
   subscribeAccountDevices,
+  subscribeLiveShareSession,
   subscribeRadarRequestsAndPeers,
   syncCurrentDeviceTelemetry,
 } from './services/locationRadarService';
@@ -207,6 +214,9 @@ import { LoginGateScreen } from './components/auth/LoginGateScreen';
 import { AdminPanelModal } from './components/admin/AdminPanelModal';
 import { type ProfileSubTab } from './components/profile/ProfileAndFindPhonePanel';
 import { FloatingSaraBubble } from './components/background/FloatingSaraBubble';
+import { type RadarExternalControlHandle } from './components/map/RadarMapPanel';
+import { GoogleMapsWrapper } from './components/map/GoogleMapsWrapper';
+import { GoogleSaraMapView } from './components/map/GoogleSaraMapView';
 
 const WORKSPACE_MODE_KEY = 'sara_workspace_mode_v1';
 const PROJECTS_STORAGE_KEY = 'sara_biulder_projects_v2';
@@ -412,6 +422,119 @@ function computeLiveBuildPct(info: LiveBuildInfo): number {
   return 38;
 }
 
+const LiveShareViewerScreen: React.FC<{
+  shareId: string;
+  onExit: () => void;
+}> = ({ shareId, onExit }) => {
+  const [liveData, setLiveData] = useState<LiveShareRecord | null>(null);
+  const [loadedOnce, setLoadedOnce] = useState(false);
+
+  useEffect(() => {
+    const unsub = subscribeLiveShareSession(shareId, (record) => {
+      setLiveData(record);
+      setLoadedOnce(true);
+    });
+    return () => unsub();
+  }, [shareId]);
+
+  const isExpired =
+    !liveData ||
+    !liveData.active ||
+    (typeof liveData.expiresAt === 'number' && liveData.expiresAt <= Date.now());
+
+  const markers = useMemo(() => {
+    if (!liveData || isExpired) return [];
+    return [
+      {
+        id: `live_${liveData.shareId}`,
+        lat: liveData.lat,
+        lng: liveData.lng,
+        title: liveData.callName,
+        subtitle: liveData.addressLabel,
+        badge: liveData.batteryPct !== null ? `${liveData.batteryPct}%` : undefined,
+        tone: 'target_locked' as const,
+        avatarText: (liveData.callName || 'S').slice(0, 2).toUpperCase(),
+      },
+    ];
+  }, [liveData, isExpired]);
+
+  return (
+    <div className="h-screen w-screen flex flex-col bg-[#020612] text-white overflow-hidden">
+      <div className="px-4 py-3 bg-[#070D1D] border-b border-cyan-500/25 flex items-center justify-between gap-3 shrink-0">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-400/40 flex items-center justify-center shrink-0">
+            <Radio className="w-4 h-4 text-cyan-300 animate-pulse" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-cyan-300">
+              SARA RADAR · PARTILHA AO VIVO
+            </div>
+            <div className="text-sm font-bold text-white truncate">
+              {liveData ? `${liveData.callName} (${liveData.saraId})` : 'A localizar transmissão ao vivo...'}
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onExit}
+          className="px-3 py-1.5 rounded-lg bg-slate-800/90 hover:bg-slate-700 border border-slate-600/70 text-xs font-semibold text-slate-200 cursor-pointer shrink-0"
+        >
+          Abrir SARA
+        </button>
+      </div>
+
+      {!loadedOnce ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-300">
+          <Loader2 className="w-7 h-7 animate-spin text-cyan-300" />
+          <span className="text-xs font-mono">A ligar à partilha em tempo real...</span>
+        </div>
+      ) : isExpired ? (
+        <div className="flex-1 flex flex-col items-center justify-center gap-3 px-6 text-center">
+          <MapPin className="w-10 h-10 text-rose-400" />
+          <div className="text-base font-bold text-white">Partilha ao vivo terminada</div>
+          <p className="text-xs text-slate-400 max-w-sm">
+            Esta ligação de partilha foi encerrada pelo utilizador ou atingiu o tempo limite.
+          </p>
+          <button
+            type="button"
+            onClick={onExit}
+            className="mt-2 px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-[#020612] text-xs font-bold cursor-pointer"
+          >
+            Voltar para a SARA
+          </button>
+        </div>
+      ) : (
+        <div className="flex-1 min-h-0 flex flex-col">
+          <div className="px-4 py-2 bg-[#060C1B] border-b border-cyan-500/20 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-slate-300 shrink-0">
+            <span className="truncate max-w-full">
+              Rua / Local: <strong className="text-white">{liveData.addressLabel}</strong>
+            </span>
+            <div className="flex items-center gap-3 shrink-0">
+              <span>Velocidade: {formatSpeedKmh(liveData.speedMps)}</span>
+              {liveData.batteryPct !== null && <span>Bateria: {liveData.batteryPct}%</span>}
+              <span className="text-emerald-300">Atualizado {formatTimeAgoPt(liveData.updatedAt)}</span>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 relative">
+            <GoogleMapsWrapper>
+              <GoogleSaraMapView
+                centerLat={liveData.lat}
+                centerLng={liveData.lng}
+                zoom={16}
+                viewMode="hybrid"
+                markers={markers}
+                sonarActive
+                showPlacesSearch={false}
+                heightClassName="h-full"
+              />
+            </GoogleMapsWrapper>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function App() {
   const [session, setSession] = useState<SaraSession | null>(() => getSavedActiveSession());
   const [exitNotice, setExitNotice] = useState<string | null>(null);
@@ -424,7 +547,24 @@ export default function App() {
   const [profileSubTab, setProfileSubTab] = useState<ProfileSubTab>('perfil');
   const [appearOnMap, setAppearOnMap] = useState<boolean>(false);
   const [ghostMode, setGhostMode] = useState<boolean>(false);
-  const [myCoords, setMyCoords] = useState<{ lat: number; lng: number; accuracyM?: number | null } | null>(null);
+  const [myCoords, setMyCoords] = useState<{
+    lat: number;
+    lng: number;
+    accuracyM?: number | null;
+    speedMps?: number | null;
+    source?: LocationSignalSource;
+    timestamp?: number;
+  } | null>(null);
+  const [mapsQuotaExceeded, setMapsQuotaExceeded] = useState(false);
+  const [quotaBannerDismissed, setQuotaBannerDismissed] = useState(false);
+  const [liveShareId, setLiveShareId] = useState<string | null>(() => {
+    try {
+      return new URLSearchParams(window.location.search).get('live');
+    } catch {
+      return null;
+    }
+  });
+  const radarControlRef = useRef<RadarExternalControlHandle | null>(null);
   const [incomingPending, setIncomingPending] = useState<LocationRequestItem[]>([]);
   const [outgoingGrants, setOutgoingGrants] = useState<LocationRequestItem[]>([]);
   const [sharedPeers, setSharedPeers] = useState<SharedPeerLocation[]>([]);
@@ -946,7 +1086,14 @@ export default function App() {
   );
 
   const handleUpdateMyCoords = useCallback(
-    (coords: { lat: number; lng: number; accuracyM?: number | null }) => {
+    (coords: {
+      lat: number;
+      lng: number;
+      accuracyM?: number | null;
+      speedMps?: number | null;
+      source?: LocationSignalSource;
+      timestamp?: number;
+    }) => {
       setMyCoords(coords);
       myCoordsRef.current = coords;
     },
@@ -1254,6 +1401,15 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [showToast]);
+
+  // Escuta eventos globais de limite de cota Google Maps (Tier 1 & Tier 2)
+  useEffect(() => {
+    const onQuotaExceeded = () => {
+      setMapsQuotaExceeded(true);
+    };
+    window.addEventListener('gmp-quota-exceeded', onQuotaExceeded);
+    return () => window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
+  }, []);
 
   // Subscrições em tempo real de Radar (pedidos + localizações aceites) e Aparelhos (Achar Meu Celular)
   useEffect(() => {
@@ -3320,6 +3476,88 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      const waitForRadarControl = async (): Promise<RadarExternalControlHandle | null> => {
+        handleChangeBottomTab('mapa');
+        for (let i = 0; i < 12; i++) {
+          if (radarControlRef.current) return radarControlRef.current;
+          await new Promise((r) => setTimeout(r, 85));
+        }
+        return radarControlRef.current;
+      };
+
+      if (cmd.type === 'radar_track_target') {
+        const ctrl = await waitForRadarControl();
+        if (!ctrl) {
+          speakAsSara('Abri o radar, mas ainda está a carregar.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return true;
+        }
+        const res = await ctrl.trackTargetByQuery(cmd.query);
+        showToast(res.message);
+        speakAsSara(res.message, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'radar_view_mode') {
+        const ctrl = await waitForRadarControl();
+        ctrl?.setViewMode(cmd.mode);
+        const label =
+          cmd.mode === 'hybrid'
+            ? 'Vista de satélite ativada.'
+            : cmd.mode === 'terrain'
+            ? 'Vista de terreno ativada.'
+            : 'Vista de ruas ativada.';
+        showToast(label);
+        speakAsSara(label, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'radar_ask_target_street') {
+        const ctrl = await waitForRadarControl();
+        const speech = ctrl
+          ? await ctrl.getTrackedTargetStreetSpeech()
+          : 'Não há nenhum alvo selecionado no radar neste momento.';
+        showToast(speech);
+        speakAsSara(speech, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'radar_show_route') {
+        const ctrl = await waitForRadarControl();
+        const msg = ctrl
+          ? await ctrl.triggerRouteToTrackedTarget()
+          : 'Abri o radar. Seleciona um alvo ou local primeiro.';
+        showToast(msg);
+        speakAsSara(msg, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'radar_stop_tracking') {
+        const msg = radarControlRef.current
+          ? radarControlRef.current.stopAllTracking()
+          : 'Rastreamento parado.';
+        showToast(msg);
+        speakAsSara(msg, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
       if (cmd.type === 'open_profile_devices') {
         handleChangeBottomTab('perfil', 'perfil');
         showToast('Perfil e Meus Aparelhos aberto');
@@ -3332,11 +3570,51 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       if (cmd.type === 'open_find_phone') {
         handleChangeBottomTab('perfil', 'achar_celular');
-        showToast('Achar Meu Celular aberto');
-        speakAsSara('Abri o rastreamento Achar Meu Celular.', voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
+        showToast('A localizar o teu celular...');
+        const fresh = (await requestRealCoordinatesWithFallback(8000)) || myCoordsRef.current;
+        const primaryDevice =
+          devicesRef.current.find(
+            (d) =>
+              d.deviceCode === session?.deviceCode &&
+              typeof d.lastLat === 'number' &&
+              typeof d.lastLng === 'number'
+          ) ||
+          devicesRef.current.find(
+            (d) => typeof d.lastLat === 'number' && typeof d.lastLng === 'number'
+          );
+
+        const lat = fresh?.lat ?? primaryDevice?.lastLat ?? null;
+        const lng = fresh?.lng ?? primaryDevice?.lastLng ?? null;
+        if (fresh) {
+          handleUpdateMyCoords(fresh);
+        }
+
+        if (lat !== null && lng !== null) {
+          const geo = await reverseGeocodeCoords(lat, lng);
+          const placeText = geo?.street
+            ? [geo.street, geo.neighborhood, geo.city].filter(Boolean).join(', ')
+            : geo?.formattedAddress || '';
+          const approxPrefix =
+            fresh?.source === 'ip_approx' || fresh?.source === 'network'
+              ? 'Com GPS desligado, a localização aproximada do teu celular é: '
+              : 'O teu celular foi localizado em ';
+          const spoken = placeText
+            ? `${approxPrefix}${placeText}.`
+            : 'Abri o mapa de Achar Meu Celular com a tua posição atual.';
+          speakAsSara(spoken, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        } else {
+          speakAsSara(
+            'Abri o rastreamento Achar Meu Celular. Ativa o GPS para obter a rua exata.',
+            voiceEnabledRef.current,
+            {
+              level: 'short',
+              forceSpeak: true,
+            }
+          );
+        }
         return true;
       }
 
@@ -6075,12 +6353,80 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     });
   };
 
+  if (liveShareId) {
+    return (
+      <>
+        {mapsQuotaExceeded && !quotaBannerDismissed && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm flex items-center justify-center gap-3 shrink-0">
+            <span>
+              Google Maps Platform quota reached. If you are the app owner, visit{' '}
+              <a
+                href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-semibold text-amber-950 hover:text-amber-800"
+              >
+                maps developer site
+              </a>{' '}
+              for instructions to update your account.
+            </span>
+            <button
+              type="button"
+              onClick={() => setQuotaBannerDismissed(true)}
+              className="text-amber-800 hover:text-amber-950 font-semibold px-1.5 py-0.5 rounded cursor-pointer"
+              title="Dispensar"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+        <LiveShareViewerScreen
+          shareId={liveShareId}
+          onExit={() => {
+            setLiveShareId(null);
+            try {
+              const nextUrl = new URL(window.location.href);
+              nextUrl.searchParams.delete('live');
+              window.history.replaceState({}, '', nextUrl.toString());
+            } catch {
+              // ignore
+            }
+          }}
+        />
+      </>
+    );
+  }
+
   if (!session) {
     return <LoginGateScreen onAuthenticated={handleAuthenticated} exitNotice={exitNotice} />;
   }
 
   return (
     <div className="h-screen w-screen flex flex-col bg-[#0A0A0F] text-white overflow-hidden">
+      {mapsQuotaExceeded && !quotaBannerDismissed && (
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm flex items-center justify-center gap-3 shrink-0">
+          <span>
+            Google Maps Platform quota reached. If you are the app owner, visit{' '}
+            <a
+              href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-semibold text-amber-950 hover:text-amber-800"
+            >
+              maps developer site
+            </a>{' '}
+            for instructions to update your account.
+          </span>
+          <button
+            type="button"
+            onClick={() => setQuotaBannerDismissed(true)}
+            className="text-amber-800 hover:text-amber-950 font-semibold px-1.5 py-0.5 rounded cursor-pointer"
+            title="Dispensar"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
       {/* Barra Superior */}
       <TopBar
         session={session}
@@ -6198,6 +6544,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           onRefreshDeviceNow={handleRefreshDeviceNow}
           onDeleteReminder={handleDeleteReminder}
           onScheduleBackgroundReminder={handleScheduleBackgroundReminder}
+          radarControlRef={radarControlRef}
         />
       ) : (
         <>

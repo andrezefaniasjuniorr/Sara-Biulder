@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "leaflet/dist/leaflet.css";
 
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -79,6 +78,28 @@
   }
 }
 
+@keyframes saraSonarRing {
+  0% {
+    transform: translate(-50%, -50%) scale(0.35);
+    opacity: 0.95;
+  }
+  100% {
+    transform: translate(-50%, -50%) scale(3.4);
+    opacity: 0;
+  }
+}
+
+@keyframes saraPulseDot {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.22);
+    opacity: 0.8;
+  }
+}
+
 .jarvis-scan-line {
   animation: jarvisScan 3.4s linear infinite;
 }
@@ -87,3 +108,20 @@
   animation: jarvisSpinSlow 24s linear infinite;
 }
 
+.sara-sonar-ring {
+  animation: saraSonarRing 2.1s cubic-bezier(0.18, 0.72, 0.36, 1) infinite;
+}
+
+.sara-sonar-ring-delay {
+  animation: saraSonarRing 2.1s cubic-bezier(0.18, 0.72, 0.36, 1) infinite;
+  animation-delay: 0.7s;
+}
+
+.sara-sonar-ring-delay-2 {
+  animation: saraSonarRing 2.1s cubic-bezier(0.18, 0.72, 0.36, 1) infinite;
+  animation-delay: 1.4s;
+}
+
+.sara-pulse-dot {
+  animation: saraPulseDot 1.5s ease-in-out infinite;
+}

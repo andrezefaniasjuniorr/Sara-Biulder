@@ -1,9 +1,12 @@
 import type { SaraSession, SaraUserAccount } from '../types/auth';
 import type {
   DeviceLockState,
+  GeocodedAddressInfo,
+  GeofenceZone,
+  GpsCoordinateResult,
+  LiveShareRecord,
   LocationRequestItem,
-  OsmPoiCategory,
-  OsmPoiItem,
+  MovementHistoryPoint,
   RadarPresence,
   RemoteDeviceCommand,
   SaraDeviceRecord,
@@ -15,13 +18,16 @@ import {
   verifySessionAccountPassword,
 } from './authService';
 import {
+  fetchLiveShareCloud,
   fetchRadarPresenceCloud,
   fetchUserDevicesCloud,
   issueDeviceCommandCloud,
   lookupUserBySaraIdCloud,
+  saveLiveShareCloud,
   saveLocationRequestCloud,
   saveRadarPresenceCloud,
   saveUserDeviceCloud,
+  subscribeLiveShareCloud,
   subscribeLocationRequestsForUserCloud,
   subscribeRadarPresenceByIdsCloud,
   subscribeUserDevicesCloud,
@@ -35,10 +41,14 @@ const DEVICE_LOCK_KEY = 'sara_device_lock_state_v1';
 const OFFLINE_SINCE_KEY = 'sara_device_offline_since_v1';
 const SOS_SENT_MARKER_KEY = 'sara_sos_last_sent_at_v1';
 const ACCOUNTS_KEY = 'sara_accounts_v1';
+const LAST_KNOWN_REAL_COORDS_KEY = 'sara_last_real_coords_v2';
+const MOVEMENT_HISTORY_2H_KEY = 'sara_movement_history_2h_v2';
+const LIVE_SHARES_LOCAL_KEY = 'sara_live_shares_local_v2';
 
 const RADAR_CHANNEL_NAME = 'sara_location_radar_channel_v1';
 export const FIVE_MINUTES_MS = 5 * 60 * 1000;
 export const ONE_HOUR_MS = 60 * 60 * 1000;
+export const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
 function readJsonRecord<T>(key: string, fallback: T): T {
   try {
@@ -70,7 +80,9 @@ function postRadarBroadcast(payload: Record<string, unknown>): void {
   }
 }
 
-export function subscribeRadarBroadcast(handler: (payload: Record<string, unknown>) => void): () => void {
+export function subscribeRadarBroadcast(
+  handler: (payload: Record<string, unknown>) => void
+): () => void {
   if (typeof BroadcastChannel === 'undefined') return () => {};
   try {
     const ch = new BroadcastChannel(RADAR_CHANNEL_NAME);
@@ -144,6 +156,43 @@ export function formatRemainingTimePt(expiresAt?: number): string {
   return `${mins}m ${String(secs).padStart(2, '0')}s`;
 }
 
+export function formatSpeedKmh(speedMps: number | null | undefined): string {
+  if (speedMps === null || speedMps === undefined || Number.isNaN(speedMps) || speedMps < 0) {
+    return '0 km/h';
+  }
+  const kmh = Math.round(speedMps * 3.6);
+  return `${kmh} km/h`;
+}
+
+export function computeSpeedMps(
+  prev: { lat: number; lng: number; timestamp: number } | null,
+  next: { lat: number; lng: number; timestamp: number },
+  reportedSpeedMps: number | null | undefined
+): number | null {
+  if (typeof reportedSpeedMps === 'number' && Number.isFinite(reportedSpeedMps) && reportedSpeedMps >= 0) {
+    return Number(reportedSpeedMps.toFixed(2));
+  }
+  if (!prev) return null;
+  const dtSec = (next.timestamp - prev.timestamp) / 1000;
+  if (dtSec <= 1 || dtSec > 300) return null;
+  const distM = calcDistanceMeters(prev.lat, prev.lng, next.lat, next.lng);
+  if (distM < 4) return 0;
+  return Number((distM / dtSec).toFixed(2));
+}
+
+export function evaluateStationedSince(
+  prevCoords: { lat: number; lng: number } | null,
+  prevSinceIso: string | null | undefined,
+  nextLat: number,
+  nextLng: number
+): string {
+  if (prevCoords && prevSinceIso) {
+    const moved = calcDistanceMeters(prevCoords.lat, prevCoords.lng, nextLat, nextLng);
+    if (moved <= 45) return prevSinceIso;
+  }
+  return new Date().toISOString();
+}
+
 export function detectDeviceNameAndModel(): {
   deviceName: string;
   model: string;
@@ -180,7 +229,6 @@ export function detectDeviceNameAndModel(): {
   else if (/Firefox\//i.test(ua)) browser = 'Firefox';
   else if (/Safari\//i.test(ua)) browser = 'Safari';
 
-  // Extrai modelo Android se disponível no UA (ex: "; SM-A546B Build/")
   const androidModel = ua.match(/Android[^;)]*;\s*([^;)]+?)(?:\s+Build\/|\))/i);
   const rawModel = androidModel?.[1]?.trim();
   const model =
@@ -218,41 +266,465 @@ export async function readDeviceBatteryStatus(): Promise<{
   return { batteryPct: null, batteryCharging: false };
 }
 
-export async function requestCurrentCoordinates(
-  highAccuracy = true,
-  timeoutMs = 12000
-): Promise<{ lat: number; lng: number; accuracyM: number | null } | null> {
+export function getLastSavedRealCoords(): GpsCoordinateResult | null {
+  const saved = readJsonRecord<GpsCoordinateResult | null>(LAST_KNOWN_REAL_COORDS_KEY, null);
+  if (
+    saved &&
+    typeof saved.lat === 'number' &&
+    typeof saved.lng === 'number' &&
+    Number.isFinite(saved.lat) &&
+    Number.isFinite(saved.lng)
+  ) {
+    return saved;
+  }
+  return null;
+}
+
+function saveLastRealCoords(res: GpsCoordinateResult): void {
+  writeJsonRecord(LAST_KNOWN_REAL_COORDS_KEY, res);
+}
+
+function getBrowserGeoPosition(
+  highAccuracy: boolean,
+  timeoutMs: number
+): Promise<GpsCoordinateResult | null> {
   if (typeof navigator === 'undefined' || !('geolocation' in navigator)) {
-    return null;
+    return Promise.resolve(null);
   }
   return new Promise((resolve) => {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        resolve({
+        const result: GpsCoordinateResult = {
           lat: Number(pos.coords.latitude.toFixed(6)),
           lng: Number(pos.coords.longitude.toFixed(6)),
           accuracyM:
             typeof pos.coords.accuracy === 'number' ? Math.round(pos.coords.accuracy) : null,
-        });
+          speedMps:
+            typeof pos.coords.speed === 'number' && Number.isFinite(pos.coords.speed)
+              ? Number(pos.coords.speed.toFixed(2))
+              : null,
+          timestamp: Date.now(),
+          source: highAccuracy ? 'gps' : 'network',
+        };
+        saveLastRealCoords(result);
+        resolve(result);
       },
       () => resolve(null),
       {
         enableHighAccuracy: highAccuracy,
         timeout: timeoutMs,
-        maximumAge: 30000,
+        maximumAge: highAccuracy ? 15000 : 45000,
       }
     );
   });
 }
 
+export async function requestRealCoordinatesWithFallback(
+  timeoutMs = 11000
+): Promise<GpsCoordinateResult | null> {
+  // 1. GPS real de alta precisão
+  const gps = await getBrowserGeoPosition(true, timeoutMs);
+  if (gps) return gps;
+
+  // 2. Localização de rede do navegador (aproximada caso GPS desligado)
+  const network = await getBrowserGeoPosition(false, 6500);
+  if (network) return network;
+
+  // 3. Fallback aproximado pela ligação de internet (nunca inventa cidade fixa!)
+  try {
+    const res = await fetch('/api/maps/approx-location', { headers: { Accept: 'application/json' } });
+    if (res.ok) {
+      const data = (await res.json()) as { lat?: number; lng?: number };
+      if (
+        typeof data.lat === 'number' &&
+        typeof data.lng === 'number' &&
+        Number.isFinite(data.lat) &&
+        Number.isFinite(data.lng)
+      ) {
+        const approx: GpsCoordinateResult = {
+          lat: Number(data.lat.toFixed(6)),
+          lng: Number(data.lng.toFixed(6)),
+          accuracyM: 3500,
+          speedMps: null,
+          timestamp: Date.now(),
+          source: 'ip_approx',
+        };
+        saveLastRealCoords(approx);
+        return approx;
+      }
+    }
+  } catch {
+    // offline
+  }
+
+  return null;
+}
+
+export async function requestCurrentCoordinates(
+  highAccuracy = true,
+  timeoutMs = 12000
+): Promise<GpsCoordinateResult | null> {
+  if (highAccuracy) {
+    return requestRealCoordinatesWithFallback(timeoutMs);
+  }
+  const network = await getBrowserGeoPosition(false, timeoutMs);
+  if (network) return network;
+  return requestRealCoordinatesWithFallback(timeoutMs);
+}
+
 // =========================================================================
-// PARTE 2 — RADAR & PRIVACIDADE (COMEÇA DESLIGADO, ZERO HISTÓRICO)
+// ENDEREÇO REAL (REVERSE GEOCODING VIA PROXY SERVIDOR - MOÇAMBIQUE PT)
+// =========================================================================
+
+const reverseGeocodeMemoryCache = new Map<string, GeocodedAddressInfo>();
+
+export async function reverseGeocodeCoords(
+  lat: number,
+  lng: number
+): Promise<GeocodedAddressInfo | null> {
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  const cacheKey = `${lat.toFixed(4)}_${lng.toFixed(4)}`;
+  const cached = reverseGeocodeMemoryCache.get(cacheKey);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch('/api/maps/reverse-geocode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lng }),
+    });
+    if (res.status === 429) {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+      }
+      return null;
+    }
+    if (!res.ok) return null;
+    const data = (await res.json()) as Partial<GeocodedAddressInfo> & { quotaExceeded?: boolean };
+    if (data.quotaExceeded && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gmp-quota-exceeded'));
+      return null;
+    }
+    const info: GeocodedAddressInfo = {
+      formattedAddress: data.formattedAddress || `${lat.toFixed(5)}, ${lng.toFixed(5)}`,
+      street: data.street || '',
+      neighborhood: data.neighborhood || '',
+      city: data.city || '',
+      country: data.country || '',
+      placeId: data.placeId,
+      updatedAt: new Date().toISOString(),
+    };
+    reverseGeocodeMemoryCache.set(cacheKey, info);
+    return info;
+  } catch {
+    return null;
+  }
+}
+
+// =========================================================================
+// HISTÓRICO DE MOVIMENTO (EXCLUSIVO ÚLTIMAS 2 HORAS)
+// =========================================================================
+
+export function getMovementHistory2h(targetKey: string): MovementHistoryPoint[] {
+  if (!targetKey) return [];
+  const all = readJsonRecord<Record<string, MovementHistoryPoint[]>>(MOVEMENT_HISTORY_2H_KEY, {});
+  const cutoff = Date.now() - TWO_HOURS_MS;
+  const rawList = Array.isArray(all[targetKey]) ? all[targetKey] : [];
+  const pruned = rawList.filter(
+    (p) =>
+      p &&
+      typeof p.lat === 'number' &&
+      typeof p.lng === 'number' &&
+      typeof p.timestamp === 'number' &&
+      p.timestamp >= cutoff
+  );
+  if (pruned.length !== rawList.length) {
+    all[targetKey] = pruned;
+    writeJsonRecord(MOVEMENT_HISTORY_2H_KEY, all);
+  }
+  return pruned;
+}
+
+export function appendMovementPoint(
+  targetKey: string,
+  point: MovementHistoryPoint
+): MovementHistoryPoint[] {
+  if (!targetKey || !Number.isFinite(point.lat) || !Number.isFinite(point.lng)) {
+    return [];
+  }
+  const all = readJsonRecord<Record<string, MovementHistoryPoint[]>>(MOVEMENT_HISTORY_2H_KEY, {});
+  const cutoff = Date.now() - TWO_HOURS_MS;
+  const existing = (Array.isArray(all[targetKey]) ? all[targetKey] : []).filter(
+    (p) => p && typeof p.timestamp === 'number' && p.timestamp >= cutoff
+  );
+
+  const last = existing[existing.length - 1];
+  if (last) {
+    const distM = calcDistanceMeters(last.lat, last.lng, point.lat, point.lng);
+    const dtMs = point.timestamp - last.timestamp;
+    if (distM < 8 && dtMs < 25000) {
+      return existing;
+    }
+  }
+
+  const next = [...existing, point].slice(-240);
+  all[targetKey] = next;
+  writeJsonRecord(MOVEMENT_HISTORY_2H_KEY, all);
+  return next;
+}
+
+export function clearMovementHistory2h(targetKey: string): void {
+  if (!targetKey) return;
+  const all = readJsonRecord<Record<string, MovementHistoryPoint[]>>(MOVEMENT_HISTORY_2H_KEY, {});
+  delete all[targetKey];
+  writeJsonRecord(MOVEMENT_HISTORY_2H_KEY, all);
+}
+
+// =========================================================================
+// ZONA DE ALERTA (GEOFENCE)
+// =========================================================================
+
+export function evaluateGeofenceTransition(
+  zone: GeofenceZone | null,
+  targetLat: number | null | undefined,
+  targetLng: number | null | undefined
+): {
+  status: 'inside' | 'outside';
+  transitioned: boolean;
+  eventText?: string;
+} | null {
+  if (
+    !zone ||
+    !zone.active ||
+    typeof targetLat !== 'number' ||
+    typeof targetLng !== 'number'
+  ) {
+    return null;
+  }
+  const dist = calcDistanceMeters(zone.centerLat, zone.centerLng, targetLat, targetLng);
+  const status: 'inside' | 'outside' = dist <= zone.radiusMeters ? 'inside' : 'outside';
+  const transitioned = Boolean(zone.lastStatus && zone.lastStatus !== status);
+  return {
+    status,
+    transitioned,
+    eventText: transitioned
+      ? status === 'outside'
+        ? 'Alerta: Alvo saiu da zona'
+        : 'Alerta: Alvo entrou na zona'
+      : undefined,
+  };
+}
+
+// =========================================================================
+// SONAR ACÚSTICO RADAR ("BIP... BIP... BIP") & ALERTA ZONA
+// =========================================================================
+
+let sonarIntervalHandle: number | null = null;
+let sharedAudioCtx: AudioContext | null = null;
+
+function ensureAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!Ctx) return null;
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new Ctx();
+  }
+  if (sharedAudioCtx.state === 'suspended') {
+    void sharedAudioCtx.resume().catch(() => {});
+  }
+  return sharedAudioCtx;
+}
+
+export function playSingleSonarPing(): void {
+  try {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(1180, now);
+    osc.frequency.exponentialRampToValueAtTime(940, now + 0.14);
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.22);
+  } catch {
+    // ignore audio policy block
+  }
+}
+
+export function startRadarSonarPing(): void {
+  stopRadarSonarPing();
+  playSingleSonarPing();
+  if (typeof window !== 'undefined') {
+    sonarIntervalHandle = window.setInterval(() => {
+      playSingleSonarPing();
+    }, 1250);
+  }
+}
+
+export function stopRadarSonarPing(): void {
+  if (sonarIntervalHandle !== null && typeof window !== 'undefined') {
+    window.clearInterval(sonarIntervalHandle);
+    sonarIntervalHandle = null;
+  }
+}
+
+export function playGeofenceAlertBeep(): void {
+  try {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    const now = ctx.currentTime;
+    [0, 0.22, 0.44].forEach((offset) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(880, now + offset);
+      gain.gain.setValueAtTime(0.001, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.14, now + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.16);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.18);
+    });
+  } catch {
+    // ignore
+  }
+}
+
+// =========================================================================
+// PARTILHA AO VIVO COM LINK & WHATSAPP
+// =========================================================================
+
+export async function createOrUpdateLiveShare(params: {
+  session: SaraSession;
+  lat: number;
+  lng: number;
+  speedMps: number | null;
+  batteryPct: number | null;
+  addressLabel: string;
+  existingShareId?: string;
+  durationMinutes?: 30 | 60;
+}): Promise<{ share: LiveShareRecord; url: string; whatsappUrl: string }> {
+  const nowMs = Date.now();
+  const shareId =
+    params.existingShareId ||
+    `live_${(params.session.saraId || 'SARA').replace(/[^A-Z0-9]/gi, '')}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`;
+
+  const existingAll = readJsonRecord<Record<string, LiveShareRecord>>(LIVE_SHARES_LOCAL_KEY, {});
+  const prev = existingAll[shareId];
+
+  const share: LiveShareRecord = {
+    shareId,
+    ownerUid: params.session.userId,
+    saraId: params.session.saraId || 'SARA-0000',
+    callName: params.session.callName,
+    deviceCode: params.session.deviceCode || getOrCreateDeviceCode(),
+    lat: params.lat,
+    lng: params.lng,
+    speedMps: params.speedMps,
+    batteryPct: params.batteryPct,
+    addressLabel: params.addressLabel || `${params.lat.toFixed(5)}, ${params.lng.toFixed(5)}`,
+    active: true,
+    createdAt: prev?.createdAt || new Date(nowMs).toISOString(),
+    expiresAt: prev?.expiresAt || nowMs + (params.durationMinutes || 60) * 60 * 1000,
+    updatedAt: new Date(nowMs).toISOString(),
+  };
+
+  existingAll[shareId] = share;
+  writeJsonRecord(LIVE_SHARES_LOCAL_KEY, existingAll);
+  postRadarBroadcast({ type: 'live_share_updated', shareId });
+  await saveLiveShareCloud(share);
+
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const url = `${origin}/?live=${encodeURIComponent(shareId)}`;
+  const text = `Acompanha a minha localização ao vivo no Radar SARA (${params.session.callName}): ${url}`;
+  const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+
+  return { share, url, whatsappUrl };
+}
+
+export async function stopLiveShareSession(shareId: string): Promise<void> {
+  if (!shareId) return;
+  const existingAll = readJsonRecord<Record<string, LiveShareRecord>>(LIVE_SHARES_LOCAL_KEY, {});
+  const target = existingAll[shareId];
+  if (target) {
+    const stopped: LiveShareRecord = {
+      ...target,
+      active: false,
+      expiresAt: Date.now(),
+      updatedAt: new Date().toISOString(),
+    };
+    existingAll[shareId] = stopped;
+    writeJsonRecord(LIVE_SHARES_LOCAL_KEY, existingAll);
+    postRadarBroadcast({ type: 'live_share_updated', shareId });
+    await saveLiveShareCloud(stopped);
+  }
+}
+
+export function subscribeLiveShareSession(
+  shareId: string,
+  onUpdate: (record: LiveShareRecord | null) => void
+): () => void {
+  if (!shareId) {
+    onUpdate(null);
+    return () => {};
+  }
+
+  const readLocal = () => {
+    const all = readJsonRecord<Record<string, LiveShareRecord>>(LIVE_SHARES_LOCAL_KEY, {});
+    return all[shareId] || null;
+  };
+
+  const initial = readLocal();
+  if (initial) onUpdate(initial);
+
+  void fetchLiveShareCloud(shareId).then((cloud) => {
+    if (cloud) {
+      const all = readJsonRecord<Record<string, LiveShareRecord>>(LIVE_SHARES_LOCAL_KEY, {});
+      all[shareId] = cloud;
+      writeJsonRecord(LIVE_SHARES_LOCAL_KEY, all);
+      onUpdate(cloud);
+    }
+  });
+
+  const unsubCloud = subscribeLiveShareCloud(shareId, (cloud) => {
+    if (cloud) {
+      const all = readJsonRecord<Record<string, LiveShareRecord>>(LIVE_SHARES_LOCAL_KEY, {});
+      all[shareId] = cloud;
+      writeJsonRecord(LIVE_SHARES_LOCAL_KEY, all);
+      onUpdate(cloud);
+    } else {
+      onUpdate(readLocal());
+    }
+  });
+
+  const unsubBc = subscribeRadarBroadcast((ev) => {
+    if (ev.type === 'live_share_updated' && ev.shareId === shareId) {
+      onUpdate(readLocal());
+    }
+  });
+
+  return () => {
+    unsubCloud();
+    unsubBc();
+  };
+}
+
+// =========================================================================
+// PARTE 2 — RADAR & PRIVACIDADE (COMEÇA DESLIGADO)
 // =========================================================================
 
 export function getSavedRadarVisibilityPref(uid?: string): boolean {
   if (!uid || uid.startsWith('guest_')) return false;
   const prefs = readJsonRecord<Record<string, boolean>>(RADAR_VISIBILITY_PREF_KEY, {});
-  // Por defeito vem sempre DESLIGADO (false)
   return Boolean(prefs[uid] === true);
 }
 
@@ -267,12 +739,34 @@ export async function publishCurrentRadarPresence(params: {
   session: SaraSession | null;
   visible: boolean;
   ghostMode: boolean;
-  coords?: { lat: number; lng: number; accuracyM?: number | null } | null;
+  coords?: { lat: number; lng: number; accuracyM?: number | null; speedMps?: number | null } | null;
+  batteryPct?: number | null;
 }): Promise<RadarPresence | null> {
   const { session, visible, ghostMode, coords } = params;
   if (!session || session.isGuest || !session.saraId) return null;
 
+  const map = readJsonRecord<Record<string, RadarPresence>>(RADAR_PRESENCE_LOCAL_KEY, {});
+  const prev = map[session.saraId];
   const effectivelyVisible = Boolean(visible && !ghostMode && coords);
+
+  let nextBattery = params.batteryPct ?? prev?.batteryPct ?? null;
+  if (nextBattery === null) {
+    const bat = await readDeviceBatteryStatus();
+    nextBattery = bat.batteryPct;
+  }
+
+  const stationedSince =
+    effectivelyVisible && coords
+      ? evaluateStationedSince(
+          prev?.lat !== null && prev?.lat !== undefined && prev?.lng !== null && prev?.lng !== undefined
+            ? { lat: prev.lat, lng: prev.lng }
+            : null,
+          prev?.stationedSince,
+          coords.lat,
+          coords.lng
+        )
+      : null;
+
   const presence: RadarPresence = {
     saraId: session.saraId,
     uid: session.userId,
@@ -282,11 +776,12 @@ export async function publishCurrentRadarPresence(params: {
     lat: effectivelyVisible && coords ? coords.lat : null,
     lng: effectivelyVisible && coords ? coords.lng : null,
     accuracyM: effectivelyVisible && coords ? coords.accuracyM ?? null : null,
+    speedMps: effectivelyVisible && coords ? coords.speedMps ?? null : null,
+    batteryPct: effectivelyVisible ? nextBattery : null,
+    stationedSince,
     updatedAt: new Date().toISOString(),
   };
 
-  // Apenas o instante atual (sobrepõe sempre o anterior — zero histórico)
-  const map = readJsonRecord<Record<string, RadarPresence>>(RADAR_PRESENCE_LOCAL_KEY, {});
   map[session.saraId] = presence;
   writeJsonRecord(RADAR_PRESENCE_LOCAL_KEY, map);
   postRadarBroadcast({ type: 'presence_updated', saraId: session.saraId });
@@ -319,11 +814,9 @@ export async function lookupUserCardBySaraId(
     };
   }
 
-  // Pesquisa primeiro na nuvem (retorna só cartão público, nunca localização!)
   const cloudFound = await lookupUserBySaraIdCloud(normalized);
   if (cloudFound) return cloudFound;
 
-  // Fallback local se conta criada neste dispositivo
   try {
     const accountsRaw = localStorage.getItem(ACCOUNTS_KEY);
     if (accountsRaw) {
@@ -366,7 +859,7 @@ export async function sendLocationRequest(
     throw new Error('Inicia sessão numa conta para pedir localização.');
   }
   if (target.saraId === session.saraId) {
-    throw new Error('Este é o teu próprio ID SARA.');
+    throw new Error('Este é o teu próprio Identificador SARA.');
   }
 
   const req: LocationRequestItem = {
@@ -459,7 +952,7 @@ export function subscribeRadarRequestsAndPeers(params: {
     return () => {};
   }
 
-  let currentMyCoords = params.myCoords;
+  const currentMyCoords = params.myCoords;
   let latestRequests: LocationRequestItem[] = readLocalLocationRequests();
   let latestPresences: Record<string, RadarPresence> = readJsonRecord(
     RADAR_PRESENCE_LOCAL_KEY,
@@ -490,7 +983,6 @@ export function subscribeRadarRequestsAndPeers(params: {
         (!r.expiresAt || r.expiresAt > nowMs)
     );
 
-    // Subscreve em tempo real à presença dos IDs autorizados
     const neededIds = activeReceivingGrants.map((g) => g.toSaraId).sort();
     const nextKey = neededIds.join(',');
     if (nextKey !== subscribedIdsKey) {
@@ -511,7 +1003,6 @@ export function subscribeRadarRequestsAndPeers(params: {
       for (const req of activeReceivingGrants) {
         if (req.expiresAt && req.expiresAt <= Date.now()) continue;
         const p = latestPresences[req.toSaraId] || localMap[req.toSaraId];
-        // Privacidade estrita: se desligou "Aparecer no Mapa" ou ativou Modo Fantasma, desaparece imediatamente
         if (!p || !p.visible || p.ghostMode || p.lat === null || p.lng === null) {
           continue;
         }
@@ -526,6 +1017,9 @@ export function subscribeRadarRequestsAndPeers(params: {
           lat: p.lat,
           lng: p.lng,
           accuracyM: p.accuracyM ?? null,
+          speedMps: p.speedMps ?? null,
+          batteryPct: p.batteryPct ?? null,
+          stationedSince: p.stationedSince ?? p.updatedAt ?? null,
           updatedAt: p.updatedAt,
           expiresAt: req.expiresAt || Date.now() + 30 * 60 * 1000,
           distanceMeters: dist,
@@ -559,7 +1053,6 @@ export function subscribeRadarRequestsAndPeers(params: {
   });
 
   const expiryTimer = setInterval(() => {
-    // Auto-expira pedidos cujo tempo terminou (30m / 1h)
     const nowMs = Date.now();
     let changed = false;
     latestRequests = latestRequests.map((r) => {
@@ -577,7 +1070,6 @@ export function subscribeRadarRequestsAndPeers(params: {
     recompute();
   }, 4000);
 
-  // Tenta hidratar presenças já aceites caso acabemos de abrir o separador
   Promise.allSettled(
     latestRequests
       .filter((r) => r.fromSaraId === session.saraId && r.status === 'accepted')
@@ -601,156 +1093,6 @@ export function subscribeRadarRequestsAndPeers(params: {
     if (unsubPresence) unsubPresence();
     clearInterval(expiryTimer);
   };
-}
-
-// =========================================================================
-// PONTOS DE INTERESSE GRATUITOS OPENSTREETMAP (OVERPASS + NOMINATIM)
-// =========================================================================
-
-const OSM_CATEGORY_FILTERS: Record<
-  OsmPoiCategory,
-  { label: string; overpassFilter: string; fallbackKeywords: string[] }
-> = {
-  perto: {
-    label: 'Perto de Mim',
-    overpassFilter:
-      'node["amenity"~"restaurant|cafe|pharmacy|bank|atm|hospital|clinic|fuel|bus_station"](around:2500,LAT,LNG);node["shop"~"supermarket|convenience"](around:2500,LAT,LNG);',
-    fallbackKeywords: ['supermarket', 'pharmacy', 'restaurant'],
-  },
-  comida: {
-    label: 'Comida',
-    overpassFilter:
-      'node["amenity"~"restaurant|fast_food|cafe|bar|food_court"](around:3500,LAT,LNG);way["amenity"~"restaurant|fast_food|cafe"](around:3500,LAT,LNG);',
-    fallbackKeywords: ['restaurant', 'cafe', 'food'],
-  },
-  farmacia: {
-    label: 'Farmácia',
-    overpassFilter:
-      'node["amenity"~"pharmacy|clinic|hospital"](around:4500,LAT,LNG);way["amenity"~"pharmacy|hospital"](around:4500,LAT,LNG);',
-    fallbackKeywords: ['pharmacy', 'farmacia', 'hospital'],
-  },
-  atm: {
-    label: 'ATM',
-    overpassFilter:
-      'node["amenity"~"atm|bank"](around:4000,LAT,LNG);way["amenity"="bank"](around:4000,LAT,LNG);',
-    fallbackKeywords: ['atm', 'bank', 'banco'],
-  },
-  chapa: {
-    label: 'Chapa',
-    overpassFilter:
-      'node["highway"="bus_stop"](around:3000,LAT,LNG);node["amenity"="bus_station"](around:3500,LAT,LNG);node["public_transport"~"stop_position|platform|station"](around:3000,LAT,LNG);',
-    fallbackKeywords: ['bus stop', 'paragem', 'terminal'],
-  },
-  negocios: {
-    label: 'Negócios',
-    overpassFilter:
-      'node["shop"](around:3000,LAT,LNG);node["office"](around:3000,LAT,LNG);node["amenity"="marketplace"](around:3500,LAT,LNG);',
-    fallbackKeywords: ['shop', 'market', 'store'],
-  },
-};
-
-export async function fetchNearbyOsmPois(
-  lat: number,
-  lng: number,
-  category: OsmPoiCategory
-): Promise<OsmPoiItem[]> {
-  const cfg = OSM_CATEGORY_FILTERS[category];
-  const rawFilter = cfg.overpassFilter
-    .replace(/LAT/g, String(lat))
-    .replace(/LNG/g, String(lng));
-  const query = `[out:json][timeout:12];(${rawFilter});out center 25;`;
-
-  try {
-    const res = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
-      body: `data=${encodeURIComponent(query)}`,
-    });
-    if (res.ok) {
-      const json = (await res.json()) as {
-        elements?: Array<{
-          id: number;
-          lat?: number;
-          lon?: number;
-          center?: { lat: number; lon: number };
-          tags?: Record<string, string>;
-        }>;
-      };
-      const items: OsmPoiItem[] = [];
-      for (const el of json.elements || []) {
-        const pLat = typeof el.lat === 'number' ? el.lat : el.center?.lat;
-        const pLng = typeof el.lon === 'number' ? el.lon : el.center?.lon;
-        if (typeof pLat !== 'number' || typeof pLng !== 'number') continue;
-        const tags = el.tags || {};
-        const name =
-          tags.name ||
-          tags.operator ||
-          tags.brand ||
-          tags.amenity ||
-          tags.shop ||
-          cfg.label;
-        const address = [tags['addr:street'], tags['addr:suburb'], tags['addr:city']]
-          .filter(Boolean)
-          .join(', ');
-        items.push({
-          id: `osm_${el.id}`,
-          name: String(name),
-          category,
-          categoryLabel: tags.amenity || tags.shop || cfg.label,
-          lat: pLat,
-          lng: pLng,
-          distanceMeters: calcDistanceMeters(lat, lng, pLat, pLng),
-          address: address || undefined,
-        });
-      }
-      if (items.length > 0) {
-        return items.sort((a, b) => a.distanceMeters - b.distanceMeters).slice(0, 20);
-      }
-    }
-  } catch {
-    // Tenta Nominatim como fallback gratuito
-  }
-
-  try {
-    const kw = cfg.fallbackKeywords[0] || 'shop';
-    const delta = 0.04;
-    const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(
-      kw
-    )}&bounded=1&viewbox=${lng - delta},${lat + delta},${lng + delta},${lat - delta}&limit=12`;
-    const res = await fetch(url, {
-      headers: { Accept: 'application/json' },
-    });
-    if (res.ok) {
-      const arr = (await res.json()) as Array<{
-        place_id: number;
-        display_name?: string;
-        lat: string;
-        lon: string;
-      }>;
-      return arr
-        .map((row) => {
-          const pLat = Number(row.lat);
-          const pLng = Number(row.lon);
-          const shortTitle = (row.display_name || cfg.label).split(',')[0].trim();
-          return {
-            id: `nom_${row.place_id}`,
-            name: shortTitle || cfg.label,
-            category,
-            categoryLabel: cfg.label,
-            lat: pLat,
-            lng: pLng,
-            distanceMeters: calcDistanceMeters(lat, lng, pLat, pLng),
-            address: row.display_name,
-          };
-        })
-        .filter((x) => !Number.isNaN(x.lat) && !Number.isNaN(x.lng))
-        .sort((a, b) => a.distanceMeters - b.distanceMeters);
-    }
-  } catch {
-    // ignore
-  }
-
-  return [];
 }
 
 // =========================================================================
@@ -802,10 +1144,25 @@ export async function syncCurrentDeviceTelemetry(params: {
   let nextLat = existing?.lastLat ?? null;
   let nextLng = existing?.lastLng ?? null;
   let nextAcc = existing?.lastAccuracyM ?? null;
+  let nextSpeed = existing?.speedMps ?? null;
 
   if (includeGpsLocation && findPhoneEnabled) {
-    const gps = await requestCurrentCoordinates(true, 10000);
+    const gps = await requestRealCoordinatesWithFallback(10000);
     if (gps) {
+      nextSpeed = computeSpeedMps(
+        existing?.lastLat !== null &&
+          existing?.lastLat !== undefined &&
+          existing?.lastLng !== null &&
+          existing?.lastLng !== undefined
+          ? {
+              lat: existing.lastLat,
+              lng: existing.lastLng,
+              timestamp: Date.parse(existing.lastUpdatedAt) || gps.timestamp - 30000,
+            }
+          : null,
+        { lat: gps.lat, lng: gps.lng, timestamp: gps.timestamp },
+        gps.speedMps
+      );
       nextLat = gps.lat;
       nextLng = gps.lng;
       nextAcc = gps.accuracyM;
@@ -829,6 +1186,7 @@ export async function syncCurrentDeviceTelemetry(params: {
     lastLat: nextLat,
     lastLng: nextLng,
     lastAccuracyM: nextAcc,
+    speedMps: nextSpeed,
     pendingCommand: existing?.pendingCommand ?? null,
   };
 
@@ -874,7 +1232,11 @@ export function subscribeAccountDevices(
     for (const d of cloudList) {
       if (d.ownerUid !== ownerUid) continue;
       const prev = map.get(d.deviceCode);
-      if (!prev || (Date.parse(d.lastUpdatedAt) || 0) >= (Date.parse(prev.lastUpdatedAt) || 0) || d.pendingCommand) {
+      if (
+        !prev ||
+        (Date.parse(d.lastUpdatedAt) || 0) >= (Date.parse(prev.lastUpdatedAt) || 0) ||
+        d.pendingCommand
+      ) {
         map.set(d.deviceCode, d);
       }
     }
@@ -1011,7 +1373,6 @@ export function executeRemoteDeviceWipeLocal(ownerUid?: string): void {
         k === 'GITHUB_TOKEN' ||
         k === 'GEMINI_API_KEY'
       ) {
-        // Mantém registo de contas globais apenas se for outro dispositivo, mas limpa dados desta sessão e projetos locais
         if (k !== 'sara_accounts_v1') {
           keysToRemove.push(k);
         }
@@ -1040,7 +1401,7 @@ export function buildEmergencySmsUri(params: {
   const cleanPhone = String(params.phoneNumber || '').replace(/[^\d+]/g, '');
   const coordsText =
     params.lat !== null && params.lng !== null
-      ? `https://www.openstreetmap.org/?mlat=${params.lat}&mlon=${params.lng}#map=16/${params.lat}/${params.lng}`
+      ? `https://maps.google.com/?q=${params.lat},${params.lng}`
       : 'localização indisponível';
   const body = `SOS SARA (${params.callName} - ${params.deviceCode}): Aparelho sem internet há 1h. Última posição (${formatTimeAgoPt(
     params.lastUpdatedAt

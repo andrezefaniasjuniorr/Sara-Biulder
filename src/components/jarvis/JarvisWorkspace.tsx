@@ -159,10 +159,14 @@ import type {
   BackgroundReminder,
   BackgroundSettings,
   LocationRequestItem,
+  LocationSignalSource,
   SaraDeviceRecord,
   SharedPeerLocation,
 } from '../../types/location';
-import { RadarMapPanel } from '../map/RadarMapPanel';
+import {
+  RadarMapPanel,
+  type RadarExternalControlHandle,
+} from '../map/RadarMapPanel';
 import {
   ProfileAndFindPhonePanel,
   type ProfileSubTab,
@@ -257,7 +261,14 @@ interface JarvisWorkspaceProps {
   onChangeBottomTab?: (tab: 'assistente' | 'mapa' | 'perfil', profileSub?: ProfileSubTab) => void;
   appearOnMap?: boolean;
   ghostMode?: boolean;
-  myCoords?: { lat: number; lng: number; accuracyM?: number | null } | null;
+  myCoords?: {
+    lat: number;
+    lng: number;
+    accuracyM?: number | null;
+    speedMps?: number | null;
+    source?: LocationSignalSource;
+    timestamp?: number;
+  } | null;
   incomingPending?: LocationRequestItem[];
   outgoingGrants?: LocationRequestItem[];
   sharedPeers?: SharedPeerLocation[];
@@ -268,13 +279,21 @@ interface JarvisWorkspaceProps {
   onToggleAppearOnMap?: () => void;
   onActivateGhostMode?: () => void;
   onStopSharingAll?: () => void;
-  onUpdateMyCoords?: (coords: { lat: number; lng: number; accuracyM?: number | null }) => void;
+  onUpdateMyCoords?: (coords: {
+    lat: number;
+    lng: number;
+    accuracyM?: number | null;
+    speedMps?: number | null;
+    source?: LocationSignalSource;
+    timestamp?: number;
+  }) => void;
   onUpdateBgSettings?: (patch: Partial<BackgroundSettings>) => void;
   onPermitBackground?: () => Promise<void>;
   onStopBackground?: () => Promise<void>;
   onRefreshDeviceNow?: () => Promise<void>;
   onDeleteReminder?: (id: string) => void;
   onScheduleBackgroundReminder?: (text: string) => { handled: boolean; reply?: string };
+  radarControlRef?: React.RefObject<RadarExternalControlHandle | null>;
 }
 
 const IRON_MAN_PROCESS_LINES = [
@@ -433,6 +452,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   onRefreshDeviceNow,
   onDeleteReminder,
   onScheduleBackgroundReminder,
+  radarControlRef,
 }) => {
   const initialBundle = useMemo(
     () =>
@@ -4272,15 +4292,20 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             appearOnMap={appearOnMap}
             ghostMode={ghostMode}
             myCoords={myCoords}
+            devices={devices}
             incomingPending={incomingPending}
             outgoingGrants={outgoingGrants}
             sharedPeers={sharedPeers}
+            isListening={isListening}
+            isSaraSpeaking={isSaraSpeaking}
+            onToggleMic={onToggleMic}
             onToggleAppearOnMap={() => onToggleAppearOnMap?.()}
             onActivateGhostMode={() => onActivateGhostMode?.()}
             onStopSharingAll={() => onStopSharingAll?.()}
             onUpdateMyCoords={(c) => onUpdateMyCoords?.(c)}
             onNotify={onNotify}
             onClose={() => onChangeBottomTab?.('assistente')}
+            radarControlRef={radarControlRef}
           />
         </div>
       ) : activeBottomTab === 'perfil' && bgSettings ? (

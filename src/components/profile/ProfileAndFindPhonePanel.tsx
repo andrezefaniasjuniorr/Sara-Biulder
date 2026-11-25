@@ -30,7 +30,8 @@ import {
   issueRemoteDeviceCommand,
   verifyPasswordAndIssueWipeCommand,
 } from '../../services/locationRadarService';
-import { OsmMapView, type OsmMapMarker } from '../map/OsmMapView';
+import { GoogleMapsWrapper } from '../map/GoogleMapsWrapper';
+import { GoogleSaraMapView, type SaraMapMarker } from '../map/GoogleSaraMapView';
 
 export type ProfileSubTab = 'perfil' | 'achar_celular' | 'segundo_plano';
 
@@ -104,7 +105,7 @@ export const ProfileAndFindPhonePanel: React.FC<ProfileAndFindPhonePanelProps> =
     [devices, session.userId]
   );
 
-  const findPhoneMarkers = useMemo<OsmMapMarker[]>(() => {
+  const findPhoneMarkers = useMemo<SaraMapMarker[]>(() => {
     return findPhoneDevices
       .filter((d) => typeof d.lastLat === 'number' && typeof d.lastLng === 'number')
       .map((d) => ({
@@ -124,7 +125,7 @@ export const ProfileAndFindPhonePanel: React.FC<ProfileAndFindPhonePanelProps> =
     if (findPhoneMarkers.length > 0) {
       return { lat: findPhoneMarkers[0].lat, lng: findPhoneMarkers[0].lng };
     }
-    return { lat: -23.865, lng: 35.383 };
+    return { lat: null as number | null, lng: null as number | null };
   }, [findPhoneMarkers]);
 
   const handleRingDevice = async (dev: SaraDeviceRecord) => {
@@ -287,7 +288,7 @@ export const ProfileAndFindPhonePanel: React.FC<ProfileAndFindPhonePanelProps> =
             {!session.isGuest && (
               <div className="flex flex-col sm:items-end gap-2">
                 <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#030815] border border-[#00E5FF]/50">
-                  <span className="text-xs font-mono text-slate-300">ID SARA:</span>
+                  <span className="text-xs font-mono text-slate-300">Identificador SARA:</span>
                   <span className="text-sm font-mono font-extrabold text-[#00E5FF]">
                     {session.saraId || 'SARA-0000'}
                   </span>
@@ -484,14 +485,22 @@ export const ProfileAndFindPhonePanel: React.FC<ProfileAndFindPhonePanelProps> =
             )}
           </div>
 
-          {/* Mapa Grande no PC e Telemóvel com todos os aparelhos da conta */}
-          <OsmMapView
-            centerLat={mapCenter.lat}
-            centerLng={mapCenter.lng}
-            zoom={13}
-            markers={findPhoneMarkers}
-            heightClassName="h-[340px] sm:h-[400px] lg:h-[470px]"
-          />
+          {/* Mapa Grande no PC e Telemóvel com todos os aparelhos reais da conta */}
+          <GoogleMapsWrapper>
+            <GoogleSaraMapView
+              centerLat={mapCenter.lat}
+              centerLng={mapCenter.lng}
+              zoom={14}
+              viewMode="roadmap"
+              markers={findPhoneMarkers}
+              showPlacesSearch={false}
+              heightClassName="h-[340px] sm:h-[400px] lg:h-[470px]"
+              emptyNotice="A aguardar primeira posição GPS real de um dos teus aparelhos. Toca em Atualizar Posição Agora."
+              onRecenterMyLocation={() => {
+                void onRefreshDeviceNow();
+              }}
+            />
+          </GoogleMapsWrapper>
 
           {/* Cartões dos Aparelhos com 3 botões: Tocar Alarme, Bloquear com Mensagem, Apagar Tudo */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">

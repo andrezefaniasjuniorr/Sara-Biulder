@@ -139,6 +139,11 @@ export type VoiceCommandAction =
   | { type: 'show_on_map_on'; raw: string }
   | { type: 'enable_background_mode'; raw: string }
   | { type: 'stop_background_mode'; raw: string }
+  | { type: 'radar_track_target'; query: string; raw: string }
+  | { type: 'radar_view_mode'; mode: 'roadmap' | 'hybrid' | 'terrain'; raw: string }
+  | { type: 'radar_ask_target_street'; raw: string }
+  | { type: 'radar_show_route'; raw: string }
+  | { type: 'radar_stop_tracking'; raw: string }
   | { type: 'prompt'; text: string };
 
 export type VoiceDomainTopic =
@@ -828,7 +833,7 @@ export function reconstructDistortedVoiceInput(
     /\b(sh{2,}|xiu)\b/i.test(lower) ||
     words.some((w) => /[aeiouy0-9]/.test(w) && w.length >= 2);
   const hasRecognizedSignal =
-    /(sara|ei|oi|ola|ya|sim|nao|bora|fixe|painel|builder|assistente|abre|fecha|toca|bota|mete|poe|solta|musica|som|pausa|para|continua|proxima|seguinte|passa|pula|saltar|salta|anterior|volta|adianta|avanca|recua|sobe|aumenta|desce|baixa|baralha|mistura|shuffle|loop|repete|gostei|curti|guarda|favorit|recent|canta|mudo|silenc|cala|calad|chega|stop|espera|quiet|sh{2,}|xiu|atrapalh|respond|fala|podes|pode|voltei|acabei|terminei|livre|chamada|reuniao|aula|ocupad|telefone|ligacao|alguem|oky|okay|ok|tudo|liga|ligar|acende|desliga|apaga|luz|ventoinha|porta|tomada|modo|site|app|jogo|loja|portfolio|explica|calcula|ohm|volt|ampere|watt|disjuntor|cabo|motor|cubo|esfera|lembra|anota|marca|agenda|alarme|tarefa|clima|tempo|bateria|wifi|obrigado|tchau|bazar|chefe|admin|sair|local|minha|minhas|meu|meus|pc|telemovel|celular|offline|internet|ficheiro|arquivo|documento|relatorio|apresentacao|tabela|pdf|word|excel|powerpoint|foto|fotos|imagem|imagens|video|videos|filme|gravacao|pasta|tela|cheia|marrabenta|amapiano|como|que|qual|onde|quando|quanto|porque|para|\d+)/i.test(
+    /(sara|ei|oi|ola|ya|sim|nao|bora|fixe|painel|builder|assistente|abre|fecha|toca|bota|mete|poe|solta|musica|som|pausa|para|continua|proxima|seguinte|passa|pula|saltar|salta|anterior|volta|adianta|avanca|recua|sobe|aumenta|desce|baixa|baralha|mistura|shuffle|loop|repete|gostei|curti|guarda|favorit|recent|canta|mudo|silenc|cala|calad|chega|stop|espera|quiet|sh{2,}|xiu|atrapalh|respond|fala|podes|pode|voltei|acabei|terminei|livre|chamada|reuniao|aula|ocupad|telefone|ligacao|alguem|oky|okay|ok|tudo|liga|ligar|acende|desliga|apaga|luz|ventoinha|porta|tomada|modo|site|app|jogo|loja|portfolio|explica|calcula|ohm|volt|ampere|watt|disjuntor|cabo|motor|cubo|esfera|lembra|anota|marca|agenda|alarme|tarefa|clima|tempo|bateria|wifi|obrigado|tchau|bazar|chefe|admin|sair|local|minha|minhas|meu|meus|pc|telemovel|celular|offline|internet|ficheiro|arquivo|documento|relatorio|apresentacao|tabela|pdf|word|excel|powerpoint|foto|fotos|imagem|imagens|video|videos|filme|gravacao|pasta|tela|cheia|marrabenta|amapiano|como|que|qual|onde|quando|quanto|porque|para|mapa|radar|rastreia|rastrea|rastrear|satelite|terreno|ruas|rua|rota|leva|gps|zona|historico|print|endereco|compartilha|\d+)/i.test(
       lower
     );
 
@@ -1733,6 +1738,68 @@ export function parseVoiceCommand(
 
     // Mapa / Radar / Perfil / Meus Aparelhos / Achar Meu Celular / Segundo Plano
     if (
+      /\b(para(?:r)?\s+(?:de\s+)?rastrear|para(?:r)?\s+(?:o\s+)?rastreamento|desliga(?:r)?\s+(?:o\s+)?rastreamento|para(?:r)?\s+(?:o\s+)?sonar)\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'radar_stop_tracking', raw: clean };
+    }
+
+    const radarViewMatch =
+      lower.match(
+        /\b(?:mostra(?:r)?|abre|abrir|ativa(?:r)?|muda(?:r)?\s+para|vai\s+para|coloca|mete|poe)\s+(?:a\s+|o\s+)?(?:vista\s+(?:de\s+)?|modo\s+(?:de\s+)?)?(satelite|terreno|ruas)\b/i
+      ) ||
+      lower.match(
+        /^(?:sara[,\s]+)?(?:vista\s+(?:de\s+)?|modo\s+(?:de\s+)?)(satelite|terreno|ruas)(?:\s+no\s+(?:mapa|radar))?$/i
+      );
+    if (radarViewMatch) {
+      const token = radarViewMatch[1].toLowerCase();
+      const mode: 'roadmap' | 'hybrid' | 'terrain' =
+        token === 'satelite' ? 'hybrid' : token === 'terreno' ? 'terrain' : 'roadmap';
+      return { type: 'radar_view_mode', mode, raw: clean };
+    }
+
+    if (
+      /\b(leva[-\s]?me\s+ate\s+la|mostra(?:r)?\s+(?:a\s+)?rota|traca(?:r)?\s+(?:a\s+)?rota|rota\s+ate\s+la|calcula(?:r)?\s+(?:a\s+)?rota|como\s+chegar\s+(?:la|ate\s+la))\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'radar_show_route', raw: clean };
+    }
+
+    if (
+      /\b(achar\s+(o\s+)?meu\s+celular|encontrar\s+(o\s+)?meu\s+(celular|telemovel|telefone)|onde\s+(esta|ta)\s+(o\s+)?meu\s+(celular|telemovel|telefone)|rastrear\s+(o\s+)?(meu\s+)?(celular|telemovel|telefone))\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'open_find_phone', raw: clean };
+    }
+
+    if (
+      /\b(qual\s+(?:e\s+)?(?:a\s+rua|o\s+bairro|o\s+endereco)(?:\s+onde\s+(?:ele|ela)\s+(?:esta|ta)|(?:\s+d[eo]\s+alvo|\s+del[ea]))?|em\s+que\s+rua\s+(?:ele|ela)\s+(?:esta|ta)|onde\s+(?:ele|ela)\s+(?:esta|ta)\s+agora)\b/i.test(
+        lower
+      )
+    ) {
+      return { type: 'radar_ask_target_street', raw: clean };
+    }
+
+    const trackTargetMatch = lower.match(
+      /^(?:sara[,\s]+)?(?:rastreia|rastrea|rastrear|localiza|localizar|procura\s+no\s+radar|acha\s+no\s+radar)\s+(?:o\s+|a\s+)?(.+)$/i
+    );
+    if (trackTargetMatch && trackTargetMatch[1]?.trim()) {
+      const targetQuery = clean
+        .replace(
+          /^(?:sara[,\s]+)?(?:rastreia|rastrea|rastrear|localiza|localizar|procura\s+no\s+radar|acha\s+no\s+radar)\s+(?:o\s+|a\s+)?/i,
+          ''
+        )
+        .replace(/[.!?]+$/g, '')
+        .trim();
+      if (targetQuery) {
+        return { type: 'radar_track_target', query: targetQuery, raw: clean };
+      }
+    }
+
+    if (
       /^(sara[,\s]+)?(abre|abrir|abres|mostra|vai\s+para|entra\s+no|muda\s+para|ver)\s+(o\s+|a\s+)?(mapa|radar|aba\s+do\s+mapa)(\s+da\s+sara)?$/i.test(
         lower
       ) ||
@@ -1740,14 +1807,6 @@ export function parseVoiceCommand(
       lower === 'radar'
     ) {
       return { type: 'open_radar_map', raw: clean };
-    }
-
-    if (
-      /\b(achar\s+(o\s+)?meu\s+celular|encontrar\s+(o\s+)?meu\s+(celular|telemovel|telefone)|onde\s+(esta|ta)\s+(o\s+)?meu\s+(celular|telemovel|telefone)|rastrear\s+(meu\s+)?(celular|telemovel))\b/i.test(
-        lower
-      )
-    ) {
-      return { type: 'open_find_phone', raw: clean };
     }
 
     if (
@@ -2413,6 +2472,9 @@ function isSilenceCommandPhrase(
     .replace(/\s+/g, ' ')
     .trim();
   if (!lower) return false;
+  if (/\bpara(?:r)?\s+(?:de\s+)?(?:rastrear|partilhar|o\s+segundo\s+plano|o\s+rastreamento|o\s+sonar)\b/i.test(lower)) {
+    return false;
+  }
 
   // Frases inequívocas funcionam mesmo no meio/fim de transcrição com eco acumulado
   const explicitMatch = lower.match(

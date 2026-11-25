@@ -7,6 +7,7 @@ import type {
   UserActivityStats,
 } from '../types/auth';
 import type {
+  LiveShareRecord,
   LocationRequestItem,
   RadarPresence,
   RemoteDeviceCommand,
@@ -705,7 +706,7 @@ export async function saveRadarPresenceCloud(presence: RadarPresence): Promise<v
   if (!presence?.saraId || !presence?.uid || presence.uid.startsWith('guest_')) return;
   try {
     const { firestoreMod, db } = await loadFirebaseRuntime();
-    // Guarda apenas o estado ATUAL / instante corrente — nunca arrays ou histórico
+    // Guarda apenas o estado ATUAL / instante corrente
     await firestoreMod.setDoc(
       firestoreMod.doc(db, 'sara_radar_presence', presence.saraId),
       {
@@ -717,6 +718,10 @@ export async function saveRadarPresenceCloud(presence: RadarPresence): Promise<v
         lat: presence.visible && !presence.ghostMode ? presence.lat : null,
         lng: presence.visible && !presence.ghostMode ? presence.lng : null,
         accuracyM: presence.visible && !presence.ghostMode ? presence.accuracyM ?? null : null,
+        speedMps: presence.visible && !presence.ghostMode ? presence.speedMps ?? null : null,
+        batteryPct: presence.visible && !presence.ghostMode ? presence.batteryPct ?? null : null,
+        stationedSince:
+          presence.visible && !presence.ghostMode ? presence.stationedSince ?? null : null,
         updatedAt: presence.updatedAt || new Date().toISOString(),
       },
       { merge: false }
@@ -950,5 +955,68 @@ export async function issueDeviceCommandCloud(
     // ignore offline
   }
 }
+
+export async function saveLiveShareCloud(share: LiveShareRecord): Promise<void> {
+  if (!share?.shareId) return;
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    await firestoreMod.setDoc(
+      firestoreMod.doc(db, 'sara_live_shares', share.shareId),
+      share,
+      { merge: true }
+    );
+  } catch {
+    // fallback local silencioso
+  }
+}
+
+export async function fetchLiveShareCloud(shareId: string): Promise<LiveShareRecord | null> {
+  if (!shareId) return null;
+  try {
+    const { firestoreMod, db } = await loadFirebaseRuntime();
+    const snap = await firestoreMod.getDoc(firestoreMod.doc(db, 'sara_live_shares', shareId));
+    if (!snap.exists()) return null;
+    return snap.data() as LiveShareRecord;
+  } catch {
+    return null;
+  }
+}
+
+export function subscribeLiveShareCloud(
+  shareId: string,
+  onChange: (record: LiveShareRecord | null) => void
+): () => void {
+  if (!shareId) {
+    onChange(null);
+    return () => {};
+  }
+  let active = true;
+  let unsub: (() => void) | null = null;
+
+  loadFirebaseRuntime()
+    .then(({ firestoreMod, db }) => {
+      if (!active) return;
+      const ref = firestoreMod.doc(db, 'sara_live_shares', shareId);
+      unsub = firestoreMod.onSnapshot(
+        ref,
+        (docSnap: any) => {
+          if (!active) return;
+          if (docSnap.exists()) {
+            onChange(docSnap.data() as LiveShareRecord);
+          } else {
+            onChange(null);
+          }
+        },
+        () => {}
+      );
+    })
+    .catch(() => {});
+
+  return () => {
+    active = false;
+    if (unsub) unsub();
+  };
+}
+
 
 
