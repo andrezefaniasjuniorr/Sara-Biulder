@@ -22,6 +22,7 @@ export default async function handler(req, res) {
       lastError: current.lastError || null,
       lastErrorStatus: current.lastErrorStatus ?? null,
       lastErrorAt: current.lastErrorAt || null,
+      lastModel: current.lastModel || null,
     });
   }
 

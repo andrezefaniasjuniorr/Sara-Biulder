@@ -13,6 +13,7 @@ let edgeMemoryVault = {
   lastError: null,
   lastErrorStatus: null,
   lastErrorAt: null,
+  lastModel: null,
 };
 
 let jwksCache = {
@@ -240,11 +241,11 @@ export async function verifyOwnerPasswordCredentials(email, password, env) {
   return false;
 }
 
-async function patchCloudErrorFields(lastError, lastErrorStatus, lastErrorAt) {
+async function patchCloudErrorFields(lastError, lastErrorStatus, lastErrorAt, lastModel) {
   try {
     const updateUrl =
       `${FIRESTORE_DOC_URL}?updateMask.fieldPaths=lastError` +
-      `&updateMask.fieldPaths=lastErrorStatus&updateMask.fieldPaths=lastErrorAt`;
+      `&updateMask.fieldPaths=lastErrorStatus&updateMask.fieldPaths=lastErrorAt&updateMask.fieldPaths=lastModel`;
     await fetch(updateUrl, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -256,6 +257,7 @@ async function patchCloudErrorFields(lastError, lastErrorStatus, lastErrorAt) {
               ? { integerValue: String(Math.trunc(lastErrorStatus)) }
               : { nullValue: null },
           lastErrorAt: lastErrorAt ? { stringValue: lastErrorAt } : { nullValue: null },
+          lastModel: lastModel ? { stringValue: lastModel } : { nullValue: null },
         },
       }),
     });
@@ -272,6 +274,7 @@ export async function getBackendImageKey(env) {
   let cloudError = null;
   let cloudErrorStatus = null;
   let cloudErrorAt = null;
+  let cloudModel = null;
 
   try {
     const res = await fetch(FIRESTORE_DOC_URL, { headers: { Accept: 'application/json' } });
@@ -287,6 +290,7 @@ export async function getBackendImageKey(env) {
           ? Number(rawStatus)
           : null;
       cloudErrorAt = String(fields?.lastErrorAt?.stringValue || '') || null;
+      cloudModel = String(fields?.lastModel?.stringValue || '') || null;
       if (isValidImageCoreKey(imageKey)) {
         edgeMemoryVault = {
           imageKey,
@@ -294,6 +298,7 @@ export async function getBackendImageKey(env) {
           lastError: cloudError,
           lastErrorStatus: cloudErrorStatus,
           lastErrorAt: cloudErrorAt,
+          lastModel: cloudModel,
         };
         return edgeMemoryVault;
       }
@@ -310,6 +315,7 @@ export async function getBackendImageKey(env) {
       lastError: edgeMemoryVault.lastError || cloudError,
       lastErrorStatus: edgeMemoryVault.lastErrorStatus ?? cloudErrorStatus,
       lastErrorAt: edgeMemoryVault.lastErrorAt || cloudErrorAt,
+      lastModel: edgeMemoryVault.lastModel || cloudModel,
     };
   }
 
@@ -319,6 +325,7 @@ export async function getBackendImageKey(env) {
     lastError: edgeMemoryVault.lastError || cloudError,
     lastErrorStatus: edgeMemoryVault.lastErrorStatus ?? cloudErrorStatus,
     lastErrorAt: edgeMemoryVault.lastErrorAt || cloudErrorAt,
+    lastModel: edgeMemoryVault.lastModel || cloudModel,
   };
 }
 
@@ -331,6 +338,7 @@ export async function setBackendImageKey(rawKey, bearerFirebaseToken) {
     lastError: null,
     lastErrorStatus: null,
     lastErrorAt: null,
+    lastModel: null,
   };
 
   try {
@@ -352,6 +360,7 @@ export async function setBackendImageKey(rawKey, bearerFirebaseToken) {
             lastError: { nullValue: null },
             lastErrorStatus: { nullValue: null },
             lastErrorAt: { nullValue: null },
+            lastModel: { nullValue: null },
           },
         }),
       });
@@ -367,17 +376,20 @@ export async function setBackendImageKey(rawKey, bearerFirebaseToken) {
     lastError: null,
     lastErrorStatus: null,
     lastErrorAt: null,
+    lastModel: null,
   };
 }
 
 /**
  * @param {string} errorMessage
  * @param {number | null} [statusCode]
+ * @param {string | null} [modelName]
  */
-export async function recordBackendImageError(errorMessage, statusCode = null) {
+export async function recordBackendImageError(errorMessage, statusCode = null, modelName = null) {
   const cleanMsg = sanitizeImageErrorMessage(errorMessage);
   const cleanStatus =
     typeof statusCode === 'number' && Number.isFinite(statusCode) ? Math.trunc(statusCode) : null;
+  const cleanModel = modelName ? String(modelName).trim().slice(0, 180) : null;
   const nowIso = new Date().toISOString();
 
   edgeMemoryVault = {
@@ -385,17 +397,25 @@ export async function recordBackendImageError(errorMessage, statusCode = null) {
     lastError: cleanMsg,
     lastErrorStatus: cleanStatus,
     lastErrorAt: nowIso,
+    lastModel: cleanModel,
   };
-  await patchCloudErrorFields(cleanMsg, cleanStatus, nowIso);
+  await patchCloudErrorFields(cleanMsg, cleanStatus, nowIso, cleanModel);
 }
 
-export async function clearBackendImageError() {
-  if (!edgeMemoryVault.lastError && !edgeMemoryVault.lastErrorAt) return;
+/**
+ * @param {string | null} [modelName]
+ */
+export async function clearBackendImageError(modelName = null) {
+  const cleanModel = modelName ? String(modelName).trim().slice(0, 180) : edgeMemoryVault.lastModel;
+  if (!edgeMemoryVault.lastError && !edgeMemoryVault.lastErrorAt && edgeMemoryVault.lastModel === cleanModel) {
+    return;
+  }
   edgeMemoryVault = {
     ...edgeMemoryVault,
     lastError: null,
     lastErrorStatus: null,
     lastErrorAt: null,
+    lastModel: cleanModel || null,
   };
-  await patchCloudErrorFields(null, null, null);
+  await patchCloudErrorFields(null, null, null, cleanModel || null);
 }

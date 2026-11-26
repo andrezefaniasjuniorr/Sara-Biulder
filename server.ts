@@ -445,6 +445,7 @@ async function startServer() {
       lastError: current.lastError || null,
       lastErrorStatus: current.lastErrorStatus ?? null,
       lastErrorAt: current.lastErrorAt || null,
+      lastModel: current.lastModel || null,
     });
   });
 
@@ -519,7 +520,11 @@ async function startServer() {
 
     const { imageKey } = await getBackendImageKey();
     if (!isValidImageCoreKey(imageKey)) {
-      await recordBackendImageError('Chave de Imagem SARA não configurada no painel de admin.', 503);
+      await recordBackendImageError(
+        'Chave de Imagem SARA não configurada no painel de admin.',
+        503,
+        'Nenhum (chave não configurada)'
+      );
       return res.status(503).json({
         ok: false,
         error: userGenericError,
@@ -527,15 +532,17 @@ async function startServer() {
     }
 
     const models = [
-      'black-forest-labs/FLUX.1-schnell',
-      'stabilityai/stable-diffusion-xl-base-1.0',
+      'stabilityai/stable-diffusion-2-1',
+      'runwayml/stable-diffusion-v1-5',
     ];
 
     const attemptErrors: string[] = [];
+    const attemptedModels: string[] = [];
     let lastStatus = 503;
 
     for (let i = 0; i < models.length; i++) {
       const modelId = models[i];
+      attemptedModels.push(modelId);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 45000);
 
@@ -562,8 +569,9 @@ async function startServer() {
         if (upstream.status === 401 || upstream.status === 403) {
           const detail = await extractUpstreamErrorDetail(upstream);
           await recordBackendImageError(
-            `Chave rejeitada (HTTP ${upstream.status})${detail ? `: ${detail}` : ''}`,
-            upstream.status
+            `HTTP ${upstream.status} — ${detail || 'Chave rejeitada ou sem permissão.'}`,
+            upstream.status,
+            attemptedModels.join(' -> ')
           );
           return res.status(503).json({
             ok: false,
@@ -575,7 +583,7 @@ async function startServer() {
         if (upstream.ok && contentType.startsWith('image/')) {
           const buf = Buffer.from(await upstream.arrayBuffer());
           if (buf.length > 0) {
-            await clearBackendImageError();
+            await clearBackendImageError(modelId);
             const mime = contentType.split(';')[0] || 'image/png';
             return res.json({
               ok: true,
@@ -587,20 +595,21 @@ async function startServer() {
         lastStatus = upstream.status || 503;
         const detail = await extractUpstreamErrorDetail(upstream);
         attemptErrors.push(
-          `${modelId.split('/').pop()}: HTTP ${lastStatus}${detail ? ` (${detail})` : ''}`
+          `[${modelId}] HTTP ${lastStatus}${detail ? `: ${detail}` : ''}`
         );
       } catch (err: any) {
         clearTimeout(timer);
         lastStatus = err?.name === 'AbortError' ? 504 : 503;
         const errMsg =
           err?.name === 'AbortError' ? 'Timeout após 45s' : err?.message || 'Erro de rede';
-        attemptErrors.push(`${modelId.split('/').pop()}: ${errMsg}`);
+        attemptErrors.push(`[${modelId}] ${errMsg}`);
       }
     }
 
     await recordBackendImageError(
       attemptErrors.join(' | ') || 'Falha nos motores de geração de imagem.',
-      lastStatus
+      lastStatus,
+      attemptedModels.join(' -> ')
     );
 
     return res.status(503).json({

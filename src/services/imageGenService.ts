@@ -139,6 +139,7 @@ export interface AdminImageCoreStatus {
   lastError?: string | null;
   lastErrorStatus?: number | null;
   lastErrorAt?: string | null;
+  lastModel?: string | null;
   error?: string;
 }
 
@@ -185,6 +186,7 @@ export async function fetchAdminImageCoreStatus(): Promise<AdminImageCoreStatus>
       lastError?: string | null;
       lastErrorStatus?: number | null;
       lastErrorAt?: string | null;
+      lastModel?: string | null;
       error?: string;
     } | null;
 
@@ -208,6 +210,7 @@ export async function fetchAdminImageCoreStatus(): Promise<AdminImageCoreStatus>
       lastError: data.lastError || null,
       lastErrorStatus: typeof data.lastErrorStatus === 'number' ? data.lastErrorStatus : null,
       lastErrorAt: data.lastErrorAt || null,
+      lastModel: data.lastModel || null,
     };
   } catch {
     return {
@@ -243,6 +246,7 @@ export async function saveAdminImageCoreKey(rawKey: string): Promise<AdminImageC
       lastError?: string | null;
       lastErrorStatus?: number | null;
       lastErrorAt?: string | null;
+      lastModel?: string | null;
       error?: string;
     } | null;
 
@@ -266,6 +270,7 @@ export async function saveAdminImageCoreKey(rawKey: string): Promise<AdminImageC
       lastError: data.lastError || null,
       lastErrorStatus: typeof data.lastErrorStatus === 'number' ? data.lastErrorStatus : null,
       lastErrorAt: data.lastErrorAt || null,
+      lastModel: data.lastModel || null,
     };
   } catch {
     return {
@@ -296,6 +301,7 @@ export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
       lastError?: string | null;
       lastErrorStatus?: number | null;
       lastErrorAt?: string | null;
+      lastModel?: string | null;
       error?: string;
     } | null;
     if (!res.ok || !data?.ok) {
@@ -315,6 +321,7 @@ export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
       lastError: data.lastError || null,
       lastErrorStatus: typeof data.lastErrorStatus === 'number' ? data.lastErrorStatus : null,
       lastErrorAt: data.lastErrorAt || null,
+      lastModel: data.lastModel || null,
     };
   } catch {
     return {

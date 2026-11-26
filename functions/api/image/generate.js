@@ -51,20 +51,26 @@ export async function onRequestPost(context) {
 
   const { imageKey } = await getBackendImageKey(env);
   if (!isValidImageCoreKey(imageKey)) {
-    await recordBackendImageError('Chave de Imagem SARA não configurada no painel de admin.', 503);
+    await recordBackendImageError(
+      'Chave de Imagem SARA não configurada no painel de admin.',
+      503,
+      'Nenhum (chave não configurada)'
+    );
     return json({ ok: false, error: USER_GENERIC_ERROR }, 503);
   }
 
   const models = [
-    'black-forest-labs/FLUX.1-schnell',
-    'stabilityai/stable-diffusion-xl-base-1.0',
+    'stabilityai/stable-diffusion-2-1',
+    'runwayml/stable-diffusion-v1-5',
   ];
 
   const attemptErrors = [];
+  const attemptedModels = [];
   let lastStatus = 503;
 
   for (let i = 0; i < models.length; i++) {
     const modelId = models[i];
+    attemptedModels.push(modelId);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45000);
     try {
@@ -89,8 +95,9 @@ export async function onRequestPost(context) {
       if (upstream.status === 401 || upstream.status === 403) {
         const detail = await extractUpstreamErrorDetail(upstream);
         await recordBackendImageError(
-          `Chave rejeitada (HTTP ${upstream.status})${detail ? `: ${detail}` : ''}`,
-          upstream.status
+          `HTTP ${upstream.status} — ${detail || 'Chave rejeitada ou sem permissão.'}`,
+          upstream.status,
+          attemptedModels.join(' -> ')
         );
         return json({ ok: false, error: USER_GENERIC_ERROR }, 503);
       }
@@ -99,7 +106,7 @@ export async function onRequestPost(context) {
       if (upstream.ok && contentType.startsWith('image/')) {
         const buf = await upstream.arrayBuffer();
         if (buf.byteLength > 0) {
-          await clearBackendImageError();
+          await clearBackendImageError(modelId);
           const mime = contentType.split(';')[0] || 'image/png';
           return json({
             ok: true,
@@ -111,19 +118,20 @@ export async function onRequestPost(context) {
       lastStatus = upstream.status || 503;
       const detail = await extractUpstreamErrorDetail(upstream);
       attemptErrors.push(
-        `${modelId.split('/').pop()}: HTTP ${lastStatus}${detail ? ` (${detail})` : ''}`
+        `[${modelId}] HTTP ${lastStatus}${detail ? `: ${detail}` : ''}`
       );
     } catch (err) {
       clearTimeout(timer);
       lastStatus = err?.name === 'AbortError' ? 504 : 503;
       const errMsg = err?.name === 'AbortError' ? 'Timeout após 45s' : err?.message || 'Erro de rede';
-      attemptErrors.push(`${modelId.split('/').pop()}: ${errMsg}`);
+      attemptErrors.push(`[${modelId}] ${errMsg}`);
     }
   }
 
   await recordBackendImageError(
     attemptErrors.join(' | ') || 'Falha nos motores de geração de imagem.',
-    lastStatus
+    lastStatus,
+    attemptedModels.join(' -> ')
   );
 
   return json({ ok: false, error: USER_GENERIC_ERROR }, 503);

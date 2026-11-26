@@ -17,6 +17,7 @@ let memoryVault = {
   lastError: null,
   lastErrorStatus: null,
   lastErrorAt: null,
+  lastModel: null,
 };
 
 let jwksCache = {
@@ -65,6 +66,7 @@ function readLocalDiskVault() {
         lastError: typeof parsed.lastError === 'string' ? parsed.lastError : null,
         lastErrorStatus: typeof parsed.lastErrorStatus === 'number' ? parsed.lastErrorStatus : null,
         lastErrorAt: typeof parsed.lastErrorAt === 'string' ? parsed.lastErrorAt : null,
+        lastModel: typeof parsed.lastModel === 'string' ? parsed.lastModel : null,
       };
     }
   } catch {
@@ -76,7 +78,7 @@ function readLocalDiskVault() {
 function writeLocalDiskVault(vaultData) {
   try {
     const cleanKey = String(vaultData?.imageKey || '').trim();
-    if (!cleanKey && !vaultData?.lastError) {
+    if (!cleanKey && !vaultData?.lastError && !vaultData?.lastModel) {
       if (fs.existsSync(LOCAL_VAULT_PATH)) {
         fs.unlinkSync(LOCAL_VAULT_PATH);
       }
@@ -91,6 +93,7 @@ function writeLocalDiskVault(vaultData) {
         lastErrorStatus:
           typeof vaultData?.lastErrorStatus === 'number' ? vaultData.lastErrorStatus : null,
         lastErrorAt: vaultData?.lastErrorAt || null,
+        lastModel: vaultData?.lastModel || null,
       }),
       { encoding: 'utf8', mode: 0o600 }
     );
@@ -119,7 +122,8 @@ async function fetchCloudVault(bearerFirebaseToken) {
         ? Number(rawStatus)
         : null;
     const lastErrorAt = String(fields?.lastErrorAt?.stringValue || '') || null;
-    return { imageKey, updatedAt, lastError, lastErrorStatus, lastErrorAt };
+    const lastModel = String(fields?.lastModel?.stringValue || '') || null;
+    return { imageKey, updatedAt, lastError, lastErrorStatus, lastErrorAt, lastModel };
   } catch {
     return null;
   }
@@ -146,6 +150,7 @@ async function saveCloudVault(imageKey, updatedAt, bearerFirebaseToken) {
           lastError: { nullValue: null },
           lastErrorStatus: { nullValue: null },
           lastErrorAt: { nullValue: null },
+          lastModel: { nullValue: null },
         },
       }),
     });
@@ -155,11 +160,11 @@ async function saveCloudVault(imageKey, updatedAt, bearerFirebaseToken) {
   }
 }
 
-async function patchCloudErrorFields(lastError, lastErrorStatus, lastErrorAt) {
+async function patchCloudErrorFields(lastError, lastErrorStatus, lastErrorAt, lastModel) {
   try {
     const updateUrl =
       `${FIRESTORE_DOC_URL}?updateMask.fieldPaths=lastError` +
-      `&updateMask.fieldPaths=lastErrorStatus&updateMask.fieldPaths=lastErrorAt`;
+      `&updateMask.fieldPaths=lastErrorStatus&updateMask.fieldPaths=lastErrorAt&updateMask.fieldPaths=lastModel`;
     await fetch(updateUrl, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -171,6 +176,7 @@ async function patchCloudErrorFields(lastError, lastErrorStatus, lastErrorAt) {
               ? { integerValue: String(Math.trunc(lastErrorStatus)) }
               : { nullValue: null },
           lastErrorAt: lastErrorAt ? { stringValue: lastErrorAt } : { nullValue: null },
+          lastModel: lastModel ? { stringValue: lastModel } : { nullValue: null },
         },
       }),
     });
@@ -187,6 +193,7 @@ export async function getBackendImageKey() {
       lastError: memoryVault.lastError || null,
       lastErrorStatus: memoryVault.lastErrorStatus ?? null,
       lastErrorAt: memoryVault.lastErrorAt || null,
+      lastModel: memoryVault.lastModel || null,
     };
   }
 
@@ -212,6 +219,7 @@ export async function getBackendImageKey() {
       lastErrorStatus:
         memoryVault.lastErrorStatus ?? disk?.lastErrorStatus ?? cloud?.lastErrorStatus ?? null,
       lastErrorAt: memoryVault.lastErrorAt || disk?.lastErrorAt || cloud?.lastErrorAt || null,
+      lastModel: memoryVault.lastModel || disk?.lastModel || cloud?.lastModel || null,
     };
   }
 
@@ -222,6 +230,7 @@ export async function getBackendImageKey() {
     lastErrorStatus:
       memoryVault.lastErrorStatus ?? disk?.lastErrorStatus ?? cloud?.lastErrorStatus ?? null,
     lastErrorAt: memoryVault.lastErrorAt || disk?.lastErrorAt || cloud?.lastErrorAt || null,
+    lastModel: memoryVault.lastModel || disk?.lastModel || cloud?.lastModel || null,
   };
 }
 
@@ -234,6 +243,7 @@ export async function setBackendImageKey(rawKey, bearerFirebaseToken) {
     lastError: null,
     lastErrorStatus: null,
     lastErrorAt: null,
+    lastModel: null,
   };
   writeLocalDiskVault(memoryVault);
   await saveCloudVault(clean, clean ? nowIso : null, bearerFirebaseToken);
@@ -244,17 +254,20 @@ export async function setBackendImageKey(rawKey, bearerFirebaseToken) {
     lastError: null,
     lastErrorStatus: null,
     lastErrorAt: null,
+    lastModel: null,
   };
 }
 
 /**
  * @param {string} errorMessage
  * @param {number | null} [statusCode]
+ * @param {string | null} [modelName]
  */
-export async function recordBackendImageError(errorMessage, statusCode = null) {
+export async function recordBackendImageError(errorMessage, statusCode = null, modelName = null) {
   const cleanMsg = sanitizeImageErrorMessage(errorMessage);
   const cleanStatus =
     typeof statusCode === 'number' && Number.isFinite(statusCode) ? Math.trunc(statusCode) : null;
+  const cleanModel = modelName ? String(modelName).trim().slice(0, 180) : null;
   const nowIso = new Date().toISOString();
 
   memoryVault = {
@@ -262,21 +275,29 @@ export async function recordBackendImageError(errorMessage, statusCode = null) {
     lastError: cleanMsg,
     lastErrorStatus: cleanStatus,
     lastErrorAt: nowIso,
+    lastModel: cleanModel,
   };
   writeLocalDiskVault(memoryVault);
-  await patchCloudErrorFields(cleanMsg, cleanStatus, nowIso);
+  await patchCloudErrorFields(cleanMsg, cleanStatus, nowIso, cleanModel);
 }
 
-export async function clearBackendImageError() {
-  if (!memoryVault.lastError && !memoryVault.lastErrorAt) return;
+/**
+ * @param {string | null} [modelName]
+ */
+export async function clearBackendImageError(modelName = null) {
+  const cleanModel = modelName ? String(modelName).trim().slice(0, 180) : memoryVault.lastModel;
+  if (!memoryVault.lastError && !memoryVault.lastErrorAt && memoryVault.lastModel === cleanModel) {
+    return;
+  }
   memoryVault = {
     ...memoryVault,
     lastError: null,
     lastErrorStatus: null,
     lastErrorAt: null,
+    lastModel: cleanModel || null,
   };
   writeLocalDiskVault(memoryVault);
-  await patchCloudErrorFields(null, null, null);
+  await patchCloudErrorFields(null, null, null, cleanModel || null);
 }
 
 function decodeBase64UrlJson(segment) {

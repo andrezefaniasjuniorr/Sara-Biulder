@@ -28,6 +28,7 @@ export async function onRequestGet(context) {
     lastError: current.lastError || null,
     lastErrorStatus: current.lastErrorStatus ?? null,
     lastErrorAt: current.lastErrorAt || null,
+    lastModel: current.lastModel || null,
   });
 }
 

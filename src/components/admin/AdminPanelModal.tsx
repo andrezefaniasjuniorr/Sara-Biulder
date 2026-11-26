@@ -110,13 +110,13 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
   const chartCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartInstanceRef = useRef<Chart | null>(null);
 
-  const refreshCoreImageStatus = useCallback(async () => {
-    setCoreImageLoading(true);
+  const refreshCoreImageStatus = useCallback(async (silent = false) => {
+    if (!silent) setCoreImageLoading(true);
     try {
       const status = await fetchAdminImageCoreStatus();
       setCoreImageStatus(status);
     } finally {
-      setCoreImageLoading(false);
+      if (!silent) setCoreImageLoading(false);
     }
   }, []);
 
@@ -132,9 +132,10 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
 
   useEffect(() => {
     void refreshData();
-    void refreshCoreImageStatus();
+    void refreshCoreImageStatus(false);
     const timer = setInterval(() => {
       void refreshData();
+      void refreshCoreImageStatus(true);
     }, 5000);
     return () => clearInterval(timer);
   }, [refreshData, refreshCoreImageStatus]);
@@ -584,24 +585,59 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                     )}
                   </div>
 
-                  {coreImageStatus?.lastError && (
-                    <div className="mt-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/35 text-[11px] text-rose-200 space-y-1">
-                      <div className="flex items-center justify-between gap-2 font-bold text-rose-300">
-                        <span className="flex items-center gap-1">
-                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                          Erro real da chave (só Admin)
-                        </span>
-                        <span className="font-mono text-[10px] text-rose-300/80">
-                          {coreImageStatus.lastErrorStatus ? `HTTP ${coreImageStatus.lastErrorStatus}` : ''}
-                          {coreImageStatus.lastErrorStatus && coreImageStatus.lastErrorAt ? ' · ' : ''}
-                          {coreImageStatus.lastErrorAt ? formatTimeShort(coreImageStatus.lastErrorAt) : ''}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-rose-100/90 break-words leading-snug font-mono">
-                        {coreImageStatus.lastError}
-                      </p>
+                  <div className="mt-2.5 p-2.5 rounded-lg bg-[#040916] border border-slate-800/90 text-[11px] space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-slate-400">Chave guardada:</span>
+                      <span
+                        className={`font-mono font-bold ${
+                          coreImageStatus?.configured ? 'text-emerald-300' : 'text-amber-300'
+                        }`}
+                      >
+                        {coreImageStatus?.configured
+                          ? `SIM${coreImageStatus.maskedKey ? ` (${coreImageStatus.maskedKey})` : ''}`
+                          : 'NÃO'}
+                      </span>
                     </div>
-                  )}
+
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="text-slate-400 shrink-0">Qual modelo tentou usar:</span>
+                      <span className="font-mono text-[10px] text-cyan-200 text-right break-all">
+                        {coreImageStatus?.lastModel || 'Nenhum ainda (principal: stabilityai/stable-diffusion-2-1)'}
+                      </span>
+                    </div>
+
+                    <div className="pt-1 border-t border-slate-800/80 space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-slate-400 font-semibold flex items-center gap-1">
+                          <AlertTriangle
+                            className={`w-3.5 h-3.5 shrink-0 ${
+                              coreImageStatus?.lastError ? 'text-rose-400' : 'text-emerald-400'
+                            }`}
+                          />
+                          Último erro do Núcleo SARA:
+                        </span>
+                        {coreImageStatus?.lastError && (
+                          <span className="font-mono text-[10px] text-rose-300">
+                            {coreImageStatus.lastErrorStatus
+                              ? `Código ${coreImageStatus.lastErrorStatus}`
+                              : 'Sem código'}
+                            {coreImageStatus.lastErrorAt
+                              ? ` · ${formatTimeShort(coreImageStatus.lastErrorAt)}`
+                              : ''}
+                          </span>
+                        )}
+                      </div>
+                      {coreImageStatus?.lastError ? (
+                        <p className="p-2 rounded bg-rose-500/10 border border-rose-500/35 text-[11px] text-rose-100 break-words leading-snug font-mono">
+                          {coreImageStatus.lastError}
+                        </p>
+                      ) : (
+                        <p className="text-[11px] text-emerald-300/90 font-mono">
+                          Nenhum erro registado.
+                        </p>
+                      )}
+                    </div>
+                  </div>
                 </form>
               )}
 
