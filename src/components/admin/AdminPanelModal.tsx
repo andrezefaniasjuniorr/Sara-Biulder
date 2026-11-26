@@ -602,7 +602,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                     <div className="flex items-start justify-between gap-2">
                       <span className="text-slate-400 shrink-0">Qual modelo tentou usar:</span>
                       <span className="font-mono text-[10px] text-cyan-200 text-right break-all">
-                        {coreImageStatus?.lastModel || 'Nenhum ainda (principal: stabilityai/stable-diffusion-2-1)'}
+                        {coreImageStatus?.lastModel || 'Nenhum ainda (principal: black-forest-labs/FLUX.1-schnell)'}
                       </span>
                     </div>
 
