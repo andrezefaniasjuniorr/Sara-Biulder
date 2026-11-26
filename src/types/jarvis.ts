@@ -270,6 +270,19 @@ export type JarvisStageContent =
         hint?: string;
         lang?: 'pt-PT' | 'en-US' | 'fr-FR';
       }>;
+    }
+  | {
+      id: string;
+      kind: 'generated_image';
+      title: string;
+      prompt: string;
+      imageUrl?: string;
+      isGenerating?: boolean;
+      isTopQuality?: boolean;
+      awaitingStyle?: boolean;
+      style?: 'realistic' | 'drawing' | 'pixar3d';
+      seed?: number;
+      errorMessage?: string;
     };
 
 export interface JarvisConversationEntry {

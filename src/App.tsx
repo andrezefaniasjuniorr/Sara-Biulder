@@ -112,6 +112,7 @@ import {
   IMAGE_ASK_STYLE_MESSAGE,
   IMAGE_CREATING_MESSAGE,
   IMAGE_CREATING_TOP_MESSAGE,
+  normalizeImageDisplaySrc,
   parseImageStyleReply,
   parseImageVoiceCommand,
   saveUserProfilePhoto,
@@ -217,7 +218,7 @@ import {
 } from './utils/projectMemory';
 import { TopBar } from './components/TopBar';
 import { SaraChatPanel } from './components/SaraChatPanel';
-import { LivePreviewPanel } from './components/LivePreviewPanel';
+import { LivePreviewPanel, type GeneratedPreviewImageState } from './components/LivePreviewPanel';
 import { EditorConsolePanel } from './components/EditorConsolePanel';
 import { ProjectsModal } from './components/ProjectsModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -701,6 +702,9 @@ export default function App() {
   const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
   const [isPreviewFullscreen, setIsPreviewFullscreen] = useState(false);
   const [isPresentationMode, setIsPresentationMode] = useState(false);
+  const [previewGeneratedImage, setPreviewGeneratedImage] =
+    useState<GeneratedPreviewImageState | null>(null);
+  const lastBuilderImageRef = useRef<GeneratedPreviewImageState | null>(null);
 
   const [errorsFixedCount, setErrorsFixedCount] = useState<number>(() =>
     loadInitialErrorsFixed(getSavedActiveSession())
@@ -5313,6 +5317,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         awaitingImageStyle: true,
       });
       setMessages((prev) => [...prev, ...nextMsgs]);
+      setPreviewGeneratedImage({
+        messageId: targetId,
+        prompt: imgPrompt,
+        awaitingStyle: true,
+        style: 'realistic',
+      });
       speakAsSara('Escolhe o estilo da tua imagem: realista, desenho ou 3D Pixar.', voiceEnabledRef.current, {
         level: 'short',
         forceSpeak: true,
@@ -5343,7 +5353,17 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       const isTop = Boolean(options?.qualityTop);
       const loadingMsg = isTop ? IMAGE_CREATING_TOP_MESSAGE : IMAGE_CREATING_MESSAGE;
 
-      setMobileTab('chat');
+      setPreviewGeneratedImage({
+        messageId: targetId,
+        prompt: imgPrompt,
+        isGenerating: true,
+        isTopQuality: isTop,
+        style: chosenStyle,
+        seed: nextSeed,
+      });
+      if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+        setMobileTab('preview');
+      }
 
       if (options?.targetMessageId) {
         setMessages((prev) =>
@@ -5403,13 +5423,25 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         qualityMode: isTop ? 'top' : 'auto',
       });
       if (res.ok) {
+        const displayUrl = normalizeImageDisplaySrc(res.dataUrl) || res.dataUrl;
+        const resolvedState: GeneratedPreviewImageState = {
+          messageId: targetId,
+          prompt: imgPrompt,
+          imageUrl: displayUrl,
+          isGenerating: false,
+          isTopQuality: res.isTopQuality,
+          style: res.style,
+          seed: res.seed,
+        };
+        lastBuilderImageRef.current = resolvedState;
+        setPreviewGeneratedImage(resolvedState);
         setMessages((prev) =>
           prev.map((m) =>
             m.id === targetId
               ? {
                   ...m,
                   text: `Imagem criada: ${imgPrompt}`,
-                  imageUrl: res.dataUrl,
+                  imageUrl: displayUrl,
                   isGeneratingImage: false,
                   generatedImageTopQuality: res.isTopQuality,
                   awaitingImageStyle: false,
@@ -5425,6 +5457,15 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           forceSpeak: true,
         });
       } else {
+        setPreviewGeneratedImage({
+          messageId: targetId,
+          prompt: imgPrompt,
+          isGenerating: false,
+          isTopQuality: false,
+          style: chosenStyle,
+          seed: nextSeed,
+          errorMessage: res.error,
+        });
         setMessages((prev) =>
           prev.map((m) =>
             m.id === targetId
@@ -5453,9 +5494,26 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
   const handleBuilderImageVoiceAction = useCallback(
     async (action: ImageVoiceAction) => {
       const msgs = messagesRef.current;
-      const lastImg = [...msgs]
+      const fromChat = [...msgs]
         .reverse()
         .find((m) => m.sender === 'sara' && (m.imageUrl || m.generatedImagePrompt));
+      const cached = lastBuilderImageRef.current;
+      const lastImg = fromChat?.imageUrl
+        ? fromChat
+        : cached
+        ? {
+            id: cached.messageId,
+            sender: 'sara' as const,
+            text: `Imagem criada: ${cached.prompt}`,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+            mode: 'conversation' as const,
+            imageUrl: cached.imageUrl,
+            generatedImagePrompt: cached.prompt,
+            generatedImageStyle: cached.style,
+            generatedImageSeed: cached.seed,
+            generatedImageTopQuality: cached.isTopQuality,
+          }
+        : fromChat;
 
       if (!lastImg || !lastImg.generatedImagePrompt) {
         const emptyReply = 'Ainda não gerei nenhuma imagem nesta conversa. Diz-me o que queres criar.';
@@ -5485,7 +5543,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (action.type === 'ask_style') {
-        setMobileTab('chat');
+        setPreviewGeneratedImage({
+          messageId: lastImg.id,
+          prompt: lastImg.generatedImagePrompt,
+          awaitingStyle: true,
+          style: lastImg.generatedImageStyle || 'realistic',
+        });
         setMessages((prev) =>
           prev.map((m) =>
             m.id === lastImg.id
@@ -5561,14 +5624,26 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (action.type === 'show_last_image') {
-        if (!lastImg.imageUrl) {
+        const displayUrl = normalizeImageDisplaySrc(lastImg.imageUrl);
+        if (!displayUrl) {
           await runBuilderImageGeneration(lastImg.generatedImagePrompt, {
             targetMessageId: lastImg.id,
             style: lastImg.generatedImageStyle || 'realistic',
           });
           return;
         }
-        setMobileTab('chat');
+        setPreviewGeneratedImage({
+          messageId: lastImg.id,
+          prompt: lastImg.generatedImagePrompt,
+          imageUrl: displayUrl,
+          isGenerating: false,
+          isTopQuality: lastImg.generatedImageTopQuality,
+          style: lastImg.generatedImageStyle || 'realistic',
+          seed: lastImg.generatedImageSeed,
+        });
+        if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+          setMobileTab('preview');
+        }
         const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
         setMessages((prev) => [
           ...prev,
@@ -5576,7 +5651,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             id: `sara_show_${Date.now()}`,
             sender: 'sara',
             text: `Imagem criada: ${lastImg.generatedImagePrompt}`,
-            imageUrl: lastImg.imageUrl,
+            imageUrl: displayUrl,
             generatedImagePrompt: lastImg.generatedImagePrompt,
             generatedImageStyle: lastImg.generatedImageStyle,
             generatedImageSeed: lastImg.generatedImageSeed,
@@ -7036,6 +7111,35 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             onDownloadZip={handleDownloadZip}
             onPushGitHub={() => setShowDeployModal(true)}
             onPublish={() => setShowDeployModal(true)}
+            generatedImage={previewGeneratedImage}
+            onCloseGeneratedImage={() => setPreviewGeneratedImage(null)}
+            onSelectGeneratedImageStyle={(msgId, prompt, style) => {
+              void runBuilderImageGeneration(prompt, {
+                targetMessageId: msgId,
+                style,
+              });
+            }}
+            onRegenerateGeneratedImage={(msgId, prompt, style, prevSeed) => {
+              void runBuilderImageGeneration(prompt, {
+                targetMessageId: msgId,
+                style: style || 'realistic',
+                previousSeed: prevSeed,
+                spokenConfirmText: 'Já gerei outra para ti.',
+              });
+            }}
+            onTopQualityGeneratedImage={(msgId, prompt, style, prevSeed) => {
+              void runBuilderImageGeneration(prompt, {
+                targetMessageId: msgId,
+                style: style || 'realistic',
+                previousSeed: prevSeed,
+                qualityTop: true,
+                spokenConfirmText: 'Aqui está a tua imagem em qualidade top.',
+              });
+            }}
+            onUseGeneratedImageAsProfile={async (imgUrl) => {
+              await saveUserProfilePhoto(session.userId, imgUrl);
+              showToast('Foto de perfil atualizada!');
+            }}
           />
         </div>
 

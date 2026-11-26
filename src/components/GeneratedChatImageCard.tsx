@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Download,
   RefreshCw,
@@ -14,7 +14,9 @@ import {
 import {
   IMAGE_CREATING_MESSAGE,
   IMAGE_CREATING_TOP_MESSAGE,
+  IMAGE_GENERIC_ERROR_MESSAGE,
   IMAGE_STYLE_OPTIONS,
+  normalizeImageDisplaySrc,
   type SaraImageStyle,
 } from '../services/imageGenService';
 
@@ -26,6 +28,8 @@ interface GeneratedChatImageCardProps {
   activeStyle?: SaraImageStyle;
   prompt: string;
   compact?: boolean;
+  large?: boolean;
+  errorMessage?: string;
   onSelectStyle: (style: SaraImageStyle) => void;
   onDownload: () => void;
   onRegenerate: () => void;
@@ -47,6 +51,8 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
   activeStyle = 'realistic',
   prompt,
   compact = false,
+  large = false,
+  errorMessage,
   onSelectStyle,
   onDownload,
   onRegenerate,
@@ -55,14 +61,21 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
 }) => {
   const [appliedProfile, setAppliedProfile] = useState(false);
   const [pickingNewStyle, setPickingNewStyle] = useState(false);
+  const [imgLoadFailed, setImgLoadFailed] = useState(false);
+
+  const normalizedSrc = useMemo(() => normalizeImageDisplaySrc(imageUrl), [imageUrl]);
+
+  useEffect(() => {
+    setImgLoadFailed(false);
+  }, [normalizedSrc]);
 
   if (isGenerating) {
     return (
-      <div className="mt-2 rounded-xl border border-cyan-500/40 bg-[#040B1A] p-4 flex flex-col items-center justify-center gap-2.5 text-center shadow-[0_0_24px_rgba(0,229,255,0.12)]">
-        <div className="w-10 h-10 rounded-full bg-cyan-500/15 border border-cyan-400/50 flex items-center justify-center">
+      <div className="mt-2 rounded-xl border border-cyan-500/40 bg-[#040B1A] p-6 flex flex-col items-center justify-center gap-3 text-center shadow-[0_0_24px_rgba(0,229,255,0.12)]">
+        <div className="w-11 h-11 rounded-full bg-cyan-500/15 border border-cyan-400/50 flex items-center justify-center">
           <Sparkles className="w-5 h-5 text-[#00E5FF] animate-spin" />
         </div>
-        <div className="text-xs font-bold text-cyan-200 tracking-wide">
+        <div className="text-xs sm:text-sm font-bold text-cyan-200 tracking-wide">
           {isTopQuality ? IMAGE_CREATING_TOP_MESSAGE : IMAGE_CREATING_MESSAGE}
         </div>
         {prompt && (
@@ -74,7 +87,7 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
 
   if (awaitingStyle) {
     return (
-      <div className="mt-2 rounded-xl border border-cyan-500/35 bg-[#040B1A] p-3 space-y-2.5">
+      <div className="mt-2 rounded-xl border border-cyan-500/35 bg-[#040B1A] p-3.5 space-y-2.5">
         {prompt && (
           <div className="text-[11px] text-slate-300 line-clamp-2">
             <span className="text-slate-500">Descrição: </span>
@@ -108,7 +121,24 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
     );
   }
 
-  if (!imageUrl) return null;
+  if (!normalizedSrc) {
+    if (errorMessage) {
+      return (
+        <div className="mt-2 rounded-xl border border-cyan-500/35 bg-[#040B1A] p-4 flex flex-col items-center justify-center gap-2.5 text-center">
+          <div className="text-xs text-slate-200">{errorMessage || IMAGE_GENERIC_ERROR_MESSAGE}</div>
+          <button
+            type="button"
+            onClick={onRegenerate}
+            className="px-3 py-1.5 rounded-lg bg-[#09162E] hover:bg-purple-500/20 border border-purple-500/40 text-[11px] font-bold text-purple-100 flex items-center gap-1.5 cursor-pointer transition"
+          >
+            <RefreshCw className="w-3.5 h-3.5 text-purple-300 shrink-0" />
+            <span>Gerar Outra</span>
+          </button>
+        </div>
+      );
+    }
+    return null;
+  }
 
   const handleApplyProfile = async () => {
     await onUseAsProfilePhoto();
@@ -117,15 +147,23 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
   };
 
   return (
-    <div className="mt-2 space-y-2.5">
-      <div className="rounded-xl overflow-hidden border border-cyan-500/40 bg-[#030814] shadow-[0_8px_28px_rgba(0,229,255,0.14)]">
-        <img
-          src={imageUrl}
-          alt={prompt || 'Imagem gerada pela SARA'}
-          className={`w-full ${
-            compact ? 'max-h-[340px]' : 'max-h-[440px]'
-          } object-contain mx-auto block`}
-        />
+    <div className="mt-2 space-y-2.5 w-full">
+      <div className="w-full rounded-xl overflow-hidden border border-cyan-500/40 bg-[#030814] shadow-[0_8px_28px_rgba(0,229,255,0.14)] flex items-center justify-center">
+        {imgLoadFailed ? (
+          <div className="p-6 text-center space-y-2">
+            <div className="text-xs text-slate-200">{IMAGE_GENERIC_ERROR_MESSAGE}</div>
+          </div>
+        ) : (
+          <img
+            src={normalizedSrc}
+            alt={prompt || 'Imagem gerada pela SARA'}
+            onError={() => setImgLoadFailed(true)}
+            style={{ width: '100%' }}
+            className={`w-full ${
+              large ? 'max-h-[540px]' : compact ? 'max-h-[340px]' : 'max-h-[440px]'
+            } object-contain mx-auto block`}
+          />
+        )}
       </div>
 
       {pickingNewStyle ? (

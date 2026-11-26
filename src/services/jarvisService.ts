@@ -205,13 +205,25 @@ export function loadJarvisLocalBundle(
     // ignore
   }
 
+  const rawChat = safeReadJson<JarvisConversationEntry[]>(
+    scopedJarvisKey(JARVIS_STORAGE_KEYS.chat, userId),
+    []
+  );
+  const conversation = Array.isArray(rawChat)
+    ? rawChat.map((entry) => ({
+        ...entry,
+        isGeneratingImage: false,
+        imageUrl: entry?.imageUrl?.startsWith('blob:') ? undefined : entry?.imageUrl,
+      }))
+    : [];
+
   return {
     agenda,
     alarms: safeReadJson<JarvisAlarmItem[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.alarms, userId), []),
     tasks,
     memory,
     documents: safeReadJson<JarvisDocumentItem[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.docs, userId), []),
-    conversation: safeReadJson<JarvisConversationEntry[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.chat, userId), []),
+    conversation,
     playlist,
   };
 }
@@ -254,6 +266,9 @@ export function saveJarvisConversation(entries: JarvisConversationEntry[], userI
   const compact: JarvisConversationEntry[] = [...recent]
     .reverse()
     .map((entry) => {
+      if (entry.imageUrl && entry.imageUrl.startsWith('blob:')) {
+        return { ...entry, imageUrl: undefined, isGeneratingImage: false };
+      }
       if (entry.imageUrl && entry.imageUrl.startsWith('data:image/')) {
         if (keptImages < 2) {
           keptImages += 1;

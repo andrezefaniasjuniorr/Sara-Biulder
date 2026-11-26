@@ -136,9 +136,9 @@ export function extractImageGenRequest(rawText: string): ExtractedImageGenReques
     return null;
   }
 
-  // Comandos sobre a última imagem ("mostra a imagem", "outra imagem", "baixa a imagem") não criam assunto novo
+  // Comandos sobre a última imagem ("mostra/mostre a imagem", "outra imagem", "baixa a imagem") não criam assunto novo
   if (
-    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:por\s+favor[,\s]+)?(?:mostra|abre|ver|baixa|baixar|guarda|guardar|descarrega|usa|usar|define|mete|coloca|gera|cria|faz)?\s*(?:a\s+|essa\s+|esta\s+|uma\s+)?(?:ultima\s+|outra\s+)?(?:imagem|foto)(?:\s+como\s+foto\s+de\s+perfil)?[.!?]*$/i.test(
+    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:por\s+favor[,\s]+)?(?:mostra|mostre|mostrar|abre|abra|ver|baixa|baixe|baixar|guarda|guarde|guardar|descarrega|descarregue|usa|use|usar|define|defina|mete|meta|coloca|coloque|gera|gere|cria|crie|faz|faca)?(?:-me|\s+me)?\s*(?:a\s+|essa\s+|esta\s+|uma\s+)?(?:ultima\s+|outra\s+)?(?:imagem|foto)(?:\s+como\s+foto\s+de\s+perfil)?[.!?]*$/i.test(
       normalized
     )
   ) {
@@ -220,24 +220,28 @@ export function parseImageVoiceCommand(rawText: string): ImageVoiceAction | null
   if (!body) return null;
 
   if (
-    /^(?:(?:gera|gerar|cria|criar|faz|fazer|manda|tenta)(?:-me|\s+me)?\s+)?(?:uma?\s+)?outra(?:\s+(?:imagem|foto))?$|^gera\s+mais\s+uma(?:\s+(?:imagem|foto))?$/i.test(
+    /^(?:(?:gera|gere|gerar|cria|crie|criar|faz|faca|fazer|manda|mande|tenta|tente)(?:-me|\s+me)?\s+)?(?:uma?\s+)?outra(?:\s+(?:imagem|foto))?$|^gera\s+mais\s+uma(?:\s+(?:imagem|foto))?$/i.test(
       body
     )
   ) {
     return { type: 'regenerate' };
   }
 
-  if (/^(?:muda|mudar|altera|alterar|troca|trocar)\s+(?:o\s+|de\s+)?estilo(?:\s+(?:da\s+)?imagem)?$/i.test(body)) {
+  if (
+    /^(?:muda|mude|mudar|altera|altere|alterar|troca|troque|trocar)\s+(?:o\s+|de\s+)?estilo(?:\s+(?:da\s+)?imagem)?$/i.test(
+      body
+    )
+  ) {
     return { type: 'ask_style' };
   }
 
   const styleCmd = body.match(
-    /^(?:(?:muda|mudar|altera|alterar|troca|trocar|faz|gera)\s+(?:o\s+estilo\s+)?(?:para\s+|em\s+)?)?(?:o\s+)?(?:estilo\s+)?(realista|desenho|3d\s*pixar|pixar\s*3d|pixar)$/i
+    /^(?:(?:muda|mude|mudar|altera|altere|alterar|troca|troque|trocar|faz|faca|gera|gere)\s+(?:o\s+estilo\s+)?(?:para\s+|em\s+)?)?(?:o\s+)?(?:estilo\s+)?(realista|desenho|3d\s*pixar|pixar\s*3d|pixar)$/i
   );
   if (styleCmd && styleCmd[1]) {
     const val = styleCmd[1].toLowerCase();
-    // Só dispara comando explícito de mudança de estilo se contiver "estilo" ou "muda/altera/troca"
-    if (/\b(?:estilo|muda|mudar|altera|alterar|troca|trocar)\b/i.test(body)) {
+    // Só dispara comando explícito de mudança de estilo se contiver "estilo" ou verbo de troca
+    if (/\b(?:estilo|muda|mude|mudar|altera|altere|alterar|troca|troque|trocar)\b/i.test(body)) {
       if (val.includes('desenho')) return { type: 'set_style', style: 'drawing' };
       if (val.includes('pixar') || val.includes('3d')) return { type: 'set_style', style: 'pixar3d' };
       return { type: 'set_style', style: 'realistic' };
@@ -245,7 +249,7 @@ export function parseImageVoiceCommand(rawText: string): ImageVoiceAction | null
   }
 
   if (
-    /^(?:(?:gera|gerar|cria|criar|faz|fazer|usa|usar|ativa|ativar)\s+(?:em\s+|com\s+)?)?qualidade\s+top(?:\s+(?:na\s+|nessa\s+|nesta\s+)?imagem)?$/i.test(
+    /^(?:(?:gera|gere|gerar|cria|crie|criar|faz|faca|fazer|usa|use|usar|ativa|ative|ativar)\s+(?:em\s+|com\s+)?)?qualidade\s+top(?:\s+(?:na\s+|nessa\s+|nesta\s+)?imagem)?$/i.test(
       body
     )
   ) {
@@ -253,7 +257,7 @@ export function parseImageVoiceCommand(rawText: string): ImageVoiceAction | null
   }
 
   if (
-    /^(?:baixa|baixar|guarda|guardar|descarrega|descarregar|salva|salvar|faz\s+download\s+d[ao])\s+(?:a\s+|essa\s+|esta\s+|ultima\s+)?(?:imagem|foto)$/i.test(
+    /^(?:baixa|baixe|baixar|guarda|guarde|guardar|descarrega|descarregue|descarregar|salva|salve|salvar|faz\s+download\s+d[ao])\s+(?:a\s+|essa\s+|esta\s+|ultima\s+)?(?:imagem|foto)$/i.test(
       body
     ) ||
     /^baixar\s+imagem$|^guardar\s+imagem$/i.test(body)
@@ -262,7 +266,7 @@ export function parseImageVoiceCommand(rawText: string): ImageVoiceAction | null
   }
 
   if (
-    /^(?:usa|usar|define|definir|mete|meter|coloca|colocar|poe|por|aplica|aplicar)\s+(?:esta\s+|essa\s+|a\s+)?(?:imagem\s+)?como\s+(?:a\s+|minha\s+)?foto\s+de\s+perfil$/i.test(
+    /^(?:usa|use|usar|define|defina|definir|mete|meta|meter|coloca|coloque|colocar|poe|por|aplica|aplique|aplicar)\s+(?:esta\s+|essa\s+|a\s+)?(?:imagem\s+)?como\s+(?:a\s+|minha\s+)?foto\s+de\s+perfil$/i.test(
       body
     )
   ) {
@@ -270,7 +274,7 @@ export function parseImageVoiceCommand(rawText: string): ImageVoiceAction | null
   }
 
   if (
-    /^(?:mostra|mostrar|abre|abrir|ver|exibe|exibir)\s+(?:a\s+|essa\s+|esta\s+)?(?:ultima\s+)?imagem$/i.test(
+    /^(?:mostra|mostre|mostrar|abre|abra|abrir|ver|exibe|exiba|exibir)(?:-me|\s+me)?\s+(?:a\s+|essa\s+|esta\s+)?(?:ultima\s+)?(?:imagem|foto)$/i.test(
       body
     )
   ) {
@@ -471,6 +475,39 @@ export async function generateSaraImage(
         style,
         isTopQuality: qualityMode === 'top',
       };
+    }
+
+    // Fallback caso alguma rota devolva JSON com base64/dataUrl
+    try {
+      const textPayload = await fallbackBlob.text();
+      if (textPayload && textPayload.trim().startsWith('{')) {
+        const parsed = JSON.parse(textPayload) as {
+          dataUrl?: string;
+          image?: string;
+          b64_json?: string;
+          data?: Array<{ b64_json?: string }>;
+          images?: Array<{ b64_json?: string; url?: string }>;
+        };
+        const candidate =
+          parsed.dataUrl ||
+          parsed.image ||
+          parsed.b64_json ||
+          parsed.data?.[0]?.b64_json ||
+          parsed.images?.[0]?.b64_json ||
+          parsed.images?.[0]?.url;
+        const normalized = normalizeImageDisplaySrc(candidate);
+        if (normalized) {
+          return {
+            ok: true,
+            dataUrl: normalized,
+            seed,
+            style,
+            isTopQuality: qualityMode === 'top',
+          };
+        }
+      }
+    } catch {
+      // ignore
     }
 
     return {
@@ -700,12 +737,43 @@ export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
   }
 }
 
+export function normalizeImageDisplaySrc(input?: string | Blob | null): string | undefined {
+  if (!input) return undefined;
+  if (typeof Blob !== 'undefined' && input instanceof Blob) {
+    return input.size > 0 ? URL.createObjectURL(input) : undefined;
+  }
+  const raw = String(input).trim();
+  if (!raw) return undefined;
+  if (raw.startsWith('blob:') || raw.startsWith('data:image/')) {
+    return raw;
+  }
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
+  }
+  const compactB64 = raw.replace(/\s+/g, '');
+  if (compactB64.length >= 64 && /^[A-Za-z0-9+/=]+$/.test(compactB64)) {
+    const mime = compactB64.startsWith('iVBOR')
+      ? 'image/png'
+      : compactB64.startsWith('UklGR')
+      ? 'image/webp'
+      : compactB64.startsWith('R0lGOD')
+      ? 'image/gif'
+      : 'image/jpeg';
+    return `data:${mime};base64,${compactB64}`;
+  }
+  return undefined;
+}
+
 function isSupportedGeneratedImageUrl(url?: string | null): boolean {
-  return Boolean(url && (url.startsWith('data:image/') || url.startsWith('blob:')));
+  const normalized = normalizeImageDisplaySrc(url);
+  return Boolean(
+    normalized && (normalized.startsWith('data:image/') || normalized.startsWith('blob:'))
+  );
 }
 
 export function downloadImageDataUrl(dataUrl: string, promptLabel?: string): void {
-  if (!isSupportedGeneratedImageUrl(dataUrl)) return;
+  const safeSrc = normalizeImageDisplaySrc(dataUrl);
+  if (!safeSrc || !isSupportedGeneratedImageUrl(safeSrc)) return;
   const slug = (promptLabel || 'imagem-sara')
     .toLowerCase()
     .normalize('NFD')
@@ -713,10 +781,10 @@ export function downloadImageDataUrl(dataUrl: string, promptLabel?: string): voi
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 36);
-  const mimeMatch = dataUrl.match(/^data:image\/([a-z0-9+.-]+);/i);
+  const mimeMatch = safeSrc.match(/^data:image\/([a-z0-9+.-]+);/i);
   const ext = mimeMatch?.[1] === 'jpeg' ? 'jpg' : mimeMatch?.[1] || 'jpg';
   const a = document.createElement('a');
-  a.href = dataUrl;
+  a.href = safeSrc;
   a.download = `${slug || 'imagem-sara'}.${ext}`;
   document.body.appendChild(a);
   a.click();
@@ -729,7 +797,8 @@ export function compressImageForStorage(
   quality = 0.84
 ): Promise<string> {
   return new Promise((resolve) => {
-    if (typeof document === 'undefined' || !isSupportedGeneratedImageUrl(dataUrl)) {
+    const safeSrc = normalizeImageDisplaySrc(dataUrl);
+    if (typeof document === 'undefined' || !safeSrc || !isSupportedGeneratedImageUrl(safeSrc)) {
       resolve(dataUrl);
       return;
     }
@@ -754,13 +823,14 @@ export function compressImageForStorage(
       }
     };
     img.onerror = () => resolve(dataUrl);
-    img.src = dataUrl;
+    img.src = safeSrc;
   });
 }
 
 export async function saveUserProfilePhoto(userId: string, rawDataUrl: string): Promise<string | null> {
-  if (!userId || !isSupportedGeneratedImageUrl(rawDataUrl)) return null;
-  const compact = await compressImageForStorage(rawDataUrl, 256, 0.85);
+  const safeSrc = normalizeImageDisplaySrc(rawDataUrl);
+  if (!userId || !safeSrc || !isSupportedGeneratedImageUrl(safeSrc)) return null;
+  const compact = await compressImageForStorage(safeSrc, 256, 0.85);
   if (!compact.startsWith('data:image/')) return null;
   try {
     localStorage.setItem(`${PROFILE_PHOTO_PREFIX}${userId}`, compact);

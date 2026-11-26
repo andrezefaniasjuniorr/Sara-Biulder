@@ -56,6 +56,11 @@ import {
   type LocalFullscreenSignal,
   type LocalSeekSignal,
 } from './LocalMediaStageView';
+import { GeneratedChatImageCard } from '../GeneratedChatImageCard';
+import {
+  downloadImageDataUrl,
+  type SaraImageStyle,
+} from '../../services/imageGenService';
 
 function sanitizeAndFixSvgMarkup(raw: string): { html: string; isRenderable: boolean } {
   const cleaned = String(raw || '')
@@ -845,6 +850,11 @@ interface JarvisStageRendererProps {
   ) => void;
   onOpenInOfficeApp?: (localFileId?: string, previewUrl?: string, title?: string) => void;
   onNotify?: (msg: string) => void;
+  onSelectGeneratedImageStyle?: (prompt: string, style: SaraImageStyle) => void;
+  onDownloadGeneratedImage?: (imageUrl: string, prompt: string) => void;
+  onRegenerateGeneratedImage?: (prompt: string, style?: SaraImageStyle, seed?: number) => void;
+  onTopQualityGeneratedImage?: (prompt: string, style?: SaraImageStyle, seed?: number) => void;
+  onUseGeneratedImageAsProfile?: (imageUrl: string) => Promise<void> | void;
 }
 
 export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
@@ -881,6 +891,11 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
   onFilterLocalBrowser,
   onOpenInOfficeApp,
   onNotify,
+  onSelectGeneratedImageStyle,
+  onDownloadGeneratedImage,
+  onRegenerateGeneratedImage,
+  onTopQualityGeneratedImage,
+  onUseGeneratedImageAsProfile,
 }) => {
   const [svgZoom, setSvgZoom] = useState(false);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
@@ -991,6 +1006,8 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
         return <Layers className="w-4 h-4 text-cyan-300" />;
       case 'local_gallery':
         return <ImageIcon className="w-4 h-4 text-emerald-300" />;
+      case 'generated_image':
+        return <ImageIcon className="w-4 h-4 text-cyan-300" />;
       case 'local_browser':
         return <FolderOpen className="w-4 h-4 text-cyan-300" />;
       default:
@@ -1783,6 +1800,45 @@ export const JarvisStageRenderer: React.FC<JarvisStageRendererProps> = ({
         {content.kind === 'quiz' && <QuizStageView content={content} />}
 
         {content.kind === 'flashcards' && <FlashcardsStageView content={content} />}
+
+        {content.kind === 'generated_image' && (
+          <div className="flex flex-col items-center justify-center min-h-[320px] w-full">
+            <GeneratedChatImageCard
+              imageUrl={content.imageUrl}
+              isGenerating={content.isGenerating}
+              isTopQuality={content.isTopQuality}
+              awaitingStyle={content.awaitingStyle}
+              activeStyle={content.style}
+              prompt={content.prompt}
+              errorMessage={content.errorMessage}
+              large
+              onSelectStyle={(style) => {
+                onSelectGeneratedImageStyle?.(content.prompt, style);
+              }}
+              onDownload={() => {
+                if (!content.imageUrl) return;
+                if (onDownloadGeneratedImage) {
+                  onDownloadGeneratedImage(content.imageUrl, content.prompt);
+                } else {
+                  downloadImageDataUrl(content.imageUrl, content.prompt);
+                }
+              }}
+              onRegenerate={() => {
+                onRegenerateGeneratedImage?.(content.prompt, content.style, content.seed);
+              }}
+              onTopQuality={
+                onTopQualityGeneratedImage
+                  ? () => onTopQualityGeneratedImage(content.prompt, content.style, content.seed)
+                  : undefined
+              }
+              onUseAsProfilePhoto={async () => {
+                if (content.imageUrl && onUseGeneratedImageAsProfile) {
+                  await onUseGeneratedImageAsProfile(content.imageUrl);
+                }
+              }}
+            />
+          </div>
+        )}
       </div>
     </motion.div>
   );

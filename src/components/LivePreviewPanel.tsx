@@ -15,6 +15,20 @@ import {
 } from 'lucide-react';
 import type { PreviewDevice, ProjectFiles } from '../types/builder';
 import { buildPreviewSrcDoc } from '../utils/previewBuilder';
+import { GeneratedChatImageCard } from './GeneratedChatImageCard';
+import { downloadImageDataUrl, type SaraImageStyle } from '../services/imageGenService';
+
+export interface GeneratedPreviewImageState {
+  messageId: string;
+  prompt: string;
+  imageUrl?: string;
+  isGenerating?: boolean;
+  isTopQuality?: boolean;
+  awaitingStyle?: boolean;
+  style?: SaraImageStyle;
+  seed?: number;
+  errorMessage?: string;
+}
 
 interface LivePreviewPanelProps {
   files: ProjectFiles;
@@ -35,6 +49,22 @@ interface LivePreviewPanelProps {
   onDownloadZip: () => void;
   onPushGitHub: () => void;
   onPublish: () => void;
+  generatedImage?: GeneratedPreviewImageState | null;
+  onCloseGeneratedImage?: () => void;
+  onSelectGeneratedImageStyle?: (messageId: string, prompt: string, style: SaraImageStyle) => void;
+  onRegenerateGeneratedImage?: (
+    messageId: string,
+    prompt: string,
+    style?: SaraImageStyle,
+    seed?: number
+  ) => void;
+  onTopQualityGeneratedImage?: (
+    messageId: string,
+    prompt: string,
+    style?: SaraImageStyle,
+    seed?: number
+  ) => void;
+  onUseGeneratedImageAsProfile?: (imageUrl: string) => Promise<void> | void;
 }
 
 export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
@@ -56,6 +86,12 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
   onDownloadZip,
   onPushGitHub,
   onPublish,
+  generatedImage = null,
+  onCloseGeneratedImage,
+  onSelectGeneratedImageStyle,
+  onRegenerateGeneratedImage,
+  onTopQualityGeneratedImage,
+  onUseGeneratedImageAsProfile,
 }) => {
   const [internalFullscreen, setInternalFullscreen] = useState(false);
   const isFullscreen =
@@ -216,6 +252,74 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
             className="w-full h-full border-0 bg-[#0A0A0F]"
           />
         </div>
+
+        {/* Visualizador de Imagem Gerada SARA no Painel Direito */}
+        {generatedImage && !isBuilding && (
+          <div className="absolute inset-0 bg-[#050812]/98 z-10 overflow-y-auto sara-scroll p-4 flex flex-col">
+            <div className="flex items-center justify-between gap-2 pb-2 mb-2 border-b border-cyan-500/25 shrink-0">
+              <span className="text-xs font-bold text-cyan-200 truncate">
+                {generatedImage.prompt || 'Imagem SARA'}
+              </span>
+              {onCloseGeneratedImage && (
+                <button
+                  type="button"
+                  onClick={onCloseGeneratedImage}
+                  className="px-2.5 py-1 rounded-lg bg-[#09162E] hover:bg-rose-500/20 border border-cyan-500/30 text-[11px] font-semibold text-slate-200 flex items-center gap-1 cursor-pointer shrink-0 transition"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Fechar</span>
+                </button>
+              )}
+            </div>
+            <div className="flex-1 flex flex-col items-center justify-center w-full">
+              <GeneratedChatImageCard
+                imageUrl={generatedImage.imageUrl}
+                isGenerating={generatedImage.isGenerating}
+                isTopQuality={generatedImage.isTopQuality}
+                awaitingStyle={generatedImage.awaitingStyle}
+                activeStyle={generatedImage.style}
+                prompt={generatedImage.prompt}
+                errorMessage={generatedImage.errorMessage}
+                large
+                onSelectStyle={(style) =>
+                  onSelectGeneratedImageStyle?.(
+                    generatedImage.messageId,
+                    generatedImage.prompt,
+                    style
+                  )
+                }
+                onDownload={() =>
+                  generatedImage.imageUrl &&
+                  downloadImageDataUrl(generatedImage.imageUrl, generatedImage.prompt)
+                }
+                onRegenerate={() =>
+                  onRegenerateGeneratedImage?.(
+                    generatedImage.messageId,
+                    generatedImage.prompt,
+                    generatedImage.style,
+                    generatedImage.seed
+                  )
+                }
+                onTopQuality={
+                  onTopQualityGeneratedImage
+                    ? () =>
+                        onTopQualityGeneratedImage(
+                          generatedImage.messageId,
+                          generatedImage.prompt,
+                          generatedImage.style,
+                          generatedImage.seed
+                        )
+                    : undefined
+                }
+                onUseAsProfilePhoto={async () => {
+                  if (generatedImage.imageUrl && onUseGeneratedImageAsProfile) {
+                    await onUseGeneratedImageAsProfile(generatedImage.imageUrl);
+                  }
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Overlay ao vivo durante construção */}
         {isBuilding && (
