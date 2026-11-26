@@ -7,8 +7,54 @@ import {
 const USER_GENERIC_ERROR = 'Não consegui gerar agora, tenta de novo em alguns segundos.';
 const QUALITY_PROMPT_SUFFIX =
   'ultra detailed, sharp focus, high quality, 8k, professional lighting, no blur, no distortion';
-const HF_TOP_MODEL_URL = 'https://router.huggingface.co/fal-ai/black-forest-labs/FLUX.1-dev';
-const HF_TOP_MODEL_LABEL = 'fal-ai/black-forest-labs/FLUX.1-dev';
+const HF_TOP_PROVIDERS = [
+  {
+    url: 'https://router.huggingface.co/together/black-forest-labs/FLUX.1-dev',
+    label: 'together/black-forest-labs/FLUX.1-dev',
+    buildPayloads: (fullPrompt, seed) => [
+      {
+        inputs: fullPrompt,
+        parameters: {
+          width: 1280,
+          height: 1280,
+          seed,
+          num_inference_steps: 28,
+          guidance_scale: 3.5,
+        },
+      },
+      {
+        prompt: fullPrompt,
+        width: 1280,
+        height: 1280,
+        steps: 28,
+        seed,
+        response_format: 'b64_json',
+      },
+    ],
+  },
+  {
+    url: 'https://router.huggingface.co/fal-ai/black-forest-labs/FLUX.1-schnell',
+    label: 'fal-ai/black-forest-labs/FLUX.1-schnell',
+    buildPayloads: (fullPrompt, seed) => [
+      {
+        prompt: fullPrompt,
+        image_size: { width: 1280, height: 1280 },
+        seed,
+        num_inference_steps: 4,
+        output_format: 'jpeg',
+      },
+      {
+        inputs: fullPrompt,
+        parameters: {
+          width: 1280,
+          height: 1280,
+          seed,
+          num_inference_steps: 4,
+        },
+      },
+    ],
+  },
+];
 
 const IMAGE_STYLE_SUFFIXES = {
   realistic: 'ultra realistic, professional photography, detailed skin, cinematic lighting, 4k',
@@ -174,116 +220,104 @@ async function tryGenerateHuggingFaceTop(fullPrompt, seed) {
       ok: false,
       status: 401,
       detail: 'Chave de Imagem SARA não configurada no painel de Admin.',
-      modelLabel: HF_TOP_MODEL_LABEL,
+      modelLabel: HF_TOP_PROVIDERS[0].label,
     };
   }
 
-  const payloads = [
-    {
-      prompt: fullPrompt,
-      image_size: { width: 1280, height: 1280 },
-      seed,
-      num_inference_steps: 28,
-      guidance_scale: 3.5,
-      output_format: 'jpeg',
-    },
-    {
-      inputs: fullPrompt,
-      parameters: {
-        width: 1280,
-        height: 1280,
-        seed,
-        num_inference_steps: 28,
-        guidance_scale: 3.5,
-      },
-    },
-  ];
-
   let lastStatus = 503;
   let lastDetail = 'Erro desconhecido ao gerar em Qualidade Top.';
+  let lastModelLabel = HF_TOP_PROVIDERS[0].label;
 
-  for (let i = 0; i < payloads.length; i += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60000);
-    try {
-      const upstream = await fetch(HF_TOP_MODEL_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${imageKey}`,
-          'Content-Type': 'application/json',
-          Accept: 'image/*, application/json',
-        },
-        body: JSON.stringify(payloads[i]),
-        signal: controller.signal,
-      });
+  for (const provider of HF_TOP_PROVIDERS) {
+    lastModelLabel = provider.label;
+    const payloads = provider.buildPayloads(fullPrompt, seed);
 
-      const buf = await upstream.arrayBuffer();
-      clearTimeout(timer);
-
-      const detectedMime = detectImageMimeFromBuffer(buf, upstream.headers.get('content-type'));
-      if (detectedMime) {
-        return { ok: true, buffer: buf, mime: detectedMime, modelLabel: HF_TOP_MODEL_LABEL };
-      }
-
-      const rawText = new TextDecoder().decode(buf);
-      let parsed = null;
+    for (let i = 0; i < payloads.length; i += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60000);
       try {
-        parsed = JSON.parse(rawText);
-      } catch {
-        parsed = null;
-      }
+        const upstream = await fetch(provider.url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${imageKey}`,
+            'Content-Type': 'application/json',
+            Accept: 'image/*, application/json',
+          },
+          body: JSON.stringify(payloads[i]),
+          signal: controller.signal,
+        });
 
-      if (parsed && typeof parsed === 'object') {
-        const b64 =
-          parsed?.data?.[0]?.b64_json ||
-          parsed?.images?.[0]?.b64_json ||
-          parsed?.b64_json ||
-          null;
-        if (typeof b64 === 'string' && b64.length > 50) {
-          const decodedBuf = base64ToArrayBuffer(b64);
-          const b64Mime = detectImageMimeFromBuffer(decodedBuf, 'image/jpeg') || 'image/jpeg';
-          return { ok: true, buffer: decodedBuf, mime: b64Mime, modelLabel: HF_TOP_MODEL_LABEL };
+        const buf = await upstream.arrayBuffer();
+        clearTimeout(timer);
+
+        const detectedMime = detectImageMimeFromBuffer(buf, upstream.headers.get('content-type'));
+        if (detectedMime) {
+          return { ok: true, buffer: buf, mime: detectedMime, modelLabel: provider.label };
         }
 
-        const remoteUrl =
-          parsed?.images?.[0]?.url ||
-          parsed?.image?.url ||
-          parsed?.data?.[0]?.url ||
-          parsed?.url ||
-          null;
-        if (typeof remoteUrl === 'string' && isSafeRemoteImageUrl(remoteUrl)) {
-          const imgController = new AbortController();
-          const imgTimer = setTimeout(() => imgController.abort(), 30000);
-          try {
-            const imgRes = await fetch(remoteUrl, {
-              method: 'GET',
-              headers: { Accept: 'image/*' },
-              signal: imgController.signal,
-            });
-            const imgBuf = await imgRes.arrayBuffer();
-            clearTimeout(imgTimer);
-            const imgMime = detectImageMimeFromBuffer(imgBuf, imgRes.headers.get('content-type'));
-            if (imgMime) {
-              return { ok: true, buffer: imgBuf, mime: imgMime, modelLabel: HF_TOP_MODEL_LABEL };
+        const rawText = new TextDecoder().decode(buf);
+        let parsed = null;
+        try {
+          parsed = JSON.parse(rawText);
+        } catch {
+          parsed = null;
+        }
+
+        if (parsed && typeof parsed === 'object') {
+          const b64 =
+            parsed?.data?.[0]?.b64_json ||
+            parsed?.images?.[0]?.b64_json ||
+            parsed?.b64_json ||
+            null;
+          if (typeof b64 === 'string' && b64.length > 50) {
+            const decodedBuf = base64ToArrayBuffer(b64);
+            const b64Mime = detectImageMimeFromBuffer(decodedBuf, 'image/jpeg') || 'image/jpeg';
+            return { ok: true, buffer: decodedBuf, mime: b64Mime, modelLabel: provider.label };
+          }
+
+          const remoteUrl =
+            parsed?.images?.[0]?.url ||
+            parsed?.image?.url ||
+            parsed?.data?.[0]?.url ||
+            parsed?.url ||
+            null;
+          if (typeof remoteUrl === 'string' && isSafeRemoteImageUrl(remoteUrl)) {
+            const imgController = new AbortController();
+            const imgTimer = setTimeout(() => imgController.abort(), 30000);
+            try {
+              const imgRes = await fetch(remoteUrl, {
+                method: 'GET',
+                headers: { Accept: 'image/*' },
+                signal: imgController.signal,
+              });
+              const imgBuf = await imgRes.arrayBuffer();
+              clearTimeout(imgTimer);
+              const imgMime = detectImageMimeFromBuffer(imgBuf, imgRes.headers.get('content-type'));
+              if (imgMime) {
+                return { ok: true, buffer: imgBuf, mime: imgMime, modelLabel: provider.label };
+              }
+            } catch {
+              clearTimeout(imgTimer);
             }
-          } catch {
-            clearTimeout(imgTimer);
           }
         }
-      }
 
-      lastStatus = upstream.status || 503;
-      const snippet = rawText.trim().slice(0, 220);
-      lastDetail = `HTTP ${lastStatus}${snippet ? ` — ${snippet}` : ''}`;
+        lastStatus = upstream.status || 503;
+        const snippet = rawText.trim().slice(0, 220);
+        lastDetail = `HTTP ${lastStatus}${snippet ? ` — ${snippet}` : ''}`;
 
-      if (lastStatus !== 400 && lastStatus !== 422) {
+        if (/model\s+not\s+supported/i.test(rawText)) {
+          break;
+        }
+        if (lastStatus !== 400 && lastStatus !== 422) {
+          break;
+        }
+      } catch (err) {
+        clearTimeout(timer);
+        lastStatus = err?.name === 'AbortError' ? 504 : 503;
+        lastDetail = err?.name === 'AbortError' ? 'Timeout após 60s' : err?.message || 'Erro de rede';
         break;
       }
-    } catch (err) {
-      clearTimeout(timer);
-      lastStatus = err?.name === 'AbortError' ? 504 : 503;
-      lastDetail = err?.name === 'AbortError' ? 'Timeout após 60s' : err?.message || 'Erro de rede';
-      break;
     }
   }
 
@@ -291,7 +325,7 @@ async function tryGenerateHuggingFaceTop(fullPrompt, seed) {
     ok: false,
     status: lastStatus,
     detail: lastDetail,
-    modelLabel: HF_TOP_MODEL_LABEL,
+    modelLabel: lastModelLabel,
   };
 }
 

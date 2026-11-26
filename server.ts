@@ -494,8 +494,54 @@ async function startServer() {
     const userGenericError = 'Não consegui gerar agora, tenta de novo em alguns segundos.';
     const qualityPromptSuffix =
       'ultra detailed, sharp focus, high quality, 8k, professional lighting, no blur, no distortion';
-    const hfTopModelUrl = 'https://router.huggingface.co/fal-ai/black-forest-labs/FLUX.1-dev';
-    const hfTopModelLabel = 'fal-ai/black-forest-labs/FLUX.1-dev';
+    const hfTopProviders = [
+      {
+        url: 'https://router.huggingface.co/together/black-forest-labs/FLUX.1-dev',
+        label: 'together/black-forest-labs/FLUX.1-dev',
+        buildPayloads: (fullPromptText: string) => [
+          {
+            inputs: fullPromptText,
+            parameters: {
+              width: 1280,
+              height: 1280,
+              seed,
+              num_inference_steps: 28,
+              guidance_scale: 3.5,
+            },
+          },
+          {
+            prompt: fullPromptText,
+            width: 1280,
+            height: 1280,
+            steps: 28,
+            seed,
+            response_format: 'b64_json',
+          },
+        ],
+      },
+      {
+        url: 'https://router.huggingface.co/fal-ai/black-forest-labs/FLUX.1-schnell',
+        label: 'fal-ai/black-forest-labs/FLUX.1-schnell',
+        buildPayloads: (fullPromptText: string) => [
+          {
+            prompt: fullPromptText,
+            image_size: { width: 1280, height: 1280 },
+            seed,
+            num_inference_steps: 4,
+            output_format: 'jpeg',
+          },
+          {
+            inputs: fullPromptText,
+            parameters: {
+              width: 1280,
+              height: 1280,
+              seed,
+              num_inference_steps: 4,
+            },
+          },
+        ],
+      },
+    ];
 
     const styleSuffixes: Record<string, string> = {
       realistic: 'ultra realistic, professional photography, detailed skin, cinematic lighting, 4k',
@@ -657,116 +703,104 @@ async function startServer() {
           ok: false as const,
           status: 401,
           detail: 'Chave de Imagem SARA não configurada no painel de Admin.',
-          modelLabel: hfTopModelLabel,
+          modelLabel: hfTopProviders[0].label,
         };
       }
 
-      const payloads = [
-        {
-          prompt: fullPromptText,
-          image_size: { width: 1280, height: 1280 },
-          seed,
-          num_inference_steps: 28,
-          guidance_scale: 3.5,
-          output_format: 'jpeg',
-        },
-        {
-          inputs: fullPromptText,
-          parameters: {
-            width: 1280,
-            height: 1280,
-            seed,
-            num_inference_steps: 28,
-            guidance_scale: 3.5,
-          },
-        },
-      ];
-
       let lastStatus = 503;
       let lastDetail = 'Erro desconhecido ao gerar em Qualidade Top.';
+      let lastModelLabel = hfTopProviders[0].label;
 
-      for (let i = 0; i < payloads.length; i += 1) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 60000);
-        try {
-          const upstream = await fetch(hfTopModelUrl, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${imageKey}`,
-              'Content-Type': 'application/json',
-              Accept: 'image/*, application/json',
-            },
-            body: JSON.stringify(payloads[i]),
-            signal: controller.signal,
-          });
-          const buf = Buffer.from(await upstream.arrayBuffer());
-          clearTimeout(timer);
+      for (const provider of hfTopProviders) {
+        lastModelLabel = provider.label;
+        const payloads = provider.buildPayloads(fullPromptText);
 
-          const detectedMime = detectImageMimeFromBuffer(buf, upstream.headers.get('content-type'));
-          if (detectedMime) {
-            return { ok: true as const, buffer: buf, mime: detectedMime, modelLabel: hfTopModelLabel };
-          }
-
-          const rawText = buf.toString('utf8');
-          let parsed: any = null;
+        for (let i = 0; i < payloads.length; i += 1) {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 60000);
           try {
-            parsed = JSON.parse(rawText);
-          } catch {
-            parsed = null;
-          }
+            const upstream = await fetch(provider.url, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${imageKey}`,
+                'Content-Type': 'application/json',
+                Accept: 'image/*, application/json',
+              },
+              body: JSON.stringify(payloads[i]),
+              signal: controller.signal,
+            });
+            const buf = Buffer.from(await upstream.arrayBuffer());
+            clearTimeout(timer);
 
-          if (parsed && typeof parsed === 'object') {
-            const b64 =
-              parsed?.data?.[0]?.b64_json ||
-              parsed?.images?.[0]?.b64_json ||
-              parsed?.b64_json ||
-              null;
-            if (typeof b64 === 'string' && b64.length > 50) {
-              const decoded = Buffer.from(b64.replace(/^data:image\/[^;]+;base64,/, ''), 'base64');
-              const b64Mime = detectImageMimeFromBuffer(decoded, 'image/jpeg') || 'image/jpeg';
-              return { ok: true as const, buffer: decoded, mime: b64Mime, modelLabel: hfTopModelLabel };
+            const detectedMime = detectImageMimeFromBuffer(buf, upstream.headers.get('content-type'));
+            if (detectedMime) {
+              return { ok: true as const, buffer: buf, mime: detectedMime, modelLabel: provider.label };
             }
 
-            const remoteUrl =
-              parsed?.images?.[0]?.url ||
-              parsed?.image?.url ||
-              parsed?.data?.[0]?.url ||
-              parsed?.url ||
-              null;
-            if (typeof remoteUrl === 'string' && isSafeRemoteImageUrl(remoteUrl)) {
-              const imgController = new AbortController();
-              const imgTimer = setTimeout(() => imgController.abort(), 30000);
-              try {
-                const imgRes = await fetch(remoteUrl, {
-                  method: 'GET',
-                  headers: { Accept: 'image/*' },
-                  signal: imgController.signal,
-                });
-                const imgBuf = Buffer.from(await imgRes.arrayBuffer());
-                clearTimeout(imgTimer);
-                const imgMime = detectImageMimeFromBuffer(imgBuf, imgRes.headers.get('content-type'));
-                if (imgMime) {
-                  return { ok: true as const, buffer: imgBuf, mime: imgMime, modelLabel: hfTopModelLabel };
+            const rawText = buf.toString('utf8');
+            let parsed: any = null;
+            try {
+              parsed = JSON.parse(rawText);
+            } catch {
+              parsed = null;
+            }
+
+            if (parsed && typeof parsed === 'object') {
+              const b64 =
+                parsed?.data?.[0]?.b64_json ||
+                parsed?.images?.[0]?.b64_json ||
+                parsed?.b64_json ||
+                null;
+              if (typeof b64 === 'string' && b64.length > 50) {
+                const decoded = Buffer.from(b64.replace(/^data:image\/[^;]+;base64,/, ''), 'base64');
+                const b64Mime = detectImageMimeFromBuffer(decoded, 'image/jpeg') || 'image/jpeg';
+                return { ok: true as const, buffer: decoded, mime: b64Mime, modelLabel: provider.label };
+              }
+
+              const remoteUrl =
+                parsed?.images?.[0]?.url ||
+                parsed?.image?.url ||
+                parsed?.data?.[0]?.url ||
+                parsed?.url ||
+                null;
+              if (typeof remoteUrl === 'string' && isSafeRemoteImageUrl(remoteUrl)) {
+                const imgController = new AbortController();
+                const imgTimer = setTimeout(() => imgController.abort(), 30000);
+                try {
+                  const imgRes = await fetch(remoteUrl, {
+                    method: 'GET',
+                    headers: { Accept: 'image/*' },
+                    signal: imgController.signal,
+                  });
+                  const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+                  clearTimeout(imgTimer);
+                  const imgMime = detectImageMimeFromBuffer(imgBuf, imgRes.headers.get('content-type'));
+                  if (imgMime) {
+                    return { ok: true as const, buffer: imgBuf, mime: imgMime, modelLabel: provider.label };
+                  }
+                } catch {
+                  clearTimeout(imgTimer);
                 }
-              } catch {
-                clearTimeout(imgTimer);
               }
             }
-          }
 
-          lastStatus = upstream.status || 503;
-          const snippet = rawText.trim().slice(0, 220);
-          lastDetail = `HTTP ${lastStatus}${snippet ? ` — ${snippet}` : ''}`;
+            lastStatus = upstream.status || 503;
+            const snippet = rawText.trim().slice(0, 220);
+            lastDetail = `HTTP ${lastStatus}${snippet ? ` — ${snippet}` : ''}`;
 
-          if (lastStatus !== 400 && lastStatus !== 422) {
+            if (/model\s+not\s+supported/i.test(rawText)) {
+              break;
+            }
+            if (lastStatus !== 400 && lastStatus !== 422) {
+              break;
+            }
+          } catch (err: any) {
+            clearTimeout(timer);
+            lastStatus = err?.name === 'AbortError' ? 504 : 503;
+            lastDetail =
+              err?.name === 'AbortError' ? 'Timeout após 60s' : err?.message || 'Erro de rede';
             break;
           }
-        } catch (err: any) {
-          clearTimeout(timer);
-          lastStatus = err?.name === 'AbortError' ? 504 : 503;
-          lastDetail =
-            err?.name === 'AbortError' ? 'Timeout após 60s' : err?.message || 'Erro de rede';
-          break;
         }
       }
 
@@ -774,7 +808,7 @@ async function startServer() {
         ok: false as const,
         status: lastStatus,
         detail: lastDetail,
-        modelLabel: hfTopModelLabel,
+        modelLabel: lastModelLabel,
       };
     };
 
