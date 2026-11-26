@@ -52,7 +52,7 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
       <div className="rounded-xl overflow-hidden border border-cyan-500/40 bg-[#030814] shadow-[0_8px_28px_rgba(0,229,255,0.14)]">
         <img
           src={imageUrl}
-          alt={prompt || 'Imagem gerada pelo Núcleo SARA'}
+          alt={prompt || 'Imagem gerada pela SARA'}
           className={`w-full ${
             compact ? 'max-h-[340px]' : 'max-h-[440px]'
           } object-contain mx-auto block`}

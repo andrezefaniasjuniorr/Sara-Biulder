@@ -10,6 +10,9 @@ const GOOGLE_JWKS_URL =
 let edgeMemoryVault = {
   imageKey: '',
   updatedAt: null,
+  lastError: null,
+  lastErrorStatus: null,
+  lastErrorAt: null,
 };
 
 let jwksCache = {
@@ -38,6 +41,15 @@ export function maskImageKey(rawKey) {
 export function isValidImageCoreKey(rawKey) {
   const clean = String(rawKey || '').trim();
   return clean.startsWith('hf_') && clean.length >= 10 && !/\s/.test(clean);
+}
+
+function sanitizeImageErrorMessage(rawMessage) {
+  const clean = String(rawMessage || '')
+    .replace(/hf_[A-Za-z0-9_-]{4,}/g, 'hf_****')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ****')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return clean ? clean.slice(0, 320) : 'Erro desconhecido ao gerar imagem.';
 }
 
 function base64UrlToUint8Array(str) {
@@ -228,10 +240,38 @@ export async function verifyOwnerPasswordCredentials(email, password, env) {
   return false;
 }
 
+async function patchCloudErrorFields(lastError, lastErrorStatus, lastErrorAt) {
+  try {
+    const updateUrl =
+      `${FIRESTORE_DOC_URL}?updateMask.fieldPaths=lastError` +
+      `&updateMask.fieldPaths=lastErrorStatus&updateMask.fieldPaths=lastErrorAt`;
+    await fetch(updateUrl, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fields: {
+          lastError: lastError ? { stringValue: lastError } : { nullValue: null },
+          lastErrorStatus:
+            typeof lastErrorStatus === 'number'
+              ? { integerValue: String(Math.trunc(lastErrorStatus)) }
+              : { nullValue: null },
+          lastErrorAt: lastErrorAt ? { stringValue: lastErrorAt } : { nullValue: null },
+        },
+      }),
+    });
+  } catch {
+    // ignore
+  }
+}
+
 export async function getBackendImageKey(env) {
   if (isValidImageCoreKey(edgeMemoryVault.imageKey)) {
     return edgeMemoryVault;
   }
+
+  let cloudError = null;
+  let cloudErrorStatus = null;
+  let cloudErrorAt = null;
 
   try {
     const res = await fetch(FIRESTORE_DOC_URL, { headers: { Accept: 'application/json' } });
@@ -240,8 +280,21 @@ export async function getBackendImageKey(env) {
       const fields = doc?.fields;
       const imageKey = String(fields?.imageKey?.stringValue || '').trim();
       const updatedAt = String(fields?.updatedAt?.stringValue || '') || null;
+      cloudError = String(fields?.lastError?.stringValue || '') || null;
+      const rawStatus = fields?.lastErrorStatus?.integerValue;
+      cloudErrorStatus =
+        rawStatus !== undefined && rawStatus !== null && Number.isFinite(Number(rawStatus))
+          ? Number(rawStatus)
+          : null;
+      cloudErrorAt = String(fields?.lastErrorAt?.stringValue || '') || null;
       if (isValidImageCoreKey(imageKey)) {
-        edgeMemoryVault = { imageKey, updatedAt };
+        edgeMemoryVault = {
+          imageKey,
+          updatedAt,
+          lastError: cloudError,
+          lastErrorStatus: cloudErrorStatus,
+          lastErrorAt: cloudErrorAt,
+        };
         return edgeMemoryVault;
       }
     }
@@ -251,16 +304,34 @@ export async function getBackendImageKey(env) {
 
   const envKey = String(env?.SARA_IMAGE_KEY || env?.HF_TOKEN || '').trim();
   if (isValidImageCoreKey(envKey)) {
-    return { imageKey: envKey, updatedAt: null };
+    return {
+      imageKey: envKey,
+      updatedAt: null,
+      lastError: edgeMemoryVault.lastError || cloudError,
+      lastErrorStatus: edgeMemoryVault.lastErrorStatus ?? cloudErrorStatus,
+      lastErrorAt: edgeMemoryVault.lastErrorAt || cloudErrorAt,
+    };
   }
 
-  return { imageKey: '', updatedAt: null };
+  return {
+    imageKey: '',
+    updatedAt: null,
+    lastError: edgeMemoryVault.lastError || cloudError,
+    lastErrorStatus: edgeMemoryVault.lastErrorStatus ?? cloudErrorStatus,
+    lastErrorAt: edgeMemoryVault.lastErrorAt || cloudErrorAt,
+  };
 }
 
 export async function setBackendImageKey(rawKey, bearerFirebaseToken) {
   const clean = String(rawKey || '').trim();
   const nowIso = new Date().toISOString();
-  edgeMemoryVault = { imageKey: clean, updatedAt: clean ? nowIso : null };
+  edgeMemoryVault = {
+    imageKey: clean,
+    updatedAt: clean ? nowIso : null,
+    lastError: null,
+    lastErrorStatus: null,
+    lastErrorAt: null,
+  };
 
   try {
     const headers = { 'Content-Type': 'application/json' };
@@ -278,6 +349,9 @@ export async function setBackendImageKey(rawKey, bearerFirebaseToken) {
             imageKey: { stringValue: clean },
             maskedKey: { stringValue: maskImageKey(clean) || '' },
             updatedAt: { stringValue: nowIso },
+            lastError: { nullValue: null },
+            lastErrorStatus: { nullValue: null },
+            lastErrorAt: { nullValue: null },
           },
         }),
       });
@@ -290,5 +364,38 @@ export async function setBackendImageKey(rawKey, bearerFirebaseToken) {
     configured: Boolean(clean),
     maskedKey: maskImageKey(clean),
     updatedAt: edgeMemoryVault.updatedAt,
+    lastError: null,
+    lastErrorStatus: null,
+    lastErrorAt: null,
   };
+}
+
+/**
+ * @param {string} errorMessage
+ * @param {number | null} [statusCode]
+ */
+export async function recordBackendImageError(errorMessage, statusCode = null) {
+  const cleanMsg = sanitizeImageErrorMessage(errorMessage);
+  const cleanStatus =
+    typeof statusCode === 'number' && Number.isFinite(statusCode) ? Math.trunc(statusCode) : null;
+  const nowIso = new Date().toISOString();
+
+  edgeMemoryVault = {
+    ...edgeMemoryVault,
+    lastError: cleanMsg,
+    lastErrorStatus: cleanStatus,
+    lastErrorAt: nowIso,
+  };
+  await patchCloudErrorFields(cleanMsg, cleanStatus, nowIso);
+}
+
+export async function clearBackendImageError() {
+  if (!edgeMemoryVault.lastError && !edgeMemoryVault.lastErrorAt) return;
+  edgeMemoryVault = {
+    ...edgeMemoryVault,
+    lastError: null,
+    lastErrorStatus: null,
+    lastErrorAt: null,
+  };
+  await patchCloudErrorFields(null, null, null);
 }

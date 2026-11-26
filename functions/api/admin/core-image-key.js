@@ -25,6 +25,9 @@ export async function onRequestGet(context) {
     configured: isValidImageCoreKey(current.imageKey),
     maskedKey: maskImageKey(current.imageKey),
     updatedAt: current.updatedAt || null,
+    lastError: current.lastError || null,
+    lastErrorStatus: current.lastErrorStatus ?? null,
+    lastErrorAt: current.lastErrorAt || null,
   });
 }
 
@@ -38,7 +41,7 @@ export async function onRequestPost(context) {
   const key = String(body?.key || '').trim();
   if (!isValidImageCoreKey(key)) {
     return json(
-      { ok: false, error: 'Formato inválido. Insere uma chave válida do Núcleo SARA (começa por hf_).' },
+      { ok: false, error: 'Formato inválido. Insere uma Chave de Imagem SARA válida (começa por hf_).' },
       400
     );
   }

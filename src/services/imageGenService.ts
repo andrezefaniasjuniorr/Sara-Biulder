@@ -1,7 +1,8 @@
 import { getInMemoryAdminVaultToken, setInMemoryAdminVaultToken } from './authService';
 import { getCurrentFirebaseIdToken } from './firebaseService';
 
-export const IMAGE_MISSING_KEY_MESSAGE = 'Geração de imagens indisponível no momento.';
+export const IMAGE_GENERIC_ERROR_MESSAGE =
+  'Não consegui gerar agora, tenta de novo em alguns segundos.';
 export const IMAGE_CREATING_MESSAGE = 'A criar a tua imagem...';
 export const PROFILE_PHOTO_EVENT = 'sara-profile-photo-updated';
 
@@ -47,8 +48,8 @@ export function extractImageGenPrompt(rawText: string): string | null {
   }
 
   const patterns: RegExp[] = [
-    /^(?:(?:ei|ola|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:por\s+favor[,\s]+)?(?:podes\s+|pode\s+|quero\s+que\s+)?(?:gerar|gera|cria|criar|faz|fazer|desenha|desenhar|produz|produzir|inventa|imagina)(?:-me|\s+me|\s+para\s+mim)?\s+(?:uma?\s+)?(?:nova\s+)?(?:imagem|foto|ilustracao|figura|arte|desenho|retrato)(?:\s+(?:de|da|do|das|dos|com|sobre|em))?\s+(.+)$/i,
-    /^(?:(?:ei|ola|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:quero|preciso\s+de|manda)\s+(?:uma?\s+)?(?:imagem|foto|ilustracao|arte)(?:\s+(?:de|da|do|das|dos|com|sobre))?\s+(.+)$/i,
+    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:por\s+favor[,\s]+)?(?:podes\s+|pode\s+|quero\s+que\s+)?(?:gerar|gera|cria|criar|faz|fazer|desenha|desenhar|produz|produzir|inventa|imagina)(?:-me|\s+me|\s+para\s+mim)?\s+(?:uma?\s+)?(?:nova\s+)?(?:imagem|foto|ilustra[cç][aã]o|figura|arte|desenho|retrato)(?:\s+(?:de|da|do|das|dos|com|sobre|em))?\s+(.+)$/i,
+    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:quero|preciso\s+de|manda)\s+(?:uma?\s+)?(?:imagem|foto|ilustra[cç][aã]o|arte)(?:\s+(?:de|da|do|das|dos|com|sobre))?\s+(.+)$/i,
   ];
 
   for (const rx of patterns) {
@@ -66,7 +67,7 @@ export function extractImageGenPrompt(rawText: string): string | null {
 
 export type GenerateSaraImageResult =
   | { ok: true; dataUrl: string }
-  | { ok: false; missingOrInvalidKey: boolean; error: string };
+  | { ok: false; error: string };
 
 export async function generateSaraImage(
   prompt: string,
@@ -76,8 +77,7 @@ export async function generateSaraImage(
   if (!cleanPrompt) {
     return {
       ok: false,
-      missingOrInvalidKey: false,
-      error: 'Descreve o que queres ver na imagem para o Núcleo SARA criar.',
+      error: IMAGE_GENERIC_ERROR_MESSAGE,
     };
   }
 
@@ -97,21 +97,7 @@ export async function generateSaraImage(
     const data = (await response.json().catch(() => null)) as {
       ok?: boolean;
       dataUrl?: string;
-      notConfigured?: boolean;
-      error?: string;
     } | null;
-
-    if (
-      data?.notConfigured ||
-      response.status === 401 ||
-      response.status === 403
-    ) {
-      return {
-        ok: false,
-        missingOrInvalidKey: true,
-        error: IMAGE_MISSING_KEY_MESSAGE,
-      };
-    }
 
     if (
       !response.ok ||
@@ -121,8 +107,7 @@ export async function generateSaraImage(
     ) {
       return {
         ok: false,
-        missingOrInvalidKey: false,
-        error: data?.error || 'Núcleo SARA ocupado ao criar a imagem. Tenta novamente.',
+        error: IMAGE_GENERIC_ERROR_MESSAGE,
       };
     }
 
@@ -130,14 +115,13 @@ export async function generateSaraImage(
   } catch {
     return {
       ok: false,
-      missingOrInvalidKey: false,
-      error: 'Núcleo SARA indisponível no momento. Verifica a tua ligação e tenta novamente.',
+      error: IMAGE_GENERIC_ERROR_MESSAGE,
     };
   }
 }
 
 // =========================================================================
-// FUNÇÕES PRIVADAS EXCLUSIVAS DO PAINEL DO ADMIN (NÚCLEO SARA)
+// FUNÇÕES PRIVADAS EXCLUSIVAS DO PAINEL DO ADMIN
 // =========================================================================
 
 async function resolveAdminBearerToken(): Promise<string | null> {
@@ -152,6 +136,9 @@ export interface AdminImageCoreStatus {
   configured: boolean;
   maskedKey: string | null;
   updatedAt: string | null;
+  lastError?: string | null;
+  lastErrorStatus?: number | null;
+  lastErrorAt?: string | null;
   error?: string;
 }
 
@@ -176,7 +163,7 @@ export async function unlockAdminImageCoreWithPassword(
     setInMemoryAdminVaultToken(data.token);
     return { ok: true };
   } catch {
-    return { ok: false, error: 'Núcleo SARA indisponível neste momento.' };
+    return { ok: false, error: 'Serviço indisponível neste momento.' };
   }
 }
 
@@ -195,6 +182,9 @@ export async function fetchAdminImageCoreStatus(): Promise<AdminImageCoreStatus>
       configured?: boolean;
       maskedKey?: string | null;
       updatedAt?: string | null;
+      lastError?: string | null;
+      lastErrorStatus?: number | null;
+      lastErrorAt?: string | null;
       error?: string;
     } | null;
 
@@ -207,7 +197,7 @@ export async function fetchAdminImageCoreStatus(): Promise<AdminImageCoreStatus>
         configured: false,
         maskedKey: null,
         updatedAt: null,
-        error: data?.error || 'Erro ao consultar o Núcleo SARA.',
+        error: data?.error || 'Erro ao consultar a configuração de imagem.',
       };
     }
     return {
@@ -215,6 +205,9 @@ export async function fetchAdminImageCoreStatus(): Promise<AdminImageCoreStatus>
       configured: Boolean(data.configured),
       maskedKey: data.maskedKey || null,
       updatedAt: data.updatedAt || null,
+      lastError: data.lastError || null,
+      lastErrorStatus: typeof data.lastErrorStatus === 'number' ? data.lastErrorStatus : null,
+      lastErrorAt: data.lastErrorAt || null,
     };
   } catch {
     return {
@@ -222,7 +215,7 @@ export async function fetchAdminImageCoreStatus(): Promise<AdminImageCoreStatus>
       configured: false,
       maskedKey: null,
       updatedAt: null,
-      error: 'Sem ligação ao Núcleo SARA.',
+      error: 'Sem ligação ao servidor.',
     };
   }
 }
@@ -247,6 +240,9 @@ export async function saveAdminImageCoreKey(rawKey: string): Promise<AdminImageC
       configured?: boolean;
       maskedKey?: string | null;
       updatedAt?: string | null;
+      lastError?: string | null;
+      lastErrorStatus?: number | null;
+      lastErrorAt?: string | null;
       error?: string;
     } | null;
 
@@ -259,7 +255,7 @@ export async function saveAdminImageCoreKey(rawKey: string): Promise<AdminImageC
         configured: false,
         maskedKey: null,
         updatedAt: null,
-        error: data?.error || 'Não foi possível guardar no Núcleo SARA.',
+        error: data?.error || 'Não foi possível guardar a Chave de Imagem SARA.',
       };
     }
     return {
@@ -267,6 +263,9 @@ export async function saveAdminImageCoreKey(rawKey: string): Promise<AdminImageC
       configured: Boolean(data.configured),
       maskedKey: data.maskedKey || null,
       updatedAt: data.updatedAt || null,
+      lastError: data.lastError || null,
+      lastErrorStatus: typeof data.lastErrorStatus === 'number' ? data.lastErrorStatus : null,
+      lastErrorAt: data.lastErrorAt || null,
     };
   } catch {
     return {
@@ -274,7 +273,7 @@ export async function saveAdminImageCoreKey(rawKey: string): Promise<AdminImageC
       configured: false,
       maskedKey: null,
       updatedAt: null,
-      error: 'Sem ligação ao Núcleo SARA.',
+      error: 'Sem ligação ao servidor.',
     };
   }
 }
@@ -294,6 +293,9 @@ export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
       configured?: boolean;
       maskedKey?: string | null;
       updatedAt?: string | null;
+      lastError?: string | null;
+      lastErrorStatus?: number | null;
+      lastErrorAt?: string | null;
       error?: string;
     } | null;
     if (!res.ok || !data?.ok) {
@@ -302,7 +304,7 @@ export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
         configured: false,
         maskedKey: null,
         updatedAt: null,
-        error: data?.error || 'Não foi possível remover do Núcleo SARA.',
+        error: data?.error || 'Não foi possível remover a Chave de Imagem SARA.',
       };
     }
     return {
@@ -310,6 +312,9 @@ export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
       configured: Boolean(data.configured),
       maskedKey: data.maskedKey || null,
       updatedAt: data.updatedAt || null,
+      lastError: data.lastError || null,
+      lastErrorStatus: typeof data.lastErrorStatus === 'number' ? data.lastErrorStatus : null,
+      lastErrorAt: data.lastErrorAt || null,
     };
   } catch {
     return {
@@ -317,7 +322,7 @@ export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
       configured: false,
       maskedKey: null,
       updatedAt: null,
-      error: 'Sem ligação ao Núcleo SARA.',
+      error: 'Sem ligação ao servidor.',
     };
   }
 }

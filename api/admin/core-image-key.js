@@ -19,6 +19,9 @@ export default async function handler(req, res) {
       configured: isValidImageCoreKey(current.imageKey),
       maskedKey: maskImageKey(current.imageKey),
       updatedAt: current.updatedAt || null,
+      lastError: current.lastError || null,
+      lastErrorStatus: current.lastErrorStatus ?? null,
+      lastErrorAt: current.lastErrorAt || null,
     });
   }
 
@@ -28,7 +31,7 @@ export default async function handler(req, res) {
     if (!isValidImageCoreKey(key)) {
       return res.status(400).json({
         ok: false,
-        error: 'Formato inválido. Insere uma chave válida do Núcleo SARA (começa por hf_).',
+        error: 'Formato inválido. Insere uma Chave de Imagem SARA válida (começa por hf_).',
       });
     }
     const saved = await setBackendImageKey(key, auth.firebaseToken || undefined);

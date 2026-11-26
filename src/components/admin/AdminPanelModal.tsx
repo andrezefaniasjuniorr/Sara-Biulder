@@ -353,7 +353,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
     e.preventDefault();
     const trimmed = coreImageDraft.trim();
     if (!trimmed) {
-      setCoreImageFeedback('Cola a credencial de imagem antes de guardar.');
+      setCoreImageFeedback('Cola a Chave de Imagem SARA antes de guardar.');
       return;
     }
     setCoreImageSaving(true);
@@ -364,9 +364,9 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
       if (res.ok) {
         setCoreImageDraft('');
         setShowMaskedPreview(false);
-        setCoreImageFeedback('Credencial guardada com segurança no Núcleo SARA.');
+        setCoreImageFeedback('Chave de Imagem SARA guardada com segurança.');
       } else {
-        setCoreImageFeedback(res.error || 'Não foi possível guardar no Núcleo SARA.');
+        setCoreImageFeedback(res.error || 'Não foi possível guardar a Chave de Imagem SARA.');
       }
     } finally {
       setCoreImageSaving(false);
@@ -381,7 +381,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
       setCoreImageStatus(res);
       if (res.ok) {
         setCoreImageDraft('');
-        setCoreImageFeedback('Credencial removida do Núcleo SARA.');
+        setCoreImageFeedback('Chave de Imagem SARA removida.');
       } else {
         setCoreImageFeedback(res.error || 'Não foi possível remover.');
       }
@@ -462,26 +462,36 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
         <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-800/80 overflow-hidden">
           {/* COLUNA 1: NÚCLEO SARA + VISÃO GERAL + GRÁFICO + RELATÓRIO */}
           <section className="lg:col-span-4 flex flex-col min-h-0 overflow-y-auto p-4 gap-4 bg-[#030814]">
-            {/* Secção Privada Núcleo SARA — Exclusiva Admin */}
+            {/* Secção Privada Gerador de Imagens — Exclusiva Admin */}
             <div className="p-3.5 rounded-xl bg-[#071022] border border-purple-500/35 space-y-2.5">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] font-bold tracking-[0.14em] uppercase text-purple-300 flex items-center gap-1.5">
                   <ImageIcon className="w-3.5 h-3.5 text-cyan-300" />
-                  Núcleo SARA
+                  Chave de Imagem SARA
                 </span>
-                {coreImageLoading ? (
-                  <span className="text-[10px] font-mono text-slate-400">A verificar...</span>
-                ) : coreImageStatus?.configured ? (
-                  <span className="text-[10px] font-mono text-emerald-300">
-                    Ativo · {coreImageStatus.maskedKey || 'hf_****'}
-                  </span>
-                ) : (
-                  <span className="text-[10px] font-mono text-amber-300">Não configurado</span>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {coreImageLoading ? (
+                    <span className="text-[10px] font-mono text-slate-400">A verificar...</span>
+                  ) : coreImageStatus?.configured ? (
+                    <span className="text-[10px] font-mono text-emerald-300">
+                      Ativa · {coreImageStatus.maskedKey || 'hf_****'}
+                    </span>
+                  ) : (
+                    <span className="text-[10px] font-mono text-amber-300">Não configurada</span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void refreshCoreImageStatus()}
+                    className="p-1 rounded bg-slate-800/80 hover:bg-slate-700 border border-slate-700 text-slate-300 cursor-pointer"
+                    title="Atualizar estado e erros da chave"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${coreImageLoading ? 'animate-spin text-cyan-400' : ''}`} />
+                  </button>
+                </div>
               </div>
 
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Configuração privada do motor de criação de imagens. Todos os utilizadores geram imagens em segundo plano sem acesso a credenciais.
+                Campo privado do Admin. Os utilizadores geram imagens no chat sem ver a chave nem detalhes técnicos.
               </p>
 
               {coreImageStatus?.needsUnlock ? (
@@ -511,7 +521,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
               ) : (
                 <form onSubmit={(e) => void handleSaveCoreImageKey(e)} className="space-y-2">
                   <label className="block text-[11px] font-semibold text-slate-300">
-                    Credencial de Imagem SARA
+                    Chave de Imagem SARA
                   </label>
                   <div className="flex items-center gap-1.5">
                     <div className="relative flex-1 min-w-0">
@@ -523,7 +533,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                         placeholder={
                           coreImageStatus?.configured && coreImageStatus.maskedKey
                             ? `Guardada (${coreImageStatus.maskedKey}) — cola nova para atualizar`
-                            : 'Cola aqui a nova credencial (hf_...)'
+                            : 'Cola aqui a Chave de Imagem SARA (hf_...)'
                         }
                         autoComplete="off"
                         spellCheck={false}
@@ -547,7 +557,7 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                       <span className="font-bold">
                         {coreImageDraft.trim()
                           ? maskImageKeyPreview(coreImageDraft)
-                          : coreImageStatus?.maskedKey || 'Sem credencial'}
+                          : coreImageStatus?.maskedKey || 'Sem chave'}
                       </span>
                     </div>
                   )}
@@ -573,6 +583,25 @@ export const AdminPanelModal: React.FC<AdminPanelModalProps> = ({
                       </button>
                     )}
                   </div>
+
+                  {coreImageStatus?.lastError && (
+                    <div className="mt-2 p-2.5 rounded-lg bg-rose-500/10 border border-rose-500/35 text-[11px] text-rose-200 space-y-1">
+                      <div className="flex items-center justify-between gap-2 font-bold text-rose-300">
+                        <span className="flex items-center gap-1">
+                          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                          Erro real da chave (só Admin)
+                        </span>
+                        <span className="font-mono text-[10px] text-rose-300/80">
+                          {coreImageStatus.lastErrorStatus ? `HTTP ${coreImageStatus.lastErrorStatus}` : ''}
+                          {coreImageStatus.lastErrorStatus && coreImageStatus.lastErrorAt ? ' · ' : ''}
+                          {coreImageStatus.lastErrorAt ? formatTimeShort(coreImageStatus.lastErrorAt) : ''}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-rose-100/90 break-words leading-snug font-mono">
+                        {coreImageStatus.lastError}
+                      </p>
+                    </div>
+                  )}
                 </form>
               )}
 

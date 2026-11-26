@@ -1,10 +1,32 @@
-import { getBackendImageKey, isValidImageCoreKey } from '../_coreImageVault.js';
+import {
+  clearBackendImageError,
+  getBackendImageKey,
+  isValidImageCoreKey,
+  recordBackendImageError,
+} from '../_coreImageVault.js';
 
-const UNAVAILABLE_MSG = 'Geração de imagens indisponível no momento.';
+const USER_GENERIC_ERROR = 'Não consegui gerar agora, tenta de novo em alguns segundos.';
+
+async function extractUpstreamErrorDetail(upstream) {
+  try {
+    const txt = (await upstream.text()).trim();
+    if (!txt) return '';
+    try {
+      const parsed = JSON.parse(txt);
+      if (typeof parsed?.error === 'string') return parsed.error;
+      if (typeof parsed?.message === 'string') return parsed.message;
+    } catch {
+      // plain text fallback
+    }
+    return txt.slice(0, 180);
+  } catch {
+    return '';
+  }
+}
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ ok: false, error: 'Método não permitido.' });
+    return res.status(405).json({ ok: false, error: USER_GENERIC_ERROR });
   }
 
   const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
@@ -13,16 +35,16 @@ export default async function handler(req, res) {
   if (!prompt || prompt.length > 1000) {
     return res.status(400).json({
       ok: false,
-      error: 'Descrição inválida para gerar a imagem.',
+      error: USER_GENERIC_ERROR,
     });
   }
 
   const { imageKey } = await getBackendImageKey();
   if (!isValidImageCoreKey(imageKey)) {
+    await recordBackendImageError('Chave de Imagem SARA não configurada no painel de admin.', 503);
     return res.status(503).json({
       ok: false,
-      notConfigured: true,
-      error: UNAVAILABLE_MSG,
+      error: USER_GENERIC_ERROR,
     });
   }
 
@@ -31,12 +53,16 @@ export default async function handler(req, res) {
     'stabilityai/stable-diffusion-xl-base-1.0',
   ];
 
+  const attemptErrors = [];
+  let lastStatus = 503;
+
   for (let i = 0; i < models.length; i++) {
+    const modelId = models[i];
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 45000);
     try {
       const upstream = await fetch(
-        `https://router.huggingface.co/hf-inference/models/${models[i]}`,
+        `https://router.huggingface.co/hf-inference/models/${modelId}`,
         {
           method: 'POST',
           headers: {
@@ -54,10 +80,14 @@ export default async function handler(req, res) {
       clearTimeout(timer);
 
       if (upstream.status === 401 || upstream.status === 403) {
+        const detail = await extractUpstreamErrorDetail(upstream);
+        await recordBackendImageError(
+          `Chave rejeitada (HTTP ${upstream.status})${detail ? `: ${detail}` : ''}`,
+          upstream.status
+        );
         return res.status(503).json({
           ok: false,
-          notConfigured: true,
-          error: UNAVAILABLE_MSG,
+          error: USER_GENERIC_ERROR,
         });
       }
 
@@ -65,6 +95,7 @@ export default async function handler(req, res) {
       if (upstream.ok && contentType.startsWith('image/')) {
         const buf = Buffer.from(await upstream.arrayBuffer());
         if (buf.length > 0) {
+          await clearBackendImageError();
           const mime = contentType.split(';')[0] || 'image/png';
           return res.status(200).json({
             ok: true,
@@ -73,26 +104,26 @@ export default async function handler(req, res) {
         }
       }
 
-      if (i < models.length - 1 && [404, 410, 429, 500, 502, 503, 504].includes(upstream.status)) {
-        continue;
-      }
-
-      return res.status(503).json({
-        ok: false,
-        error: 'Núcleo SARA ocupado ao criar a imagem. Tenta novamente dentro de instantes.',
-      });
-    } catch {
+      lastStatus = upstream.status || 503;
+      const detail = await extractUpstreamErrorDetail(upstream);
+      attemptErrors.push(
+        `${modelId.split('/').pop()}: HTTP ${lastStatus}${detail ? ` (${detail})` : ''}`
+      );
+    } catch (err) {
       clearTimeout(timer);
-      if (i < models.length - 1) continue;
-      return res.status(504).json({
-        ok: false,
-        error: 'Núcleo SARA demorou a responder. Tenta novamente.',
-      });
+      lastStatus = err?.name === 'AbortError' ? 504 : 503;
+      const errMsg = err?.name === 'AbortError' ? 'Timeout após 45s' : err?.message || 'Erro de rede';
+      attemptErrors.push(`${modelId.split('/').pop()}: ${errMsg}`);
     }
   }
 
+  await recordBackendImageError(
+    attemptErrors.join(' | ') || 'Falha nos motores de geração de imagem.',
+    lastStatus
+  );
+
   return res.status(503).json({
     ok: false,
-    error: 'Núcleo SARA ocupado ao criar a imagem. Tenta novamente.',
+    error: USER_GENERIC_ERROR,
   });
 }
