@@ -136,6 +136,96 @@ export type GenerateSaraImageResult =
   | { ok: true; dataUrl: string; seed: number; style: SaraImageStyle }
   | { ok: false; error: string };
 
+async function translatePromptToEnglishClient(rawPrompt: string): Promise<string> {
+  const clean = String(rawPrompt || '').trim();
+  if (!clean) return '';
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 4500);
+  try {
+    const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(clean)}`;
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    });
+    if (res.ok) {
+      const text = await res.text();
+      const data = JSON.parse(text) as unknown;
+      if (Array.isArray(data) && Array.isArray(data[0])) {
+        const translated = (data[0] as unknown[])
+          .map((part) => (Array.isArray(part) && typeof part[0] === 'string' ? part[0] : ''))
+          .join('')
+          .trim();
+        if (translated) return translated;
+      }
+    }
+  } catch {
+    // fallback para o prompt original
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return clean;
+}
+
+async function detectImageMimeFromBlob(
+  blob: Blob,
+  headerContentType?: string | null
+): Promise<string | null> {
+  if (!blob || blob.size === 0) return null;
+
+  try {
+    const headBuf = await blob.slice(0, 32).arrayBuffer();
+    const bytes = new Uint8Array(headBuf);
+
+    // JPEG / JFIF (FF D8 FF ...)
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+      return 'image/jpeg';
+    }
+    let ascii = '';
+    for (let i = 0; i < bytes.length; i += 1) {
+      ascii += String.fromCharCode(bytes[i]);
+    }
+    if (ascii.includes('JFIF') || ascii.includes('Exif')) {
+      return 'image/jpeg';
+    }
+
+    // PNG (89 50 4E 47)
+    if (
+      bytes.length >= 4 &&
+      bytes[0] === 0x89 &&
+      bytes[1] === 0x50 &&
+      bytes[2] === 0x4e &&
+      bytes[3] === 0x47
+    ) {
+      return 'image/png';
+    }
+
+    // GIF (GIF8)
+    if (ascii.startsWith('GIF8')) {
+      return 'image/gif';
+    }
+
+    // WEBP (RIFF....WEBP)
+    if (ascii.startsWith('RIFF') && ascii.slice(8, 12) === 'WEBP') {
+      return 'image/webp';
+    }
+  } catch {
+    // fallback para cabeçalho/tipo
+  }
+
+  const normalizedType = String(headerContentType || blob.type || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  if (normalizedType.startsWith('image/')) {
+    return normalizedType;
+  }
+
+  return null;
+}
+
 export async function generateSaraImage(
   prompt: string,
   options?: { style?: SaraImageStyle; seed?: number; previousSeed?: number }
@@ -150,9 +240,49 @@ export async function generateSaraImage(
 
   const style: SaraImageStyle = options?.style || 'realistic';
   const seed = options?.seed || generateNewImageSeed(options?.previousSeed);
+  const styleOption =
+    IMAGE_STYLE_OPTIONS.find((opt) => opt.id === style) || IMAGE_STYLE_OPTIONS[0];
 
+  const englishPrompt = await translatePromptToEnglishClient(cleanPrompt);
+  const fullPrompt = `${englishPrompt}, ${styleOption.promptSuffix}`;
+  const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fullPrompt)}?width=1024&height=1024&seed=${seed}&nologo=true&enhance=true`;
+
+  // 1) Pedido direto com .blob() e URL.createObjectURL(blob), aceitando JFIF/JPEG mesmo se HTTP 402
+  const directController = new AbortController();
+  const directTimer = setTimeout(() => directController.abort(), 45000);
   try {
-    const response = await fetch('/api/image/generate', {
+    const response = await fetch(pollinationsUrl, {
+      method: 'GET',
+      signal: directController.signal,
+    });
+    const rawBlob = await response.blob();
+    clearTimeout(directTimer);
+
+    const detectedMime = await detectImageMimeFromBlob(
+      rawBlob,
+      response.headers.get('content-type')
+    );
+    if (detectedMime) {
+      const typedBlob = rawBlob.type?.startsWith('image/')
+        ? rawBlob
+        : new Blob([rawBlob], { type: detectedMime });
+      const objectUrl = URL.createObjectURL(typedBlob);
+      return {
+        ok: true,
+        dataUrl: objectUrl,
+        seed,
+        style,
+      };
+    }
+  } catch {
+    clearTimeout(directTimer);
+  }
+
+  // 2) Fallback silencioso via servidor usando também .blob() e URL.createObjectURL(blob)
+  const fallbackController = new AbortController();
+  const fallbackTimer = setTimeout(() => fallbackController.abort(), 45000);
+  try {
+    const fallbackRes = await fetch('/api/image/generate', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -162,34 +292,34 @@ export async function generateSaraImage(
         style,
         seed,
       }),
+      signal: fallbackController.signal,
     });
+    const fallbackBlob = await fallbackRes.blob();
+    clearTimeout(fallbackTimer);
 
-    const data = (await response.json().catch(() => null)) as {
-      ok?: boolean;
-      dataUrl?: string;
-      seed?: number;
-      style?: SaraImageStyle;
-    } | null;
-
-    if (
-      !response.ok ||
-      !data?.ok ||
-      typeof data.dataUrl !== 'string' ||
-      !data.dataUrl.startsWith('data:image/')
-    ) {
+    const detectedMime = await detectImageMimeFromBlob(
+      fallbackBlob,
+      fallbackRes.headers.get('content-type')
+    );
+    if (detectedMime) {
+      const typedBlob = fallbackBlob.type?.startsWith('image/')
+        ? fallbackBlob
+        : new Blob([fallbackBlob], { type: detectedMime });
+      const objectUrl = URL.createObjectURL(typedBlob);
       return {
-        ok: false,
-        error: IMAGE_GENERIC_ERROR_MESSAGE,
+        ok: true,
+        dataUrl: objectUrl,
+        seed,
+        style,
       };
     }
 
     return {
-      ok: true,
-      dataUrl: data.dataUrl,
-      seed: typeof data.seed === 'number' ? data.seed : seed,
-      style: data.style || style,
+      ok: false,
+      error: IMAGE_GENERIC_ERROR_MESSAGE,
     };
   } catch {
+    clearTimeout(fallbackTimer);
     return {
       ok: false,
       error: IMAGE_GENERIC_ERROR_MESSAGE,
@@ -411,8 +541,12 @@ export async function clearAdminImageCoreKey(): Promise<AdminImageCoreStatus> {
   }
 }
 
+function isSupportedGeneratedImageUrl(url?: string | null): boolean {
+  return Boolean(url && (url.startsWith('data:image/') || url.startsWith('blob:')));
+}
+
 export function downloadImageDataUrl(dataUrl: string, promptLabel?: string): void {
-  if (!dataUrl || !dataUrl.startsWith('data:image/')) return;
+  if (!isSupportedGeneratedImageUrl(dataUrl)) return;
   const slug = (promptLabel || 'imagem-sara')
     .toLowerCase()
     .normalize('NFD')
@@ -421,7 +555,7 @@ export function downloadImageDataUrl(dataUrl: string, promptLabel?: string): voi
     .replace(/^-+|-+$/g, '')
     .slice(0, 36);
   const mimeMatch = dataUrl.match(/^data:image\/([a-z0-9+.-]+);/i);
-  const ext = mimeMatch?.[1] === 'jpeg' ? 'jpg' : mimeMatch?.[1] || 'png';
+  const ext = mimeMatch?.[1] === 'jpeg' ? 'jpg' : mimeMatch?.[1] || 'jpg';
   const a = document.createElement('a');
   a.href = dataUrl;
   a.download = `${slug || 'imagem-sara'}.${ext}`;
@@ -436,7 +570,7 @@ export function compressImageForStorage(
   quality = 0.84
 ): Promise<string> {
   return new Promise((resolve) => {
-    if (typeof document === 'undefined' || !dataUrl.startsWith('data:image/')) {
+    if (typeof document === 'undefined' || !isSupportedGeneratedImageUrl(dataUrl)) {
       resolve(dataUrl);
       return;
     }
@@ -466,8 +600,9 @@ export function compressImageForStorage(
 }
 
 export async function saveUserProfilePhoto(userId: string, rawDataUrl: string): Promise<string | null> {
-  if (!userId || !rawDataUrl.startsWith('data:image/')) return null;
+  if (!userId || !isSupportedGeneratedImageUrl(rawDataUrl)) return null;
   const compact = await compressImageForStorage(rawDataUrl, 256, 0.85);
+  if (!compact.startsWith('data:image/')) return null;
   try {
     localStorage.setItem(`${PROFILE_PHOTO_PREFIX}${userId}`, compact);
     if (typeof window !== 'undefined') {

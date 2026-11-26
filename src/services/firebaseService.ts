@@ -373,7 +373,11 @@ export async function salvarMensagemChatFirebase(
     if (!uid) return;
     // Evita enviar strings base64 pesadas de imagens se excederem tamanho seguro
     const safeImageUrl =
-      message.imageUrl && message.imageUrl.length < 180000 ? message.imageUrl : undefined;
+      message.imageUrl &&
+      !message.imageUrl.startsWith('blob:') &&
+      message.imageUrl.length < 180000
+        ? message.imageUrl
+        : undefined;
     await firestoreMod.setDoc(
       firestoreMod.doc(db, 'sara_chats', `${uid}_${projectId}_${message.id}`),
       {

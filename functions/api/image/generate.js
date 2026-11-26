@@ -29,14 +29,36 @@ function resolveSeed(rawSeed) {
   return Math.floor(Math.random() * 2000000000) + 1;
 }
 
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+function detectImageMimeFromBuffer(arrayBuffer, headerContentType) {
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) return null;
+  const bytes = new Uint8Array(arrayBuffer, 0, Math.min(32, arrayBuffer.byteLength));
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
   }
-  return btoa(binary);
+  let headStr = '';
+  for (let i = 0; i < bytes.length; i += 1) {
+    headStr += String.fromCharCode(bytes[i]);
+  }
+  if (headStr.includes('JFIF') || headStr.includes('Exif')) {
+    return 'image/jpeg';
+  }
+  if (bytes.length >= 4 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    return 'image/png';
+  }
+  if (headStr.startsWith('GIF8')) {
+    return 'image/gif';
+  }
+  if (headStr.startsWith('RIFF') && headStr.slice(8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  const normalizedType = String(headerContentType || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  if (normalizedType.startsWith('image/')) {
+    return normalizedType;
+  }
+  return null;
 }
 
 async function translatePromptToEnglish(rawPrompt) {
@@ -79,14 +101,11 @@ export async function onRequestPost(context) {
   const seed = resolveSeed(body?.seed);
   const modelLabel = `pollinations.ai (${styleKey})`;
 
-  const json = (payload, status = 200) =>
-    new Response(JSON.stringify(payload), {
-      status,
-      headers: { 'Content-Type': 'application/json' },
-    });
-
   if (!prompt || prompt.length > 1000) {
-    return json({ ok: false, error: USER_GENERIC_ERROR }, 400);
+    return new Response(USER_GENERIC_ERROR, {
+      status: 400,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
   }
 
   const englishPrompt = await translatePromptToEnglish(prompt);
@@ -106,36 +125,40 @@ export async function onRequestPost(context) {
       signal: controller.signal,
     });
 
-    const contentType = String(upstream.headers.get('content-type') || '').toLowerCase();
-    if (upstream.ok && contentType.startsWith('image/')) {
-      const buf = await upstream.arrayBuffer();
-      clearTimeout(timer);
-      if (buf.byteLength > 0) {
-        await clearBackendImageError(modelLabel);
-        const mime = contentType.split(';')[0] || 'image/jpeg';
-        return json({
-          ok: true,
-          dataUrl: `data:${mime};base64,${arrayBufferToBase64(buf)}`,
-          seed,
-          style: styleKey,
-        });
-      }
+    const buf = await upstream.arrayBuffer();
+    clearTimeout(timer);
+
+    const detectedMime = detectImageMimeFromBuffer(buf, upstream.headers.get('content-type'));
+    if (detectedMime) {
+      await clearBackendImageError(modelLabel);
+      return new Response(buf, {
+        status: 200,
+        headers: {
+          'Content-Type': detectedMime,
+          'Cache-Control': 'no-store',
+        },
+      });
     }
 
-    const detail = (await upstream.text().catch(() => '')).trim().slice(0, 220);
-    clearTimeout(timer);
+    const detail = new TextDecoder().decode(buf).trim().slice(0, 220);
     const status = upstream.status || 503;
     await recordBackendImageError(
       `HTTP ${status}${detail ? ` — ${detail}` : ' — Resposta inválida sem imagem.'}`,
       status,
       modelLabel
     );
-    return json({ ok: false, error: USER_GENERIC_ERROR }, 503);
+    return new Response(USER_GENERIC_ERROR, {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
   } catch (err) {
     clearTimeout(timer);
     const status = err?.name === 'AbortError' ? 504 : 503;
     const errMsg = err?.name === 'AbortError' ? 'Timeout após 45s' : err?.message || 'Erro de rede';
     await recordBackendImageError(errMsg, status, modelLabel);
-    return json({ ok: false, error: USER_GENERIC_ERROR }, 503);
+    return new Response(USER_GENERIC_ERROR, {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
   }
 }

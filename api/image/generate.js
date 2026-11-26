@@ -61,9 +61,37 @@ async function translatePromptToEnglish(rawPrompt) {
   return clean;
 }
 
+function detectImageMimeFromBytes(buf, headerContentType) {
+  if (!buf || buf.length === 0) return null;
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  const headStr = buf.subarray(0, 32).toString('latin1');
+  if (headStr.includes('JFIF') || headStr.includes('Exif')) {
+    return 'image/jpeg';
+  }
+  if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
+    return 'image/png';
+  }
+  if (headStr.startsWith('GIF8')) {
+    return 'image/gif';
+  }
+  if (headStr.startsWith('RIFF') && headStr.slice(8, 12) === 'WEBP') {
+    return 'image/webp';
+  }
+  const normalizedType = String(headerContentType || '')
+    .split(';')[0]
+    .trim()
+    .toLowerCase();
+  if (normalizedType.startsWith('image/')) {
+    return normalizedType;
+  }
+  return null;
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({ ok: false, error: USER_GENERIC_ERROR });
+    return res.status(405).type('text/plain').send(USER_GENERIC_ERROR);
   }
 
   let body = {};
@@ -78,10 +106,7 @@ export default async function handler(req, res) {
   const modelLabel = `pollinations.ai (${styleKey})`;
 
   if (!prompt || prompt.length > 1000) {
-    return res.status(400).json({
-      ok: false,
-      error: USER_GENERIC_ERROR,
-    });
+    return res.status(400).type('text/plain').send(USER_GENERIC_ERROR);
   }
 
   const englishPrompt = await translatePromptToEnglish(prompt);
@@ -101,42 +126,30 @@ export default async function handler(req, res) {
       signal: controller.signal,
     });
 
-    const contentType = String(upstream.headers.get('content-type') || '').toLowerCase();
-    if (upstream.ok && contentType.startsWith('image/')) {
-      const buf = Buffer.from(await upstream.arrayBuffer());
-      clearTimeout(timer);
-      if (buf.length > 0) {
-        await clearBackendImageError(modelLabel);
-        const mime = contentType.split(';')[0] || 'image/jpeg';
-        return res.status(200).json({
-          ok: true,
-          dataUrl: `data:${mime};base64,${buf.toString('base64')}`,
-          seed,
-          style: styleKey,
-        });
-      }
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    clearTimeout(timer);
+
+    const detectedMime = detectImageMimeFromBytes(buf, upstream.headers.get('content-type'));
+    if (detectedMime) {
+      await clearBackendImageError(modelLabel);
+      res.setHeader('Content-Type', detectedMime);
+      res.setHeader('Cache-Control', 'no-store');
+      return res.status(200).send(buf);
     }
 
-    const detail = (await upstream.text().catch(() => '')).trim().slice(0, 220);
-    clearTimeout(timer);
+    const detail = buf.toString('utf8', 0, 220).trim();
     const status = upstream.status || 503;
     await recordBackendImageError(
       `HTTP ${status}${detail ? ` — ${detail}` : ' — Resposta inválida sem imagem.'}`,
       status,
       modelLabel
     );
-    return res.status(503).json({
-      ok: false,
-      error: USER_GENERIC_ERROR,
-    });
+    return res.status(503).type('text/plain').send(USER_GENERIC_ERROR);
   } catch (err) {
     clearTimeout(timer);
     const status = err?.name === 'AbortError' ? 504 : 503;
     const errMsg = err?.name === 'AbortError' ? 'Timeout após 45s' : err?.message || 'Erro de rede';
     await recordBackendImageError(errMsg, status, modelLabel);
-    return res.status(503).json({
-      ok: false,
-      error: USER_GENERIC_ERROR,
-    });
+    return res.status(503).type('text/plain').send(USER_GENERIC_ERROR);
   }
 }

@@ -346,7 +346,13 @@ function loadInitialChat(session: SaraSession | null): ChatMessage[] {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed.filter((m: ChatMessage) => m?.id !== 'sara_welcome');
+        return parsed
+          .filter((m: ChatMessage) => m?.id !== 'sara_welcome')
+          .map((m: ChatMessage) =>
+            m?.imageUrl && m.imageUrl.startsWith('blob:')
+              ? { ...m, imageUrl: undefined, isGeneratingImage: false }
+              : m
+          );
       }
     }
   } catch {
@@ -1881,7 +1887,11 @@ export default function App() {
   useEffect(() => {
     if (!session || session.isGuest) return;
     try {
-      const trimmedMsgs = messages.slice(-50);
+      const trimmedMsgs = messages.slice(-50).map((m) =>
+        m?.imageUrl && m.imageUrl.startsWith('blob:')
+          ? { ...m, imageUrl: undefined, isGeneratingImage: false }
+          : m
+      );
       localStorage.setItem(
         scopedStorageKey(CHAT_STORAGE_KEY, session.userId),
         JSON.stringify(trimmedMsgs)
