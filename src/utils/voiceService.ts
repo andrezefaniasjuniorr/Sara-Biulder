@@ -1,4 +1,5 @@
 import type { ProjectType } from '../types/builder';
+import { extractImageGenRequest, parseImageVoiceCommand } from '../services/imageGenService';
 
 export type VoiceLevel = 'short' | 'medium' | 'full';
 
@@ -915,6 +916,10 @@ export function isAssistantExplanationIntent(text: string): boolean {
     .trim();
   if (!lower) return false;
 
+  if (extractImageGenRequest(text) || parseImageVoiceCommand(text)) {
+    return false;
+  }
+
   // Se pede alteração explícita no código/site/projeto atual, fica no Builder
   if (
     /\b(no\s+(site|projeto|app|codigo|editor|preview)|adiciona|implementa|cria\s+uma?\s+(pagina|tela|botao|seccao|componente)|corrige\s+(o\s+)?erro)\b/i.test(
@@ -1008,6 +1013,10 @@ export function parseVoiceCommand(
     .replace(/[\u0300-\u036f]/g, '')
     .replace(/[.!?]+$/g, '')
     .trim();
+
+  if (extractImageGenRequest(clean) || parseImageVoiceCommand(clean)) {
+    return { type: 'prompt', text: clean };
+  }
 
   if (recon.unintelligible) {
     return {

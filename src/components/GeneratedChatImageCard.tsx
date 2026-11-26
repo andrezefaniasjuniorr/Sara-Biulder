@@ -9,9 +9,11 @@ import {
   Camera,
   Brush,
   Box,
+  Crown,
 } from 'lucide-react';
 import {
   IMAGE_CREATING_MESSAGE,
+  IMAGE_CREATING_TOP_MESSAGE,
   IMAGE_STYLE_OPTIONS,
   type SaraImageStyle,
 } from '../services/imageGenService';
@@ -19,6 +21,7 @@ import {
 interface GeneratedChatImageCardProps {
   imageUrl?: string;
   isGenerating?: boolean;
+  isTopQuality?: boolean;
   awaitingStyle?: boolean;
   activeStyle?: SaraImageStyle;
   prompt: string;
@@ -26,6 +29,7 @@ interface GeneratedChatImageCardProps {
   onSelectStyle: (style: SaraImageStyle) => void;
   onDownload: () => void;
   onRegenerate: () => void;
+  onTopQuality?: () => void;
   onUseAsProfilePhoto: () => Promise<void> | void;
 }
 
@@ -38,6 +42,7 @@ const STYLE_ICONS: Record<SaraImageStyle, React.ReactNode> = {
 export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
   imageUrl,
   isGenerating = false,
+  isTopQuality = false,
   awaitingStyle = false,
   activeStyle = 'realistic',
   prompt,
@@ -45,6 +50,7 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
   onSelectStyle,
   onDownload,
   onRegenerate,
+  onTopQuality,
   onUseAsProfilePhoto,
 }) => {
   const [appliedProfile, setAppliedProfile] = useState(false);
@@ -57,7 +63,7 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
           <Sparkles className="w-5 h-5 text-[#00E5FF] animate-spin" />
         </div>
         <div className="text-xs font-bold text-cyan-200 tracking-wide">
-          {IMAGE_CREATING_MESSAGE}
+          {isTopQuality ? IMAGE_CREATING_TOP_MESSAGE : IMAGE_CREATING_MESSAGE}
         </div>
         {prompt && (
           <div className="text-[11px] text-slate-400 line-clamp-2 max-w-full">{prompt}</div>
@@ -195,6 +201,17 @@ export const GeneratedChatImageCard: React.FC<GeneratedChatImageCardProps> = ({
             <Palette className="w-3.5 h-3.5 text-amber-300 shrink-0" />
             <span>Mudar Estilo</span>
           </button>
+
+          {onTopQuality && (
+            <button
+              type="button"
+              onClick={onTopQuality}
+              className="px-2.5 py-1.5 rounded-lg bg-[#09162E] hover:bg-fuchsia-500/20 border border-fuchsia-500/40 text-[11px] font-bold text-fuchsia-100 flex items-center gap-1.5 cursor-pointer transition"
+            >
+              <Crown className="w-3.5 h-3.5 text-fuchsia-300 shrink-0" />
+              <span>Qualidade Top</span>
+            </button>
+          )}
         </div>
       )}
     </div>

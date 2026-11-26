@@ -282,6 +282,7 @@ export interface JarvisConversationEntry {
   generatedImagePrompt?: string;
   generatedImageStyle?: 'realistic' | 'drawing' | 'pixar3d';
   generatedImageSeed?: number;
+  generatedImageTopQuality?: boolean;
   awaitingImageStyle?: boolean;
   isGeneratingImage?: boolean;
 }

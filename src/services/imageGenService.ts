@@ -4,8 +4,12 @@ import { getCurrentFirebaseIdToken } from './firebaseService';
 export const IMAGE_GENERIC_ERROR_MESSAGE =
   'Não consegui gerar agora, tenta de novo em alguns segundos.';
 export const IMAGE_CREATING_MESSAGE = 'A criar a tua imagem...';
+export const IMAGE_CREATING_TOP_MESSAGE =
+  'A criar em Qualidade Top... pode demorar 20 segundos';
 export const IMAGE_ASK_STYLE_MESSAGE = 'Escolhe o estilo da tua imagem:';
 export const PROFILE_PHOTO_EVENT = 'sara-profile-photo-updated';
+export const IMAGE_QUALITY_SUFFIX =
+  'ultra detailed, sharp focus, high quality, 8k, professional lighting, no blur, no distortion';
 
 export type SaraImageStyle = 'realistic' | 'drawing' | 'pixar3d';
 
@@ -18,13 +22,13 @@ export const IMAGE_STYLE_OPTIONS: Array<{
     id: 'realistic',
     label: 'Realista',
     promptSuffix:
-      'ultra realistic, professional photography, detailed skin, cinematic lighting, 4k, high resolution',
+      'ultra realistic, professional photography, detailed skin, cinematic lighting, 4k',
   },
   {
     id: 'drawing',
     label: 'Desenho',
     promptSuffix:
-      'beautiful digital illustration, vibrant colors, detailed art, clean lines, high quality artwork',
+      'beautiful digital illustration, vibrant colors, detailed art, clean lines',
   },
   {
     id: 'pixar3d',
@@ -92,11 +96,26 @@ export function parseImageStyleReply(rawText: string): {
   return { matched: false, style: 'realistic' };
 }
 
+export interface ExtractedImageGenRequest {
+  prompt: string;
+  qualityTop: boolean;
+  style?: SaraImageStyle;
+}
+
+export type ImageVoiceAction =
+  | { type: 'regenerate' }
+  | { type: 'ask_style' }
+  | { type: 'set_style'; style: SaraImageStyle }
+  | { type: 'top_quality' }
+  | { type: 'download' }
+  | { type: 'use_profile_photo' }
+  | { type: 'show_last_image' };
+
 /**
  * Deteta pedidos espontâneos para gerar imagem no chat ou por voz.
- * Exemplo: "SARA, cria uma imagem de um leão dourado", "SARA, gera uma imagem de..."
+ * Exemplo: "SARA, gera / cria / faz / mostra uma imagem de..."
  */
-export function extractImageGenPrompt(rawText: string): string | null {
+export function extractImageGenRequest(rawText: string): ExtractedImageGenRequest | null {
   const clean = String(rawText || '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -107,24 +126,70 @@ export function extractImageGenPrompt(rawText: string): string | null {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 
-  // Evita confundir edição ou abertura de ficheiros locais
+  // Nunca rouba comandos de galeria local do dispositivo nem edição de ficheiros de código
   if (
-    /^(?:sara[,\s]+)?(?:abre|abrir|mostra|mostrar|ver|edita|apaga|apagar)\b/i.test(normalized)
+    /\b(?:minhas?\s+(?:fotos|imagens)|do\s+meu\s+pc|no\s+meu\s+pc|do\s+telemovel|do\s+celular|da\s+pasta)\b/i.test(
+      normalized
+    ) ||
+    /^(?:sara[,\s]+)?(?:edita|apaga|apagar|elimina|remove)\b/i.test(normalized)
+  ) {
+    return null;
+  }
+
+  // Comandos sobre a última imagem ("mostra a imagem", "outra imagem", "baixa a imagem") não criam assunto novo
+  if (
+    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:por\s+favor[,\s]+)?(?:mostra|abre|ver|baixa|baixar|guarda|guardar|descarrega|usa|usar|define|mete|coloca|gera|cria|faz)?\s*(?:a\s+|essa\s+|esta\s+|uma\s+)?(?:ultima\s+|outra\s+)?(?:imagem|foto)(?:\s+como\s+foto\s+de\s+perfil)?[.!?]*$/i.test(
+      normalized
+    )
   ) {
     return null;
   }
 
   const patterns: RegExp[] = [
-    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:por\s+favor[,\s]+)?(?:podes\s+|pode\s+|quero\s+que\s+)?(?:gerar|gera|cria|criar|faz|fazer|desenha|desenhar|produz|produzir|inventa|imagina)(?:-me|\s+me|\s+para\s+mim)?\s+(?:uma?\s+)?(?:nova\s+)?(?:imagem|foto|ilustra[cç][aã]o|figura|arte|desenho|retrato)(?:\s+(?:de|da|do|das|dos|com|sobre|em))?\s+(.+)$/i,
-    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:quero|preciso\s+de|manda)\s+(?:uma?\s+)?(?:imagem|foto|ilustra[cç][aã]o|arte)(?:\s+(?:de|da|do|das|dos|com|sobre))?\s+(.+)$/i,
+    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:por\s+favor[,\s]+)?(?:podes\s+|pode\s+|quero\s+que\s+)?(?:gerar|gera|cria|criar|faz|fazer|mostra|mostrar|desenha|desenhar|produz|produzir|inventa|imagina)(?:-me|\s+me|\s+para\s+mim)?\s+(?:uma?\s+)?(?:nova\s+)?(?:imagem|foto|ilustra[cç][aã]o|figura|arte|desenho|retrato)(?:\s+(?:em|com)\s+qualidade\s+top)?(?:\s+(?:estilo|no\s+estilo)\s+(?:realista|desenho|3d\s*pixar|pixar))?(?:\s+(?:de|da|do|das|dos|com|sobre|em))?\s+(.+)$/i,
+    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:quero|preciso\s+de|manda(?:-me|\s+me)?)\s+(?:uma?\s+)?(?:nova\s+)?(?:imagem|foto|ilustra[cç][aã]o|arte|desenho|retrato)(?:\s+(?:em|com)\s+qualidade\s+top)?(?:\s+(?:de|da|do|das|dos|com|sobre|em))?\s+(.+)$/i,
+    /^(?:(?:ei|ol[aá]|oi|hey)\s+)?(?:sara[,\s.:;-]+)?(?:por\s+favor[,\s]+)?(?:podes\s+|pode\s+)?(?:desenha|desenhar)(?:-me|\s+me|\s+para\s+mim)?\s+(.+)$/i,
   ];
 
-  for (const rx of patterns) {
+  for (let idx = 0; idx < patterns.length; idx += 1) {
+    const rx = patterns[idx];
     const m = clean.match(rx);
     if (m && m[1]) {
-      const subject = m[1].replace(/[.!?]+$/g, '').trim();
+      let subject = m[1].replace(/[.!?]+$/g, '').trim();
+      // Para "desenha ...", ignora se estiver a pedir desenho de app/site/sistema
+      if (
+        idx === 2 &&
+        /\b(?:site|sistema|app|aplicativo|aplicacao|jogo|interface|layout|pagina|formulario|painel)\b/i.test(
+          subject
+        )
+      ) {
+        return null;
+      }
+
+      const fullNorm = normalized;
+      let qualityTop = /\b(?:em|com)?\s*qualidade\s+top\b/i.test(fullNorm);
+      let style: SaraImageStyle | undefined;
+
+      if (/\b(?:no\s+)?estilo\s+(?:3d\s*pixar|pixar)\b/i.test(fullNorm)) {
+        style = 'pixar3d';
+      } else if (/\b(?:no\s+)?estilo\s+desenho\b/i.test(fullNorm)) {
+        style = 'drawing';
+      } else if (/\b(?:no\s+)?estilo\s+realista\b/i.test(fullNorm)) {
+        style = 'realistic';
+      }
+
+      if (/\b(?:em|com)?\s*qualidade\s+top\b/i.test(subject)) {
+        qualityTop = true;
+        subject = subject.replace(/\b(?:em|com)?\s*qualidade\s+top\b/gi, '').trim();
+      }
+      subject = subject
+        .replace(/\b(?:no\s+)?estilo\s+(?:3d\s*pixar|pixar|desenho|realista)\b/gi, '')
+        .replace(/^(?:de|da|do|das|dos)\s+/i, '')
+        .replace(/[,;:\s]+$/g, '')
+        .trim();
+
       if (subject.length >= 2) {
-        return subject;
+        return { prompt: subject, qualityTop, style };
       }
     }
   }
@@ -132,8 +197,91 @@ export function extractImageGenPrompt(rawText: string): string | null {
   return null;
 }
 
+export function extractImageGenPrompt(rawText: string): string | null {
+  return extractImageGenRequest(rawText)?.prompt || null;
+}
+
+export function parseImageVoiceCommand(rawText: string): ImageVoiceAction | null {
+  const norm = String(rawText || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+    .replace(/[!?.]+$/g, '')
+    .trim();
+
+  if (!norm) return null;
+
+  // Remove prefixo conversacional opcional "sara, ..."
+  const body = norm
+    .replace(/^(?:(?:ei|oi|ola|hey)\s+)?sara[,\s.:;-]+/i, '')
+    .replace(/^por\s+favor[,\s]+/i, '')
+    .trim();
+  if (!body) return null;
+
+  if (
+    /^(?:(?:gera|gerar|cria|criar|faz|fazer|manda|tenta)(?:-me|\s+me)?\s+)?(?:uma?\s+)?outra(?:\s+(?:imagem|foto))?$|^gera\s+mais\s+uma(?:\s+(?:imagem|foto))?$/i.test(
+      body
+    )
+  ) {
+    return { type: 'regenerate' };
+  }
+
+  if (/^(?:muda|mudar|altera|alterar|troca|trocar)\s+(?:o\s+|de\s+)?estilo(?:\s+(?:da\s+)?imagem)?$/i.test(body)) {
+    return { type: 'ask_style' };
+  }
+
+  const styleCmd = body.match(
+    /^(?:(?:muda|mudar|altera|alterar|troca|trocar|faz|gera)\s+(?:o\s+estilo\s+)?(?:para\s+|em\s+)?)?(?:o\s+)?(?:estilo\s+)?(realista|desenho|3d\s*pixar|pixar\s*3d|pixar)$/i
+  );
+  if (styleCmd && styleCmd[1]) {
+    const val = styleCmd[1].toLowerCase();
+    // Só dispara comando explícito de mudança de estilo se contiver "estilo" ou "muda/altera/troca"
+    if (/\b(?:estilo|muda|mudar|altera|alterar|troca|trocar)\b/i.test(body)) {
+      if (val.includes('desenho')) return { type: 'set_style', style: 'drawing' };
+      if (val.includes('pixar') || val.includes('3d')) return { type: 'set_style', style: 'pixar3d' };
+      return { type: 'set_style', style: 'realistic' };
+    }
+  }
+
+  if (
+    /^(?:(?:gera|gerar|cria|criar|faz|fazer|usa|usar|ativa|ativar)\s+(?:em\s+|com\s+)?)?qualidade\s+top(?:\s+(?:na\s+|nessa\s+|nesta\s+)?imagem)?$/i.test(
+      body
+    )
+  ) {
+    return { type: 'top_quality' };
+  }
+
+  if (
+    /^(?:baixa|baixar|guarda|guardar|descarrega|descarregar|salva|salvar|faz\s+download\s+d[ao])\s+(?:a\s+|essa\s+|esta\s+|ultima\s+)?(?:imagem|foto)$/i.test(
+      body
+    ) ||
+    /^baixar\s+imagem$|^guardar\s+imagem$/i.test(body)
+  ) {
+    return { type: 'download' };
+  }
+
+  if (
+    /^(?:usa|usar|define|definir|mete|meter|coloca|colocar|poe|por|aplica|aplicar)\s+(?:esta\s+|essa\s+|a\s+)?(?:imagem\s+)?como\s+(?:a\s+|minha\s+)?foto\s+de\s+perfil$/i.test(
+      body
+    )
+  ) {
+    return { type: 'use_profile_photo' };
+  }
+
+  if (
+    /^(?:mostra|mostrar|abre|abrir|ver|exibe|exibir)\s+(?:a\s+|essa\s+|esta\s+)?(?:ultima\s+)?imagem$/i.test(
+      body
+    )
+  ) {
+    return { type: 'show_last_image' };
+  }
+
+  return null;
+}
+
 export type GenerateSaraImageResult =
-  | { ok: true; dataUrl: string; seed: number; style: SaraImageStyle }
+  | { ok: true; dataUrl: string; seed: number; style: SaraImageStyle; isTopQuality: boolean }
   | { ok: false; error: string };
 
 async function translatePromptToEnglishClient(rawPrompt: string): Promise<string> {
@@ -228,7 +376,12 @@ async function detectImageMimeFromBlob(
 
 export async function generateSaraImage(
   prompt: string,
-  options?: { style?: SaraImageStyle; seed?: number; previousSeed?: number }
+  options?: {
+    style?: SaraImageStyle;
+    seed?: number;
+    previousSeed?: number;
+    qualityMode?: 'fast' | 'top' | 'auto';
+  }
 ): Promise<GenerateSaraImageResult> {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) {
@@ -240,47 +393,51 @@ export async function generateSaraImage(
 
   const style: SaraImageStyle = options?.style || 'realistic';
   const seed = options?.seed || generateNewImageSeed(options?.previousSeed);
+  const qualityMode = options?.qualityMode || 'auto';
   const styleOption =
     IMAGE_STYLE_OPTIONS.find((opt) => opt.id === style) || IMAGE_STYLE_OPTIONS[0];
 
-  const englishPrompt = await translatePromptToEnglishClient(cleanPrompt);
-  const fullPrompt = `${englishPrompt}, ${styleOption.promptSuffix}`;
-  const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fullPrompt)}?width=1024&height=1024&seed=${seed}&nologo=true&enhance=true`;
+  if (qualityMode !== 'top') {
+    const englishPrompt = await translatePromptToEnglishClient(cleanPrompt);
+    const fullPrompt = `${englishPrompt}, ${styleOption.promptSuffix}, ${IMAGE_QUALITY_SUFFIX}`;
+    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fullPrompt)}?width=1280&height=1280&seed=${seed}&model=flux&enhance=true&nologo=true&safe=false`;
 
-  // 1) Pedido direto com .blob() e URL.createObjectURL(blob), aceitando JFIF/JPEG mesmo se HTTP 402
-  const directController = new AbortController();
-  const directTimer = setTimeout(() => directController.abort(), 45000);
-  try {
-    const response = await fetch(pollinationsUrl, {
-      method: 'GET',
-      signal: directController.signal,
-    });
-    const rawBlob = await response.blob();
-    clearTimeout(directTimer);
+    // 1) GERADOR 1 - Pollinations (Rápido) com .blob() e URL.createObjectURL(blob)
+    const directController = new AbortController();
+    const directTimer = setTimeout(() => directController.abort(), 45000);
+    try {
+      const response = await fetch(pollinationsUrl, {
+        method: 'GET',
+        signal: directController.signal,
+      });
+      const rawBlob = await response.blob();
+      clearTimeout(directTimer);
 
-    const detectedMime = await detectImageMimeFromBlob(
-      rawBlob,
-      response.headers.get('content-type')
-    );
-    if (detectedMime) {
-      const typedBlob = rawBlob.type?.startsWith('image/')
-        ? rawBlob
-        : new Blob([rawBlob], { type: detectedMime });
-      const objectUrl = URL.createObjectURL(typedBlob);
-      return {
-        ok: true,
-        dataUrl: objectUrl,
-        seed,
-        style,
-      };
+      const detectedMime = await detectImageMimeFromBlob(
+        rawBlob,
+        response.headers.get('content-type')
+      );
+      if (detectedMime) {
+        const typedBlob = rawBlob.type?.startsWith('image/')
+          ? rawBlob
+          : new Blob([rawBlob], { type: detectedMime });
+        const objectUrl = URL.createObjectURL(typedBlob);
+        return {
+          ok: true,
+          dataUrl: objectUrl,
+          seed,
+          style,
+          isTopQuality: false,
+        };
+      }
+    } catch {
+      clearTimeout(directTimer);
     }
-  } catch {
-    clearTimeout(directTimer);
   }
 
-  // 2) Fallback silencioso via servidor usando também .blob() e URL.createObjectURL(blob)
-  const fallbackController = new AbortController();
-  const fallbackTimer = setTimeout(() => fallbackController.abort(), 45000);
+  // 2) GERADOR 2 - Qualidade Top (ou fallback automático se o Pollinations falhar)
+  const backendController = new AbortController();
+  const backendTimer = setTimeout(() => backendController.abort(), 65000);
   try {
     const fallbackRes = await fetch('/api/image/generate', {
       method: 'POST',
@@ -291,11 +448,12 @@ export async function generateSaraImage(
         prompt: cleanPrompt,
         style,
         seed,
+        mode: qualityMode,
       }),
-      signal: fallbackController.signal,
+      signal: backendController.signal,
     });
     const fallbackBlob = await fallbackRes.blob();
-    clearTimeout(fallbackTimer);
+    clearTimeout(backendTimer);
 
     const detectedMime = await detectImageMimeFromBlob(
       fallbackBlob,
@@ -311,6 +469,7 @@ export async function generateSaraImage(
         dataUrl: objectUrl,
         seed,
         style,
+        isTopQuality: qualityMode === 'top',
       };
     }
 
@@ -319,7 +478,7 @@ export async function generateSaraImage(
       error: IMAGE_GENERIC_ERROR_MESSAGE,
     };
   } catch {
-    clearTimeout(fallbackTimer);
+    clearTimeout(backendTimer);
     return {
       ok: false,
       error: IMAGE_GENERIC_ERROR_MESSAGE,

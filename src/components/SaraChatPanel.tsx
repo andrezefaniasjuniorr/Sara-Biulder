@@ -88,6 +88,12 @@ interface SaraChatPanelProps {
     prompt: string,
     style: SaraImageStyle
   ) => void;
+  onTopQualityGeneratedImage?: (
+    msgId: string,
+    prompt: string,
+    style?: SaraImageStyle,
+    previousSeed?: number
+  ) => void;
   onUseGeneratedImageAsProfile?: (imageUrl: string) => Promise<void> | void;
   callName?: string;
   isOwner?: boolean;
@@ -215,6 +221,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   onSilenceSara,
   onRegenerateGeneratedImage,
   onSelectGeneratedImageStyle,
+  onTopQualityGeneratedImage,
   onUseGeneratedImageAsProfile,
 }) => {
   const [input, setInput] = useState('');
@@ -844,6 +851,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                       <GeneratedChatImageCard
                         imageUrl={msg.imageUrl}
                         isGenerating={msg.isGeneratingImage}
+                        isTopQuality={msg.generatedImageTopQuality}
                         awaitingStyle={msg.awaitingImageStyle}
                         activeStyle={msg.generatedImageStyle}
                         prompt={msg.generatedImagePrompt || ''}
@@ -866,6 +874,17 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                             );
                           }
                         }}
+                        onTopQuality={
+                          onTopQualityGeneratedImage && msg.generatedImagePrompt
+                            ? () =>
+                                onTopQualityGeneratedImage(
+                                  msg.id,
+                                  msg.generatedImagePrompt!,
+                                  msg.generatedImageStyle,
+                                  msg.generatedImageSeed
+                                )
+                            : undefined
+                        }
                         onUseAsProfilePhoto={async () => {
                           if (msg.imageUrl && onUseGeneratedImageAsProfile) {
                             await onUseGeneratedImageAsProfile(msg.imageUrl);

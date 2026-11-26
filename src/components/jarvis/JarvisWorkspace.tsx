@@ -107,13 +107,16 @@ import { evaluateNonOwnerGuard } from '../../services/authService';
 import { GeneratedChatImageCard } from '../GeneratedChatImageCard';
 import {
   downloadImageDataUrl,
-  extractImageGenPrompt,
+  extractImageGenRequest,
   generateNewImageSeed,
   generateSaraImage,
   IMAGE_ASK_STYLE_MESSAGE,
   IMAGE_CREATING_MESSAGE,
+  IMAGE_CREATING_TOP_MESSAGE,
   parseImageStyleReply,
+  parseImageVoiceCommand,
   saveUserProfilePhoto,
+  type ImageVoiceAction,
   type SaraImageStyle,
 } from '../../services/imageGenService';
 import type {
@@ -686,6 +689,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         style?: SaraImageStyle;
         seed?: number;
         previousSeed?: number;
+        qualityTop?: boolean;
+        spokenConfirmText?: string;
       }
     ) => {
       const nowTime = getMaputoNowParts().timeHHmm;
@@ -694,6 +699,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         `sara_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       const chosenStyle: SaraImageStyle = options?.style || 'realistic';
       const nextSeed = options?.seed || generateNewImageSeed(options?.previousSeed);
+      const isTop = Boolean(options?.qualityTop);
+      const loadingMsg = isTop ? IMAGE_CREATING_TOP_MESSAGE : IMAGE_CREATING_MESSAGE;
 
       onUserActivity?.('chat');
       if (typeof window !== 'undefined' && window.innerWidth < 1024) {
@@ -706,9 +713,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             entry.id === targetId
               ? {
                   ...entry,
-                  text: IMAGE_CREATING_MESSAGE,
+                  text: loadingMsg,
                   imageUrl: undefined,
                   isGeneratingImage: true,
+                  generatedImageTopQuality: isTop,
                   awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
                   generatedImageStyle: chosenStyle,
@@ -730,15 +738,23 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         entriesToAppend.push({
           id: targetId,
           sender: 'sara',
-          text: IMAGE_CREATING_MESSAGE,
+          text: loadingMsg,
           timestamp: nowTime,
           generatedImagePrompt: imgPrompt,
           generatedImageStyle: chosenStyle,
           generatedImageSeed: nextSeed,
+          generatedImageTopQuality: isTop,
           awaitingImageStyle: false,
           isGeneratingImage: true,
         });
         setConversation((prev) => [...prev.slice(-26), ...entriesToAppend]);
+      }
+
+      if (isTop) {
+        speakAsSara(IMAGE_CREATING_TOP_MESSAGE, voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
       }
 
       setMood('thinking');
@@ -746,6 +762,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         style: chosenStyle,
         seed: nextSeed,
         previousSeed: options?.previousSeed,
+        qualityMode: isTop ? 'top' : 'auto',
       });
 
       if (res.ok) {
@@ -758,6 +775,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   text: `Imagem criada: ${imgPrompt}`,
                   imageUrl: res.dataUrl,
                   isGeneratingImage: false,
+                  generatedImageTopQuality: res.isTopQuality,
                   awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
                   generatedImageStyle: res.style,
@@ -766,7 +784,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               : entry
           )
         );
-        speakAsSara('Aqui está a tua imagem.', voiceEnabled, {
+        speakAsSara(options?.spokenConfirmText || 'Aqui está a tua imagem.', voiceEnabled, {
           level: 'short',
           forceSpeak: true,
         });
@@ -780,6 +798,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   text: res.error,
                   imageUrl: undefined,
                   isGeneratingImage: false,
+                  generatedImageTopQuality: false,
                   awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
                   generatedImageStyle: chosenStyle,
@@ -794,6 +813,149 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       }
     },
     [onUserActivity, voiceEnabled]
+  );
+
+  const handleJarvisImageVoiceAction = useCallback(
+    async (action: ImageVoiceAction) => {
+      const entries = conversationRef.current;
+      const lastImg = [...entries]
+        .reverse()
+        .find((e) => e.sender === 'sara' && (e.imageUrl || e.generatedImagePrompt));
+
+      if (!lastImg || !lastImg.generatedImagePrompt) {
+        const emptyReply = 'Ainda não gerei nenhuma imagem nesta conversa. Diz-me o que queres criar.';
+        setConversation((prev) => [
+          ...prev.slice(-26),
+          {
+            id: `sara_noimg_${Date.now()}`,
+            sender: 'sara',
+            text: emptyReply,
+            timestamp: getMaputoNowParts().timeHHmm,
+          },
+        ]);
+        speakAsSara(emptyReply, voiceEnabled, { level: 'short', forceSpeak: true });
+        return;
+      }
+
+      if (action.type === 'regenerate') {
+        await runJarvisImageGeneration(lastImg.generatedImagePrompt, {
+          targetMessageId: lastImg.id,
+          style: lastImg.generatedImageStyle || 'realistic',
+          previousSeed: lastImg.generatedImageSeed,
+          qualityTop: Boolean(lastImg.generatedImageTopQuality),
+          spokenConfirmText: 'Já gerei outra para ti.',
+        });
+        return;
+      }
+
+      if (action.type === 'ask_style') {
+        if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+          setMobileSection('log');
+        }
+        setConversation((prev) =>
+          prev.map((entry) =>
+            entry.id === lastImg.id
+              ? { ...entry, text: IMAGE_ASK_STYLE_MESSAGE, awaitingImageStyle: true }
+              : entry
+          )
+        );
+        speakAsSara('Escolhe o estilo: realista, desenho ou 3D Pixar.', voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      if (action.type === 'set_style') {
+        const styleLabel =
+          action.style === 'drawing' ? 'Desenho' : action.style === 'pixar3d' ? '3D Pixar' : 'Realista';
+        await runJarvisImageGeneration(lastImg.generatedImagePrompt, {
+          targetMessageId: lastImg.id,
+          style: action.style,
+          previousSeed: lastImg.generatedImageSeed,
+          qualityTop: Boolean(lastImg.generatedImageTopQuality),
+          spokenConfirmText: `Já gerei a tua imagem no estilo ${styleLabel}.`,
+        });
+        return;
+      }
+
+      if (action.type === 'top_quality') {
+        await runJarvisImageGeneration(lastImg.generatedImagePrompt, {
+          targetMessageId: lastImg.id,
+          style: lastImg.generatedImageStyle || 'realistic',
+          previousSeed: lastImg.generatedImageSeed,
+          qualityTop: true,
+          spokenConfirmText: 'Aqui está a tua imagem em qualidade top.',
+        });
+        return;
+      }
+
+      if (action.type === 'download') {
+        if (!lastImg.imageUrl) {
+          speakAsSara('A imagem ainda está a carregar.', voiceEnabled, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return;
+        }
+        downloadImageDataUrl(lastImg.imageUrl, lastImg.generatedImagePrompt);
+        onNotify('Imagem baixada!');
+        speakAsSara('Pronto, já baixei a imagem.', voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      if (action.type === 'use_profile_photo') {
+        if (!lastImg.imageUrl) {
+          speakAsSara('A imagem ainda está a carregar.', voiceEnabled, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return;
+        }
+        await saveUserProfilePhoto(session.userId, lastImg.imageUrl);
+        onNotify('Foto de perfil atualizada!');
+        speakAsSara('Pronto, já defini esta imagem como foto de perfil.', voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      if (action.type === 'show_last_image') {
+        if (!lastImg.imageUrl) {
+          await runJarvisImageGeneration(lastImg.generatedImagePrompt, {
+            targetMessageId: lastImg.id,
+            style: lastImg.generatedImageStyle || 'realistic',
+          });
+          return;
+        }
+        if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+          setMobileSection('log');
+        }
+        setConversation((prev) => [
+          ...prev.slice(-26),
+          {
+            id: `sara_show_${Date.now()}`,
+            sender: 'sara',
+            text: `Imagem criada: ${lastImg.generatedImagePrompt}`,
+            imageUrl: lastImg.imageUrl,
+            generatedImagePrompt: lastImg.generatedImagePrompt,
+            generatedImageStyle: lastImg.generatedImageStyle,
+            generatedImageSeed: lastImg.generatedImageSeed,
+            generatedImageTopQuality: lastImg.generatedImageTopQuality,
+            timestamp: getMaputoNowParts().timeHHmm,
+          },
+        ]);
+        speakAsSara('Aqui está a tua imagem.', voiceEnabled, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+    },
+    [onNotify, runJarvisImageGeneration, session.userId, voiceEnabled]
   );
 
   useEffect(() => subscribeVoiceReadingStatus(setReadingStatus), []);
@@ -2858,8 +3020,15 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         recentUserUtterancesRef.current = [...recentUserUtterancesRef.current, clean].slice(-5);
       }
 
-      // GERADOR DE IMAGENS SARA: "SARA, gera uma imagem de..." + escolha de estilo
+      // GERADOR DE IMAGENS SARA: comandos de voz + "SARA, gera / cria / faz / mostra uma imagem de..."
       if (clean && !docToSend) {
+        const imgVoiceAction = parseImageVoiceCommand(clean);
+        if (imgVoiceAction) {
+          if (source === 'text') setInputText('');
+          await handleJarvisImageVoiceAction(imgVoiceAction);
+          return;
+        }
+
         const lastEntry = conversationRef.current[conversationRef.current.length - 1];
         if (
           lastEntry?.sender === 'sara' &&
@@ -2872,15 +3041,24 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             await runJarvisImageGeneration(lastEntry.generatedImagePrompt, {
               targetMessageId: lastEntry.id,
               style: styleChoice.style,
+              qualityTop: Boolean(lastEntry.generatedImageTopQuality),
             });
             return;
           }
         }
 
-        const imgPrompt = extractImageGenPrompt(clean);
-        if (imgPrompt) {
+        const imgReq = extractImageGenRequest(clean);
+        if (imgReq) {
           if (source === 'text') setInputText('');
-          askJarvisImageStyle(imgPrompt, clean);
+          if (imgReq.qualityTop || imgReq.style) {
+            await runJarvisImageGeneration(imgReq.prompt, {
+              userDisplayText: clean,
+              style: imgReq.style || 'realistic',
+              qualityTop: imgReq.qualityTop,
+            });
+          } else {
+            askJarvisImageStyle(imgReq.prompt, clean);
+          }
           return;
         }
       }
@@ -3231,6 +3409,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       isCallMode,
       askJarvisImageStyle,
       runJarvisImageGeneration,
+      handleJarvisImageVoiceAction,
     ]
   );
 
@@ -5765,6 +5944,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           <GeneratedChatImageCard
                             imageUrl={entry.imageUrl}
                             isGenerating={entry.isGeneratingImage}
+                            isTopQuality={entry.generatedImageTopQuality}
                             awaitingStyle={entry.awaitingImageStyle}
                             activeStyle={entry.generatedImageStyle}
                             prompt={entry.generatedImagePrompt || ''}
@@ -5787,9 +5967,23 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                                   targetMessageId: entry.id,
                                   style: entry.generatedImageStyle || 'realistic',
                                   previousSeed: entry.generatedImageSeed,
+                                  spokenConfirmText: 'Já gerei outra para ti.',
                                 });
                               }
                             }}
+                            onTopQuality={
+                              entry.generatedImagePrompt
+                                ? () => {
+                                    void runJarvisImageGeneration(entry.generatedImagePrompt!, {
+                                      targetMessageId: entry.id,
+                                      style: entry.generatedImageStyle || 'realistic',
+                                      previousSeed: entry.generatedImageSeed,
+                                      qualityTop: true,
+                                      spokenConfirmText: 'Aqui está a tua imagem em qualidade top.',
+                                    });
+                                  }
+                                : undefined
+                            }
                             onUseAsProfilePhoto={async () => {
                               if (entry.imageUrl) {
                                 await saveUserProfilePhoto(session.userId, entry.imageUrl);

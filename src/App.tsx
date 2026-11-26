@@ -105,13 +105,17 @@ import {
   verifySessionAccountPassword,
 } from './services/authService';
 import {
-  extractImageGenPrompt,
+  downloadImageDataUrl,
+  extractImageGenRequest,
   generateNewImageSeed,
   generateSaraImage,
   IMAGE_ASK_STYLE_MESSAGE,
   IMAGE_CREATING_MESSAGE,
+  IMAGE_CREATING_TOP_MESSAGE,
   parseImageStyleReply,
+  parseImageVoiceCommand,
   saveUserProfilePhoto,
+  type ImageVoiceAction,
   type SaraImageStyle,
 } from './services/imageGenService';
 import {
@@ -5326,6 +5330,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         style?: SaraImageStyle;
         seed?: number;
         previousSeed?: number;
+        qualityTop?: boolean;
+        spokenConfirmText?: string;
       }
     ) => {
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
@@ -5334,6 +5340,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         `sara_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       const chosenStyle: SaraImageStyle = options?.style || 'realistic';
       const nextSeed = options?.seed || generateNewImageSeed(options?.previousSeed);
+      const isTop = Boolean(options?.qualityTop);
+      const loadingMsg = isTop ? IMAGE_CREATING_TOP_MESSAGE : IMAGE_CREATING_MESSAGE;
+
+      setMobileTab('chat');
 
       if (options?.targetMessageId) {
         setMessages((prev) =>
@@ -5341,9 +5351,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             m.id === targetId
               ? {
                   ...m,
-                  text: IMAGE_CREATING_MESSAGE,
+                  text: loadingMsg,
                   imageUrl: undefined,
                   isGeneratingImage: true,
+                  generatedImageTopQuality: isTop,
                   awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
                   generatedImageStyle: chosenStyle,
@@ -5365,22 +5376,31 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         nextMsgs.push({
           id: targetId,
           sender: 'sara',
-          text: IMAGE_CREATING_MESSAGE,
+          text: loadingMsg,
           timestamp: nowTime,
           mode: 'conversation',
           generatedImagePrompt: imgPrompt,
           generatedImageStyle: chosenStyle,
           generatedImageSeed: nextSeed,
+          generatedImageTopQuality: isTop,
           awaitingImageStyle: false,
           isGeneratingImage: true,
         });
         setMessages((prev) => [...prev, ...nextMsgs]);
       }
 
+      if (isTop) {
+        speakAsSara(IMAGE_CREATING_TOP_MESSAGE, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+
       const res = await generateSaraImage(imgPrompt, {
         style: chosenStyle,
         seed: nextSeed,
         previousSeed: options?.previousSeed,
+        qualityMode: isTop ? 'top' : 'auto',
       });
       if (res.ok) {
         setMessages((prev) =>
@@ -5391,6 +5411,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                   text: `Imagem criada: ${imgPrompt}`,
                   imageUrl: res.dataUrl,
                   isGeneratingImage: false,
+                  generatedImageTopQuality: res.isTopQuality,
                   awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
                   generatedImageStyle: res.style,
@@ -5399,7 +5420,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               : m
           )
         );
-        speakAsSara('Aqui está a tua imagem.', voiceEnabledRef.current, {
+        speakAsSara(options?.spokenConfirmText || 'Aqui está a tua imagem.', voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
         });
@@ -5412,6 +5433,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                   text: res.error,
                   imageUrl: undefined,
                   isGeneratingImage: false,
+                  generatedImageTopQuality: false,
                   awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
                   generatedImageStyle: chosenStyle,
@@ -5426,6 +5448,150 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
     },
     []
+  );
+
+  const handleBuilderImageVoiceAction = useCallback(
+    async (action: ImageVoiceAction) => {
+      const msgs = messagesRef.current;
+      const lastImg = [...msgs]
+        .reverse()
+        .find((m) => m.sender === 'sara' && (m.imageUrl || m.generatedImagePrompt));
+
+      if (!lastImg || !lastImg.generatedImagePrompt) {
+        const emptyReply = 'Ainda não gerei nenhuma imagem nesta conversa. Diz-me o que queres criar.';
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `sara_noimg_${Date.now()}`,
+            sender: 'sara',
+            text: emptyReply,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+            mode: 'conversation',
+          },
+        ]);
+        speakAsSara(emptyReply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        return;
+      }
+
+      if (action.type === 'regenerate') {
+        await runBuilderImageGeneration(lastImg.generatedImagePrompt, {
+          targetMessageId: lastImg.id,
+          style: lastImg.generatedImageStyle || 'realistic',
+          previousSeed: lastImg.generatedImageSeed,
+          qualityTop: Boolean(lastImg.generatedImageTopQuality),
+          spokenConfirmText: 'Já gerei outra para ti.',
+        });
+        return;
+      }
+
+      if (action.type === 'ask_style') {
+        setMobileTab('chat');
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === lastImg.id
+              ? { ...m, text: IMAGE_ASK_STYLE_MESSAGE, awaitingImageStyle: true }
+              : m
+          )
+        );
+        speakAsSara('Escolhe o estilo: realista, desenho ou 3D Pixar.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      if (action.type === 'set_style') {
+        const styleLabel =
+          action.style === 'drawing' ? 'Desenho' : action.style === 'pixar3d' ? '3D Pixar' : 'Realista';
+        await runBuilderImageGeneration(lastImg.generatedImagePrompt, {
+          targetMessageId: lastImg.id,
+          style: action.style,
+          previousSeed: lastImg.generatedImageSeed,
+          qualityTop: Boolean(lastImg.generatedImageTopQuality),
+          spokenConfirmText: `Já gerei a tua imagem no estilo ${styleLabel}.`,
+        });
+        return;
+      }
+
+      if (action.type === 'top_quality') {
+        await runBuilderImageGeneration(lastImg.generatedImagePrompt, {
+          targetMessageId: lastImg.id,
+          style: lastImg.generatedImageStyle || 'realistic',
+          previousSeed: lastImg.generatedImageSeed,
+          qualityTop: true,
+          spokenConfirmText: 'Aqui está a tua imagem em qualidade top.',
+        });
+        return;
+      }
+
+      if (action.type === 'download') {
+        if (!lastImg.imageUrl) {
+          speakAsSara('A imagem ainda está a carregar.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return;
+        }
+        downloadImageDataUrl(lastImg.imageUrl, lastImg.generatedImagePrompt);
+        showToast('Imagem baixada!');
+        speakAsSara('Pronto, já baixei a imagem.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      if (action.type === 'use_profile_photo') {
+        if (!lastImg.imageUrl) {
+          speakAsSara('A imagem ainda está a carregar.', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return;
+        }
+        if (session?.userId) {
+          await saveUserProfilePhoto(session.userId, lastImg.imageUrl);
+        }
+        showToast('Foto de perfil atualizada!');
+        speakAsSara('Pronto, já defini esta imagem como foto de perfil.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      if (action.type === 'show_last_image') {
+        if (!lastImg.imageUrl) {
+          await runBuilderImageGeneration(lastImg.generatedImagePrompt, {
+            targetMessageId: lastImg.id,
+            style: lastImg.generatedImageStyle || 'realistic',
+          });
+          return;
+        }
+        setMobileTab('chat');
+        const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `sara_show_${Date.now()}`,
+            sender: 'sara',
+            text: `Imagem criada: ${lastImg.generatedImagePrompt}`,
+            imageUrl: lastImg.imageUrl,
+            generatedImagePrompt: lastImg.generatedImagePrompt,
+            generatedImageStyle: lastImg.generatedImageStyle,
+            generatedImageSeed: lastImg.generatedImageSeed,
+            generatedImageTopQuality: lastImg.generatedImageTopQuality,
+            timestamp: nowTime,
+            mode: 'conversation',
+          },
+        ]);
+        speakAsSara('Aqui está a tua imagem.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+      }
+    },
+    [runBuilderImageGeneration, session?.userId, showToast]
   );
 
   const handleSendMessage = useCallback(
@@ -5498,6 +5664,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (!image && (!attachments || attachments.length === 0)) {
+        const imgVoiceAction = parseImageVoiceCommand(trimmed);
+        if (imgVoiceAction) {
+          await handleBuilderImageVoiceAction(imgVoiceAction);
+          return;
+        }
+
         const lastMsg = messagesRef.current[messagesRef.current.length - 1];
         if (lastMsg?.sender === 'sara' && lastMsg.awaitingImageStyle && lastMsg.generatedImagePrompt) {
           const styleChoice = parseImageStyleReply(trimmed);
@@ -5505,18 +5677,27 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             await runBuilderImageGeneration(lastMsg.generatedImagePrompt, {
               targetMessageId: lastMsg.id,
               style: styleChoice.style,
+              qualityTop: Boolean(lastMsg.generatedImageTopQuality),
             });
             return;
           }
         }
       }
 
-      const imgPrompt =
+      const imgReq =
         !image && (!attachments || attachments.length === 0)
-          ? extractImageGenPrompt(trimmed)
+          ? extractImageGenRequest(trimmed)
           : null;
-      if (imgPrompt) {
-        askBuilderImageStyle(imgPrompt, trimmed);
+      if (imgReq) {
+        if (imgReq.qualityTop || imgReq.style) {
+          await runBuilderImageGeneration(imgReq.prompt, {
+            userDisplayText: trimmed,
+            style: imgReq.style || 'realistic',
+            qualityTop: imgReq.qualityTop,
+          });
+        } else {
+          askBuilderImageStyle(imgReq.prompt, trimmed);
+        }
         return;
       }
 
@@ -6178,6 +6359,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       showToast,
       askBuilderImageStyle,
       runBuilderImageGeneration,
+      handleBuilderImageVoiceAction,
     ]
   );
 
@@ -6326,10 +6508,14 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         runner(cmd, cleanTranscript)
           .then((handled) => {
             if (!handled) {
+              const isImgIntent =
+                Boolean(extractImageGenRequest(cleanTranscript)) ||
+                Boolean(parseImageVoiceCommand(cleanTranscript));
               if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
                 return jarvisPromptRef.current(cleanTranscript, 'voice');
               }
               if (
+                !isImgIntent &&
                 workspaceModeRef.current === 'builder' &&
                 isAssistantExplanationIntent(cleanTranscript)
               ) {
@@ -6807,6 +6993,16 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                 targetMessageId: msgId,
                 style: style || 'realistic',
                 previousSeed: prevSeed,
+                spokenConfirmText: 'Já gerei outra para ti.',
+              });
+            }}
+            onTopQualityGeneratedImage={(msgId, prompt, style, prevSeed) => {
+              void runBuilderImageGeneration(prompt, {
+                targetMessageId: msgId,
+                style: style || 'realistic',
+                previousSeed: prevSeed,
+                qualityTop: true,
+                spokenConfirmText: 'Aqui está a tua imagem em qualidade top.',
               });
             }}
             onUseGeneratedImageAsProfile={async (imgUrl) => {
