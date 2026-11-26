@@ -4,7 +4,35 @@ import { getCurrentFirebaseIdToken } from './firebaseService';
 export const IMAGE_GENERIC_ERROR_MESSAGE =
   'Não consegui gerar agora, tenta de novo em alguns segundos.';
 export const IMAGE_CREATING_MESSAGE = 'A criar a tua imagem...';
+export const IMAGE_ASK_STYLE_MESSAGE = 'Escolhe o estilo da tua imagem:';
 export const PROFILE_PHOTO_EVENT = 'sara-profile-photo-updated';
+
+export type SaraImageStyle = 'realistic' | 'drawing' | 'pixar3d';
+
+export const IMAGE_STYLE_OPTIONS: Array<{
+  id: SaraImageStyle;
+  label: string;
+  promptSuffix: string;
+}> = [
+  {
+    id: 'realistic',
+    label: 'Realista',
+    promptSuffix:
+      'ultra realistic, professional photography, detailed skin, cinematic lighting, 4k, high resolution',
+  },
+  {
+    id: 'drawing',
+    label: 'Desenho',
+    promptSuffix:
+      'beautiful digital illustration, vibrant colors, detailed art, clean lines, high quality artwork',
+  },
+  {
+    id: 'pixar3d',
+    label: '3D Pixar',
+    promptSuffix:
+      '3D pixar style, cute character, big expressive eyes, soft lighting, high quality 3D render',
+  },
+];
 
 const LEGACY_IMAGE_KEY_STORAGE = 'sara_image_core_key_v1';
 const PROFILE_PHOTO_PREFIX = 'sara_profile_photo_v1_';
@@ -23,6 +51,45 @@ export function maskImageKeyPreview(rawKey: string): string {
   if (!clean) return '';
   const suffix = clean.length >= 4 ? clean.slice(-4) : '••••';
   return `hf_****${suffix}`;
+}
+
+export function generateNewImageSeed(previousSeed?: number): number {
+  let candidate = Math.floor(Math.random() * 2000000000) + 1;
+  if (previousSeed && candidate === previousSeed) {
+    candidate = (candidate % 1999999999) + 1;
+  }
+  return candidate;
+}
+
+export function parseImageStyleReply(rawText: string): {
+  matched: boolean;
+  style: SaraImageStyle;
+} {
+  const norm = String(rawText || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[!?.]+$/g, '')
+    .trim();
+
+  if (!norm) return { matched: false, style: 'realistic' };
+  if (/^(?:1|realista|estilo realista|real|foto|fotografia|realismo)$/i.test(norm)) {
+    return { matched: true, style: 'realistic' };
+  }
+  if (/^(?:2|desenho|estilo desenho|ilustracao|arte|desenha|cartoon)$/i.test(norm)) {
+    return { matched: true, style: 'drawing' };
+  }
+  if (/^(?:3|3d pixar|pixar 3d|pixar|3d|estilo 3d|estilo pixar)$/i.test(norm)) {
+    return { matched: true, style: 'pixar3d' };
+  }
+  if (
+    /^(?:ok|sim|gera|gerar|pode ser|avanca|continua|tanto faz|qualquer um|qualquer|padrao|normal)$/i.test(
+      norm
+    )
+  ) {
+    return { matched: true, style: 'realistic' };
+  }
+  return { matched: false, style: 'realistic' };
 }
 
 /**
@@ -66,12 +133,12 @@ export function extractImageGenPrompt(rawText: string): string | null {
 }
 
 export type GenerateSaraImageResult =
-  | { ok: true; dataUrl: string }
+  | { ok: true; dataUrl: string; seed: number; style: SaraImageStyle }
   | { ok: false; error: string };
 
 export async function generateSaraImage(
   prompt: string,
-  options?: { variationSeed?: number }
+  options?: { style?: SaraImageStyle; seed?: number; previousSeed?: number }
 ): Promise<GenerateSaraImageResult> {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) {
@@ -81,9 +148,8 @@ export async function generateSaraImage(
     };
   }
 
-  const effectivePrompt = options?.variationSeed
-    ? `${cleanPrompt} (variação visual ${options.variationSeed})`
-    : cleanPrompt;
+  const style: SaraImageStyle = options?.style || 'realistic';
+  const seed = options?.seed || generateNewImageSeed(options?.previousSeed);
 
   try {
     const response = await fetch('/api/image/generate', {
@@ -91,12 +157,18 @@ export async function generateSaraImage(
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ prompt: effectivePrompt }),
+      body: JSON.stringify({
+        prompt: cleanPrompt,
+        style,
+        seed,
+      }),
     });
 
     const data = (await response.json().catch(() => null)) as {
       ok?: boolean;
       dataUrl?: string;
+      seed?: number;
+      style?: SaraImageStyle;
     } | null;
 
     if (
@@ -111,7 +183,12 @@ export async function generateSaraImage(
       };
     }
 
-    return { ok: true, dataUrl: data.dataUrl };
+    return {
+      ok: true,
+      dataUrl: data.dataUrl,
+      seed: typeof data.seed === 'number' ? data.seed : seed,
+      style: data.style || style,
+    };
   } catch {
     return {
       ok: false,

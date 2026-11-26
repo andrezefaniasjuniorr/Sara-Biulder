@@ -483,119 +483,40 @@ async function startServer() {
   });
 
   app.get('/api/image/status', async (_req, res) => {
-    const current = await getBackendImageKey();
     return res.json({
       ok: true,
-      available: isValidImageCoreKey(current.imageKey),
+      available: true,
     });
   });
 
   app.post('/api/image/generate', async (req, res) => {
     const prompt = String(req.body?.prompt || '').trim();
     const userGenericError = 'Não consegui gerar agora, tenta de novo em alguns segundos.';
-    const hfRouterImagesUrl = 'https://router.huggingface.co/v1/images/generations';
 
-    const detectBase64ImageMime = (b64: string): string => {
-      if (b64.startsWith('/9j/')) return 'image/jpeg';
-      if (b64.startsWith('UklGR')) return 'image/webp';
-      return 'image/png';
+    const styleSuffixes: Record<string, string> = {
+      realistic:
+        'ultra realistic, professional photography, detailed skin, cinematic lighting, 4k, high resolution',
+      drawing:
+        'beautiful digital illustration, vibrant colors, detailed art, clean lines, high quality artwork',
+      pixar3d:
+        '3D pixar style, cute character, big expressive eyes, soft lighting, high quality 3D render',
     };
 
-    const isSafeHttpsImageUrl = (rawUrl: string): boolean => {
-      try {
-        const parsed = new URL(rawUrl);
-        if (parsed.protocol !== 'https:') return false;
-        const host = parsed.hostname.toLowerCase();
-        if (
-          !host ||
-          host === 'localhost' ||
-          host === '::1' ||
-          /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)
-        ) {
-          return false;
-        }
-        return true;
-      } catch {
-        return false;
-      }
-    };
+    const rawStyle = String(req.body?.style || '').trim().toLowerCase();
+    const styleKey =
+      rawStyle === 'drawing' || rawStyle === 'desenho'
+        ? 'drawing'
+        : rawStyle === 'pixar3d' || rawStyle === '3d_pixar' || rawStyle === 'pixar'
+        ? 'pixar3d'
+        : 'realistic';
 
-    const resolveGeneratedDataUrl = async (
-      upstream: Response,
-      signal: AbortSignal
-    ): Promise<{ dataUrl: string; errorDetail: string }> => {
-      const contentType = String(upstream.headers.get('content-type') || '').toLowerCase();
-      if (upstream.ok && contentType.startsWith('image/')) {
-        const buf = Buffer.from(await upstream.arrayBuffer());
-        if (buf.length > 0) {
-          const mime = contentType.split(';')[0] || 'image/png';
-          return { dataUrl: `data:${mime};base64,${buf.toString('base64')}`, errorDetail: '' };
-        }
-        return { dataUrl: '', errorDetail: 'Resposta de imagem vazia.' };
-      }
+    const rawSeed = Number(req.body?.seed);
+    const seed =
+      Number.isFinite(rawSeed) && rawSeed > 0
+        ? Math.trunc(rawSeed)
+        : Math.floor(Math.random() * 2000000000) + 1;
 
-      const rawText = (await upstream.text().catch(() => '')).trim();
-      if (!rawText) {
-        return { dataUrl: '', errorDetail: 'Resposta vazia do servidor de imagem.' };
-      }
-
-      let parsed: any = null;
-      try {
-        parsed = JSON.parse(rawText);
-      } catch {
-        return { dataUrl: '', errorDetail: rawText.slice(0, 180) };
-      }
-
-      if (upstream.ok) {
-        const b64Candidate = String(
-          parsed?.data?.[0]?.b64_json ||
-            parsed?.b64_json ||
-            (typeof parsed?.image === 'string' && !parsed.image.startsWith('http')
-              ? parsed.image
-              : '')
-        ).trim();
-
-        if (b64Candidate) {
-          if (b64Candidate.startsWith('data:image/')) {
-            return { dataUrl: b64Candidate, errorDetail: '' };
-          }
-          const cleanB64 = b64Candidate.replace(/\s+/g, '');
-          const mime = detectBase64ImageMime(cleanB64);
-          return { dataUrl: `data:${mime};base64,${cleanB64}`, errorDetail: '' };
-        }
-
-        const urlCandidate = String(
-          parsed?.data?.[0]?.url ||
-            parsed?.url ||
-            (typeof parsed?.image === 'string' && parsed.image.startsWith('https://')
-              ? parsed.image
-              : '')
-        ).trim();
-
-        if (urlCandidate && isSafeHttpsImageUrl(urlCandidate)) {
-          const imgRes = await fetch(urlCandidate, { signal });
-          if (imgRes.ok) {
-            const imgCt = String(imgRes.headers.get('content-type') || '').toLowerCase();
-            const buf = Buffer.from(await imgRes.arrayBuffer());
-            if (buf.length > 0 && (imgCt.startsWith('image/') || !imgCt)) {
-              const mime = imgCt.startsWith('image/') ? imgCt.split(';')[0] : 'image/png';
-              return { dataUrl: `data:${mime};base64,${buf.toString('base64')}`, errorDetail: '' };
-            }
-          }
-          return {
-            dataUrl: '',
-            errorDetail: `Falha ao descarregar imagem gerada (HTTP ${imgRes.status}).`,
-          };
-        }
-      }
-
-      const errMsg =
-        (typeof parsed?.error === 'string' && parsed.error) ||
-        (typeof parsed?.error?.message === 'string' && parsed.error.message) ||
-        (typeof parsed?.message === 'string' && parsed.message) ||
-        rawText.slice(0, 180);
-      return { dataUrl: '', errorDetail: errMsg };
-    };
+    const modelLabel = `pollinations.ai (${styleKey})`;
 
     if (!prompt || prompt.length > 1000) {
       return res.status(400).json({
@@ -604,109 +525,92 @@ async function startServer() {
       });
     }
 
-    const { imageKey } = await getBackendImageKey();
-    if (!isValidImageCoreKey(imageKey)) {
+    const translatePromptToEnglish = async (rawPrompt: string): Promise<string> => {
+      const clean = rawPrompt.trim();
+      if (!clean) return '';
+      const tController = new AbortController();
+      const tTimer = setTimeout(() => tController.abort(), 4500);
+      try {
+        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=en&dt=t&q=${encodeURIComponent(clean)}`;
+        const tRes = await fetch(url, {
+          method: 'GET',
+          headers: { Accept: 'application/json' },
+          signal: tController.signal,
+        });
+        if (tRes.ok) {
+          const data = (await tRes.json()) as any;
+          if (Array.isArray(data?.[0])) {
+            const translated = data[0]
+              .map((part: any) => (Array.isArray(part) && typeof part[0] === 'string' ? part[0] : ''))
+              .join('')
+              .trim();
+            if (translated) return translated;
+          }
+        }
+      } catch {
+        // fallback below
+      } finally {
+        clearTimeout(tTimer);
+      }
+      return clean;
+    };
+
+    const englishPrompt = await translatePromptToEnglish(prompt);
+    const styleSuffix = styleSuffixes[styleKey] || styleSuffixes.realistic;
+    const fullPrompt = `${englishPrompt}, ${styleSuffix}`;
+    const pollinationsUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(fullPrompt)}?width=1024&height=1024&seed=${seed}&nologo=true&enhance=true`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 45000);
+
+    try {
+      const upstream = await fetch(pollinationsUrl, {
+        method: 'GET',
+        headers: {
+          Accept: 'image/*',
+        },
+        signal: controller.signal,
+      });
+
+      const contentType = String(upstream.headers.get('content-type') || '').toLowerCase();
+      if (upstream.ok && contentType.startsWith('image/')) {
+        const buf = Buffer.from(await upstream.arrayBuffer());
+        clearTimeout(timer);
+        if (buf.length > 0) {
+          await clearBackendImageError(modelLabel);
+          const mime = contentType.split(';')[0] || 'image/jpeg';
+          return res.json({
+            ok: true,
+            dataUrl: `data:${mime};base64,${buf.toString('base64')}`,
+            seed,
+            style: styleKey,
+          });
+        }
+      }
+
+      const detail = (await upstream.text().catch(() => '')).trim().slice(0, 220);
+      clearTimeout(timer);
+      const status = upstream.status || 503;
       await recordBackendImageError(
-        'Chave de Imagem SARA não configurada no painel de admin.',
-        503,
-        'Nenhum (chave não configurada)'
+        `HTTP ${status}${detail ? ` — ${detail}` : ' — Resposta inválida sem imagem.'}`,
+        status,
+        modelLabel
       );
       return res.status(503).json({
         ok: false,
         error: userGenericError,
       });
+    } catch (err: any) {
+      clearTimeout(timer);
+      const status = err?.name === 'AbortError' ? 504 : 503;
+      const errMsg =
+        err?.name === 'AbortError' ? 'Timeout após 45s' : err?.message || 'Erro de rede';
+      await recordBackendImageError(errMsg, status, modelLabel);
+      return res.status(503).json({
+        ok: false,
+        error: userGenericError,
+      });
     }
-
-    const models = [
-      'black-forest-labs/FLUX.1-schnell',
-      'black-forest-labs/FLUX.1-dev',
-      'Qwen/Qwen-Image',
-      'stabilityai/stable-diffusion-3.5-large',
-    ];
-
-    const attemptErrors: string[] = [];
-    const attemptedModels: string[] = [];
-    let lastStatus = 503;
-
-    for (let i = 0; i < models.length; i++) {
-      const modelId = models[i];
-      attemptedModels.push(modelId);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 35000);
-
-      try {
-        const upstream = await fetch(hfRouterImagesUrl, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${imageKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: modelId,
-            prompt,
-            image_size: 'square_hd',
-          }),
-          signal: controller.signal,
-        });
-
-        if (upstream.status === 401 || upstream.status === 403) {
-          const { errorDetail } = await resolveGeneratedDataUrl(upstream, controller.signal).catch(
-            () => ({ errorDetail: '' })
-          );
-          clearTimeout(timer);
-          await recordBackendImageError(
-            `HTTP ${upstream.status} — ${errorDetail || 'Chave rejeitada ou sem permissão.'}`,
-            upstream.status,
-            attemptedModels.join(' -> ')
-          );
-          return res.status(503).json({
-            ok: false,
-            error: userGenericError,
-          });
-        }
-
-        if (upstream.ok) {
-          const { dataUrl, errorDetail } = await resolveGeneratedDataUrl(upstream, controller.signal);
-          clearTimeout(timer);
-          if (dataUrl) {
-            await clearBackendImageError(modelId);
-            return res.json({
-              ok: true,
-              dataUrl,
-            });
-          }
-          lastStatus = 502;
-          attemptErrors.push(`[${modelId}] HTTP 502${errorDetail ? `: ${errorDetail}` : ''}`);
-          continue;
-        }
-
-        lastStatus = upstream.status || 503;
-        const { errorDetail } = await resolveGeneratedDataUrl(upstream, controller.signal).catch(
-          () => ({ errorDetail: '' })
-        );
-        clearTimeout(timer);
-        attemptErrors.push(
-          `[${modelId}] HTTP ${lastStatus}${errorDetail ? `: ${errorDetail}` : ''}`
-        );
-      } catch (err: any) {
-        clearTimeout(timer);
-        lastStatus = err?.name === 'AbortError' ? 504 : 503;
-        const errMsg =
-          err?.name === 'AbortError' ? 'Timeout após 35s' : err?.message || 'Erro de rede';
-        attemptErrors.push(`[${modelId}] ${errMsg}`);
-      }
-    }
-
-    await recordBackendImageError(
-      attemptErrors.join(' | ') || 'Falha nos motores de geração de imagem.',
-      lastStatus,
-      attemptedModels.join(' -> ')
-    );
-
-    return res.status(503).json({
-      ok: false,
-      error: userGenericError,
-    });
   });
 
   if (process.env.NODE_ENV !== 'production') {

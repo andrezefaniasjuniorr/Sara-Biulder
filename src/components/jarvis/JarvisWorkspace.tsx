@@ -108,9 +108,13 @@ import { GeneratedChatImageCard } from '../GeneratedChatImageCard';
 import {
   downloadImageDataUrl,
   extractImageGenPrompt,
+  generateNewImageSeed,
   generateSaraImage,
+  IMAGE_ASK_STYLE_MESSAGE,
   IMAGE_CREATING_MESSAGE,
+  parseImageStyleReply,
   saveUserProfilePhoto,
+  type SaraImageStyle,
 } from '../../services/imageGenService';
 import type {
   ActivityCategory,
@@ -491,6 +495,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const [conversation, setConversation] = useState<JarvisConversationEntry[]>(
     initialBundle.conversation
   );
+  const conversationRef = useRef<JarvisConversationEntry[]>(conversation);
+  useEffect(() => {
+    conversationRef.current = conversation;
+  }, [conversation]);
   const [playlist, setPlaylist] = useState<JarvisTrack[]>(initialBundle.playlist);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
 
@@ -632,15 +640,60 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     [onPanelOpenChange]
   );
 
+  const askJarvisImageStyle = useCallback(
+    (imgPrompt: string, userDisplayText?: string) => {
+      const nowTime = getMaputoNowParts().timeHHmm;
+      const targetId = `sara_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+      onUserActivity?.('chat');
+      if (typeof window !== 'undefined' && window.innerWidth < 1024) {
+        setMobileSection('log');
+      }
+
+      const entriesToAppend: JarvisConversationEntry[] = [];
+      if (userDisplayText) {
+        entriesToAppend.push({
+          id: `usr_img_${Date.now()}`,
+          sender: 'user',
+          text: userDisplayText,
+          timestamp: nowTime,
+        });
+      }
+      entriesToAppend.push({
+        id: targetId,
+        sender: 'sara',
+        text: IMAGE_ASK_STYLE_MESSAGE,
+        timestamp: nowTime,
+        generatedImagePrompt: imgPrompt,
+        generatedImageStyle: 'realistic',
+        awaitingImageStyle: true,
+      });
+      setConversation((prev) => [...prev.slice(-26), ...entriesToAppend]);
+      speakAsSara('Escolhe o estilo da tua imagem: realista, desenho ou 3D Pixar.', voiceEnabled, {
+        level: 'short',
+        forceSpeak: true,
+      });
+    },
+    [onUserActivity, voiceEnabled]
+  );
+
   const runJarvisImageGeneration = useCallback(
     async (
       imgPrompt: string,
-      options?: { targetMessageId?: string; userDisplayText?: string; variationSeed?: number }
+      options?: {
+        targetMessageId?: string;
+        userDisplayText?: string;
+        style?: SaraImageStyle;
+        seed?: number;
+        previousSeed?: number;
+      }
     ) => {
       const nowTime = getMaputoNowParts().timeHHmm;
       const targetId =
         options?.targetMessageId ||
         `sara_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const chosenStyle: SaraImageStyle = options?.style || 'realistic';
+      const nextSeed = options?.seed || generateNewImageSeed(options?.previousSeed);
 
       onUserActivity?.('chat');
       if (typeof window !== 'undefined' && window.innerWidth < 1024) {
@@ -656,7 +709,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   text: IMAGE_CREATING_MESSAGE,
                   imageUrl: undefined,
                   isGeneratingImage: true,
+                  awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
+                  generatedImageStyle: chosenStyle,
+                  generatedImageSeed: nextSeed,
                 }
               : entry
           )
@@ -677,13 +733,20 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           text: IMAGE_CREATING_MESSAGE,
           timestamp: nowTime,
           generatedImagePrompt: imgPrompt,
+          generatedImageStyle: chosenStyle,
+          generatedImageSeed: nextSeed,
+          awaitingImageStyle: false,
           isGeneratingImage: true,
         });
         setConversation((prev) => [...prev.slice(-26), ...entriesToAppend]);
       }
 
       setMood('thinking');
-      const res = await generateSaraImage(imgPrompt, { variationSeed: options?.variationSeed });
+      const res = await generateSaraImage(imgPrompt, {
+        style: chosenStyle,
+        seed: nextSeed,
+        previousSeed: options?.previousSeed,
+      });
 
       if (res.ok) {
         setMood('happy');
@@ -695,7 +758,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   text: `Imagem criada: ${imgPrompt}`,
                   imageUrl: res.dataUrl,
                   isGeneratingImage: false,
+                  awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
+                  generatedImageStyle: res.style,
+                  generatedImageSeed: res.seed,
                 }
               : entry
           )
@@ -714,7 +780,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   text: res.error,
                   imageUrl: undefined,
                   isGeneratingImage: false,
+                  awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
+                  generatedImageStyle: chosenStyle,
                 }
               : entry
           )
@@ -2790,12 +2858,29 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         recentUserUtterancesRef.current = [...recentUserUtterancesRef.current, clean].slice(-5);
       }
 
-      // GERADOR DE IMAGENS SARA: "SARA, gera uma imagem de..."
+      // GERADOR DE IMAGENS SARA: "SARA, gera uma imagem de..." + escolha de estilo
       if (clean && !docToSend) {
+        const lastEntry = conversationRef.current[conversationRef.current.length - 1];
+        if (
+          lastEntry?.sender === 'sara' &&
+          lastEntry.awaitingImageStyle &&
+          lastEntry.generatedImagePrompt
+        ) {
+          const styleChoice = parseImageStyleReply(clean);
+          if (styleChoice.matched) {
+            if (source === 'text') setInputText('');
+            await runJarvisImageGeneration(lastEntry.generatedImagePrompt, {
+              targetMessageId: lastEntry.id,
+              style: styleChoice.style,
+            });
+            return;
+          }
+        }
+
         const imgPrompt = extractImageGenPrompt(clean);
         if (imgPrompt) {
           if (source === 'text') setInputText('');
-          await runJarvisImageGeneration(imgPrompt, { userDisplayText: clean });
+          askJarvisImageStyle(imgPrompt, clean);
           return;
         }
       }
@@ -3144,6 +3229,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       voiceEnabled,
       isSaraSilenced,
       isCallMode,
+      askJarvisImageStyle,
+      runJarvisImageGeneration,
     ]
   );
 
@@ -5672,12 +5759,24 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           : entry.text}
                       </div>
                       {entry.sender === 'sara' &&
-                        (entry.isGeneratingImage || entry.imageUrl) && (
+                        (entry.isGeneratingImage ||
+                          entry.awaitingImageStyle ||
+                          entry.imageUrl) && (
                           <GeneratedChatImageCard
                             imageUrl={entry.imageUrl}
                             isGenerating={entry.isGeneratingImage}
+                            awaitingStyle={entry.awaitingImageStyle}
+                            activeStyle={entry.generatedImageStyle}
                             prompt={entry.generatedImagePrompt || ''}
                             compact
+                            onSelectStyle={(style) => {
+                              if (entry.generatedImagePrompt) {
+                                void runJarvisImageGeneration(entry.generatedImagePrompt, {
+                                  targetMessageId: entry.id,
+                                  style,
+                                });
+                              }
+                            }}
                             onDownload={() =>
                               entry.imageUrl &&
                               downloadImageDataUrl(entry.imageUrl, entry.generatedImagePrompt)
@@ -5686,7 +5785,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                               if (entry.generatedImagePrompt) {
                                 void runJarvisImageGeneration(entry.generatedImagePrompt, {
                                   targetMessageId: entry.id,
-                                  variationSeed: Date.now(),
+                                  style: entry.generatedImageStyle || 'realistic',
+                                  previousSeed: entry.generatedImageSeed,
                                 });
                               }
                             }}

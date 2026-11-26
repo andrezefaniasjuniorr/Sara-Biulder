@@ -280,6 +280,9 @@ export interface JarvisConversationEntry {
   stageAttachedTitle?: string;
   imageUrl?: string;
   generatedImagePrompt?: string;
+  generatedImageStyle?: 'realistic' | 'drawing' | 'pixar3d';
+  generatedImageSeed?: number;
+  awaitingImageStyle?: boolean;
   isGeneratingImage?: boolean;
 }
 

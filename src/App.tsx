@@ -106,9 +106,13 @@ import {
 } from './services/authService';
 import {
   extractImageGenPrompt,
+  generateNewImageSeed,
   generateSaraImage,
+  IMAGE_ASK_STYLE_MESSAGE,
   IMAGE_CREATING_MESSAGE,
+  parseImageStyleReply,
   saveUserProfilePhoto,
+  type SaraImageStyle,
 } from './services/imageGenService';
 import {
   acknowledgeAndClearPendingCommand,
@@ -657,6 +661,10 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>(() =>
     loadInitialChat(getSavedActiveSession())
   );
+  const messagesRef = useRef<ChatMessage[]>(messages);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
   const [isThinking, setIsThinking] = useState(false);
 
   const [liveBuild, setLiveBuild] = useState<LiveBuildInfo>({
@@ -5267,15 +5275,55 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     ]
   );
 
+  const askBuilderImageStyle = useCallback(
+    (imgPrompt: string, userDisplayText?: string) => {
+      const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+      const targetId = `sara_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const nextMsgs: ChatMessage[] = [];
+      if (userDisplayText) {
+        nextMsgs.push({
+          id: `usr_img_${Date.now()}`,
+          sender: 'user',
+          text: userDisplayText,
+          timestamp: nowTime,
+        });
+      }
+      nextMsgs.push({
+        id: targetId,
+        sender: 'sara',
+        text: IMAGE_ASK_STYLE_MESSAGE,
+        timestamp: nowTime,
+        mode: 'conversation',
+        generatedImagePrompt: imgPrompt,
+        generatedImageStyle: 'realistic',
+        awaitingImageStyle: true,
+      });
+      setMessages((prev) => [...prev, ...nextMsgs]);
+      speakAsSara('Escolhe o estilo da tua imagem: realista, desenho ou 3D Pixar.', voiceEnabledRef.current, {
+        level: 'short',
+        forceSpeak: true,
+      });
+    },
+    []
+  );
+
   const runBuilderImageGeneration = useCallback(
     async (
       imgPrompt: string,
-      options?: { targetMessageId?: string; userDisplayText?: string; variationSeed?: number }
+      options?: {
+        targetMessageId?: string;
+        userDisplayText?: string;
+        style?: SaraImageStyle;
+        seed?: number;
+        previousSeed?: number;
+      }
     ) => {
       const nowTime = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
       const targetId =
         options?.targetMessageId ||
         `sara_img_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      const chosenStyle: SaraImageStyle = options?.style || 'realistic';
+      const nextSeed = options?.seed || generateNewImageSeed(options?.previousSeed);
 
       if (options?.targetMessageId) {
         setMessages((prev) =>
@@ -5286,7 +5334,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                   text: IMAGE_CREATING_MESSAGE,
                   imageUrl: undefined,
                   isGeneratingImage: true,
+                  awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
+                  generatedImageStyle: chosenStyle,
+                  generatedImageSeed: nextSeed,
                 }
               : m
           )
@@ -5308,12 +5359,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           timestamp: nowTime,
           mode: 'conversation',
           generatedImagePrompt: imgPrompt,
+          generatedImageStyle: chosenStyle,
+          generatedImageSeed: nextSeed,
+          awaitingImageStyle: false,
           isGeneratingImage: true,
         });
         setMessages((prev) => [...prev, ...nextMsgs]);
       }
 
-      const res = await generateSaraImage(imgPrompt, { variationSeed: options?.variationSeed });
+      const res = await generateSaraImage(imgPrompt, {
+        style: chosenStyle,
+        seed: nextSeed,
+        previousSeed: options?.previousSeed,
+      });
       if (res.ok) {
         setMessages((prev) =>
           prev.map((m) =>
@@ -5323,7 +5381,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                   text: `Imagem criada: ${imgPrompt}`,
                   imageUrl: res.dataUrl,
                   isGeneratingImage: false,
+                  awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
+                  generatedImageStyle: res.style,
+                  generatedImageSeed: res.seed,
                 }
               : m
           )
@@ -5341,7 +5402,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                   text: res.error,
                   imageUrl: undefined,
                   isGeneratingImage: false,
+                  awaitingImageStyle: false,
                   generatedImagePrompt: imgPrompt,
+                  generatedImageStyle: chosenStyle,
                 }
               : m
           )
@@ -5424,12 +5487,26 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         pushRecentUtterance(trimmed);
       }
 
+      if (!image && (!attachments || attachments.length === 0)) {
+        const lastMsg = messagesRef.current[messagesRef.current.length - 1];
+        if (lastMsg?.sender === 'sara' && lastMsg.awaitingImageStyle && lastMsg.generatedImagePrompt) {
+          const styleChoice = parseImageStyleReply(trimmed);
+          if (styleChoice.matched) {
+            await runBuilderImageGeneration(lastMsg.generatedImagePrompt, {
+              targetMessageId: lastMsg.id,
+              style: styleChoice.style,
+            });
+            return;
+          }
+        }
+      }
+
       const imgPrompt =
         !image && (!attachments || attachments.length === 0)
           ? extractImageGenPrompt(trimmed)
           : null;
       if (imgPrompt) {
-        await runBuilderImageGeneration(imgPrompt, { userDisplayText: trimmed });
+        askBuilderImageStyle(imgPrompt, trimmed);
         return;
       }
 
@@ -6089,6 +6166,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       replaceCurrentProjectFiles,
       addConsoleLog,
       showToast,
+      askBuilderImageStyle,
       runBuilderImageGeneration,
     ]
   );
@@ -6708,10 +6786,17 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             onApplySuggestion={(sug) => handleSendMessage(`Aplica esta melhoria mantendo tudo funcional: ${sug}`)}
             onListenMessageDetail={handleListenMessageDetail}
             onSilenceSara={handleForceSilenceSara}
-            onRegenerateGeneratedImage={(msgId, prompt) => {
+            onSelectGeneratedImageStyle={(msgId, prompt, style) => {
               void runBuilderImageGeneration(prompt, {
                 targetMessageId: msgId,
-                variationSeed: Date.now(),
+                style,
+              });
+            }}
+            onRegenerateGeneratedImage={(msgId, prompt, style, prevSeed) => {
+              void runBuilderImageGeneration(prompt, {
+                targetMessageId: msgId,
+                style: style || 'realistic',
+                previousSeed: prevSeed,
               });
             }}
             onUseGeneratedImageAsProfile={async (imgUrl) => {
