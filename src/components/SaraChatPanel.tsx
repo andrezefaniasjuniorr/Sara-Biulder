@@ -459,7 +459,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
               {isSaraSpeaking
                 ? 'Sara a falar...'
                 : isListening
-                ? 'A ouvir...'
+                ? 'Microfone ligado ✅'
                 : isThinking || liveBuild.isBuilding
                 ? `${
                     liveBuild.activeFile
@@ -563,7 +563,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                 ? 'Voz em 2.º plano · Sara a falar'
                 : isVoiceProcessing
                 ? 'Voz em 2.º plano · A executar comando...'
-                : 'Voz em 2.º plano · A ouvir...'}
+                : 'Voz em 2.º plano · Microfone ligado ✅'}
             </span>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">

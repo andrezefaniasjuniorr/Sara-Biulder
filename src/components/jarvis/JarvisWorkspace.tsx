@@ -2484,7 +2484,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     if (!isListening) {
       onToggleMic();
     }
-    onNotify('A ouvir...');
+    onNotify('Microfone ligado ✅');
   }, [isListening, onBargeIn, onToggleMic, onNotify]);
 
   const handleTriggerDailyRoutine = useCallback(() => {
@@ -3040,7 +3040,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           if (source === 'text') setInputText('');
           setConversation((prev) => [
             ...prev.slice(-28),
-            { id: `usr_g_${Date.now()}`, sender: 'user', text: rawClean, timestamp: guardTime },
+            ...(source === 'text'
+              ? [{ id: `usr_g_${Date.now()}`, sender: 'user' as const, text: rawClean, timestamp: guardTime }]
+              : []),
             { id: `sara_g_${Date.now()}`, sender: 'sara', text: guard.reply!, timestamp: guardTime },
           ]);
           speakAsSara(guard.voiceSummary || guard.reply, voiceEnabled, {
@@ -3096,7 +3098,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       const recon = rawClean ? reconstructDistortedVoiceInput(rawClean, parseCtx) : null;
       if (recon?.unintelligible && !docToSend) {
         const clarifier =
-          recon.clarifierSpeech || 'Epa, essa chegou toda torta, era música, site ou luz?';
+          recon.clarifierSpeech || 'Quiseste dizer...? Podes repetir o comando?';
         if (source === 'text') setInputText('');
         const cTime = new Date().toLocaleTimeString('pt-PT', {
           hour: '2-digit',
@@ -3154,12 +3156,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           if (source === 'text') setInputText('');
           if (imgReq.qualityTop || imgReq.style) {
             await runJarvisImageGeneration(imgReq.prompt, {
-              userDisplayText: clean,
+              userDisplayText: source === 'text' ? clean : undefined,
               style: imgReq.style || 'realistic',
               qualityTop: imgReq.qualityTop,
             });
           } else {
-            askJarvisImageStyle(imgReq.prompt, clean);
+            askJarvisImageStyle(imgReq.prompt, source === 'text' ? clean : undefined);
           }
           return;
         }
@@ -3197,7 +3199,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           const nowMaputo = getMaputoNowParts(new Date());
           setConversation((prev) => [
             ...prev.slice(-28),
-            { id: `usr_bgr_${Date.now()}`, sender: 'user', text: clean, timestamp: nowMaputo.timeHHmm },
+            ...(source === 'text'
+              ? [{ id: `usr_bgr_${Date.now()}`, sender: 'user' as const, text: clean, timestamp: nowMaputo.timeHHmm }]
+              : []),
             { id: `sara_bgr_${Date.now()}`, sender: 'sara', text: remRes.reply!, timestamp: nowMaputo.timeHHmm },
           ]);
           speakAsSara(remRes.reply, voiceEnabled, { level: 'short', forceSpeak: true });
@@ -3222,7 +3226,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           updatePanelOpen(true);
           setConversation((prev) => [
             ...prev.slice(-28),
-            { id: `usr_agq_${Date.now()}`, sender: 'user', text: clean, timestamp: nowMaputo.timeHHmm },
+            ...(source === 'text'
+              ? [{ id: `usr_agq_${Date.now()}`, sender: 'user' as const, text: clean, timestamp: nowMaputo.timeHHmm }]
+              : []),
             { id: `sara_agq_${Date.now()}`, sender: 'sara', text: replyText, timestamp: nowMaputo.timeHHmm },
           ]);
           speakAsSara(replyText, voiceEnabled, { level: 'medium', forceSpeak: true });
@@ -3248,7 +3254,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             const failMsg = 'Não consegui guardar, tenta de novo.';
             setConversation((prev) => [
               ...prev.slice(-28),
-              { id: `usr_agf_${Date.now()}`, sender: 'user', text: clean, timestamp: nowMaputo.timeHHmm },
+              ...(source === 'text'
+                ? [{ id: `usr_agf_${Date.now()}`, sender: 'user' as const, text: clean, timestamp: nowMaputo.timeHHmm }]
+                : []),
               { id: `sara_agf_${Date.now()}`, sender: 'sara', text: failMsg, timestamp: nowMaputo.timeHHmm },
             ]);
             speakAsSara(failMsg, voiceEnabled, { level: 'short', forceSpeak: true });
@@ -3258,7 +3266,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           onNotify(parsedAgenda.confirmationText);
           setConversation((prev) => [
             ...prev.slice(-28),
-            { id: `usr_ags_${Date.now()}`, sender: 'user', text: clean, timestamp: nowMaputo.timeHHmm },
+            ...(source === 'text'
+              ? [{ id: `usr_ags_${Date.now()}`, sender: 'user' as const, text: clean, timestamp: nowMaputo.timeHHmm }]
+              : []),
             {
               id: `sara_ags_${Date.now()}`,
               sender: 'sara',
@@ -3316,12 +3326,16 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         if (source === 'text') setInputText('');
         setConversation((prev) => [
           ...prev.slice(-28),
-          {
-            id: `usr_off_${Date.now()}`,
-            sender: 'user',
-            text: clean || rawClean,
-            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
-          },
+          ...(source === 'text'
+            ? [
+                {
+                  id: `usr_off_${Date.now()}`,
+                  sender: 'user' as const,
+                  text: clean || rawClean,
+                  timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+                },
+              ]
+            : []),
           {
             id: `sara_off_${Date.now()}`,
             sender: 'sara',
@@ -3353,7 +3367,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       };
       aiHistoryRef.current = [...aiHistoryRef.current.slice(-18), userHistoryEntry];
 
-      if (source === 'text' || wantsFullTextInChat) {
+      if (source === 'text') {
         setConversation((prev) => [...prev, userHistoryEntry]);
       }
 
@@ -3980,7 +3994,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           : isSaraSpeaking
                           ? 'A FALAR'
                           : isListening
-                          ? 'A OUVIR...'
+                          ? 'MICROFONE ATIVO'
                           : 'EM ESPERA'}
                       </span>
                     </div>
@@ -5638,7 +5652,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           : isSaraSpeaking
                           ? 'VOZ ATIVA'
                           : isListening
-                          ? 'A OUVIR...'
+                          ? 'ESCUTA ATIVA'
                           : 'PRONTO'}
                       </div>
                     </div>

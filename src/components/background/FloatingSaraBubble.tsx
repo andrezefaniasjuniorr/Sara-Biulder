@@ -205,7 +205,7 @@ export const FloatingSaraBubble: React.FC<FloatingSaraBubbleProps> = ({
                 }`}
               >
                 {isListening ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
-                <span>{isListening ? 'A Ouvir' : 'Falar'}</span>
+                <span>{isListening ? 'Mic Ativo' : 'Falar'}</span>
               </button>
 
               {isSaraSpeaking && (

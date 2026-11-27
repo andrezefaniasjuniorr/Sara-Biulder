@@ -3396,7 +3396,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return;
       }
 
-      showToast('A ouvir...');
+      showToast('Microfone ligado ✅');
       if (speakAck) {
         speakAsSara('Estou a ouvir, diz lá', voiceEnabledRef.current, {
           level: 'short',
@@ -4045,7 +4045,19 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'unintelligible_clarify') {
-        speakAsSara(cmd.reply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+        const clarifyText = cmd.reply || 'Quiseste dizer...?';
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `sara_clar_${Date.now()}`,
+            sender: 'sara',
+            text: clarifyText,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+            mode: 'conversation',
+            voiceDelivered: true,
+          },
+        ]);
+        speakAsSara(clarifyText, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
         return true;
       }
 
@@ -5780,7 +5792,18 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         : null;
       if (reconText?.unintelligible && !image && (!attachments || attachments.length === 0)) {
         const clarifier =
-          reconText.clarifierSpeech || 'Epa, essa chegou toda torta, era música, site ou luz?';
+          reconText.clarifierSpeech || 'Quiseste dizer...? Podes repetir o comando?';
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `sara_clar_${Date.now()}`,
+            sender: 'sara',
+            text: clarifier,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+            mode: 'conversation',
+            voiceDelivered: true,
+          },
+        ]);
         speakAsSara(clarifier, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
         return;
       }
@@ -5820,12 +5843,12 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       if (imgReq) {
         if (imgReq.qualityTop || imgReq.style) {
           await runBuilderImageGeneration(imgReq.prompt, {
-            userDisplayText: trimmed,
+            userDisplayText: isVoice ? undefined : trimmed,
             style: imgReq.style || 'realistic',
             qualityTop: imgReq.qualityTop,
           });
         } else {
-          askBuilderImageStyle(imgReq.prompt, trimmed);
+          askBuilderImageStyle(imgReq.prompt, isVoice ? undefined : trimmed);
         }
         return;
       }
@@ -6605,11 +6628,34 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
     stopMicRef.current = startContinuousVoiceRecognition({
       shouldKeepListening: () => shouldKeepListeningRef.current,
+      getParseContext: () => voiceContextRef.current,
+      onClarify: (clarifierSpeech) => {
+        if (
+          isCallModeRef.current ||
+          isSaraSilencedRef.current ||
+          isSaraCallModeFlag() ||
+          isSaraSilencedFlag()
+        ) {
+          return;
+        }
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `sara_clar_${Date.now()}`,
+            sender: 'sara',
+            text: clarifierSpeech,
+            timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+            mode: 'conversation',
+            voiceDelivered: true,
+          },
+        ]);
+        speakAsSara(clarifierSpeech, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+      },
       onResult: (transcript) => {
         const silencedNow =
           isCallModeRef.current || isSaraSilencedRef.current || isSaraCallModeFlag() || isSaraSilencedFlag();
 
-        // Prioridade máxima: comandos instantâneos de interrupção / calar / modo chamada
+        // Prioridade máxima: comandos instantâneos de interrupção / paragem ("SARA PARA") / calar / modo chamada
         const immediateBarge = detectBargeInCommand(transcript, {
           ...voiceContextRef.current,
           isSilenced: silencedNow,
@@ -6663,7 +6709,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           const stripped = transcript.replace(/^(ei|hey|eh|oi)\s+sara[\s,.:!?-]*/i, '').trim();
           if (!stripped) {
             setIsListeningAfterBargeIn(true);
-            showToast('A ouvir...');
+            showToast('Microfone ligado ✅');
             speakAsSara('Estou a ouvir, diz lá', voiceEnabledRef.current, {
               level: 'short',
               forceSpeak: true,
@@ -6738,9 +6784,24 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       return;
     }
 
-    // 1. Pede microfone APENAS dentro do clique do botão com getUserMedia({ audio: true })
+    // 1. Pede microfone APENAS dentro do clique do botão com echoCancellation, noiseSuppression e autoGainControl
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (constraintErr: any) {
+        if (constraintErr?.name === 'OverconstrainedError') {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        } else {
+          throw constraintErr;
+        }
+      }
       stream.getTracks().forEach((track) => track.stop());
     } catch (error: any) {
       const errName = error?.name || 'Error';
@@ -7396,7 +7457,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
                 {isSaraSpeaking
                   ? 'Sara a falar...'
                   : isListeningAfterBargeIn
-                  ? 'A ouvir...'
+                  ? 'Microfone ligado ✅'
                   : isVoiceProcessing
                   ? 'A executar...'
                   : isListening

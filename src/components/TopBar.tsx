@@ -265,7 +265,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         ) : isListening ? (
           <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/40 text-[11px] font-medium text-emerald-300 whitespace-nowrap">
             <Mic className="w-3.5 h-3.5" />
-            <span>A ouvir</span>
+            <span>Mic ativo</span>
           </div>
         ) : isThinking ? (
           <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#3B82F6]/15 border border-[#3B82F6]/40 text-[11px] font-medium text-blue-300 whitespace-nowrap">
