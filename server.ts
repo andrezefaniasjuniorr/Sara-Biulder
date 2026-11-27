@@ -50,6 +50,10 @@ const __dirname = path.dirname(__filename);
 
 async function startServer() {
   const app = express();
+  app.use((_req, res, next) => {
+    res.setHeader('Permissions-Policy', 'microphone=(self), camera=(self)');
+    next();
+  });
   app.use(express.json({ limit: '25mb' }));
 
   const handleStreamBuild = async (req: express.Request, res: express.Response) => {

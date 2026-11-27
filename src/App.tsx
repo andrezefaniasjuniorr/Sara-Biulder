@@ -241,6 +241,7 @@ const AGENT_MODE_KEY = 'sara_biulder_agent_mode_v1';
 const SAVED_MISSION_KEY = 'sara_biulder_saved_mission_v2';
 const ERRORS_FIXED_KEY = 'sara_biulder_errors_fixed_v1';
 const VOICE_LEVEL_KEY = 'sara_biulder_voice_level_v1';
+const MIC_PERMISSION_GRANTED_KEY = 'sara_mic_allowed_v1';
 
 function scopedStorageKey(base: string, userId?: string): string {
   return userId ? `${base}_${userId}` : base;
@@ -728,8 +729,19 @@ export default function App() {
   const isSaraSilencedRef = useRef(false);
   const isCallModeRef = useRef(false);
   const [isListening, setIsListening] = useState(false);
+  const [isListeningAfterBargeIn, setIsListeningAfterBargeIn] = useState(false);
   const [isVoiceProcessing, setIsVoiceProcessing] = useState(false);
   const [isSaraSpeaking, setIsSaraSpeaking] = useState(false);
+  const [isMicAllowedSaved, setIsMicAllowedSaved] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(MIC_PERMISSION_GRANTED_KEY) === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [micErrorMsg, setMicErrorMsg] = useState<string | null>(null);
+  const micAllowedSavedRef = useRef<boolean>(isMicAllowedSaved);
+  micAllowedSavedRef.current = isMicAllowedSaved;
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingVoiceConfirmation | null>(null);
   const shouldKeepListeningRef = useRef(false);
   const stopMicRef = useRef<(() => void) | null>(null);
@@ -1249,10 +1261,7 @@ export default function App() {
     await requestScreenWakeLock();
     startSilentAudioKeepAlive();
     await syncPersistentBackgroundNotification(true);
-    if (bgSettingsRef.current.continuousVoiceBg && !shouldKeepListeningRef.current) {
-      startHandsFreeMicRef.current?.();
-    }
-    showToast('Segundo Plano ativado! A SARA continua ativa.');
+    showToast('Segundo Plano ativado! Clica em "Ativar Microfone" quando quiseres usar voz.');
   }, [handleUpdateBgSettings, handleUpdateMyCoords, showToast]);
 
   const handleStopBackground = useCallback(async () => {
@@ -1411,10 +1420,14 @@ export default function App() {
         setIsCallModeState(false);
         setIsSaraSilencedState(false);
         setBubbleDismissed(false);
-        if (!shouldKeepListeningRef.current) {
+        if (!shouldKeepListeningRef.current && micAllowedSavedRef.current) {
           startHandsFreeMicRef.current?.();
         }
-        showToast('SARA acordada (CTRL + ESPAÇO) — estou a ouvir!');
+        showToast(
+          micAllowedSavedRef.current
+            ? 'SARA acordada (CTRL + ESPAÇO) — estou a ouvir!'
+            : 'SARA acordada — clica em "Ativar Microfone" para falar.'
+        );
         speakAsSara('Estou a ouvir.', voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
@@ -1645,9 +1658,6 @@ export default function App() {
       void requestScreenWakeLock();
       startSilentAudioKeepAlive();
       startBackgroundWorkerLoop(runBackgroundOrPeriodicTick);
-      if (bgSettings.continuousVoiceBg && !shouldKeepListeningRef.current) {
-        startHandsFreeMicRef.current?.();
-      }
     } else {
       stopBackgroundWorkerLoop();
       void releaseScreenWakeLock();
@@ -3361,6 +3371,44 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     });
   }, []);
 
+  const dispatchVoiceCommandTextRef = useRef<((text: string) => void) | null>(null);
+
+  const handleBargeInAndListen = useCallback(
+    (speakAck = false, trailingCommand?: string) => {
+      // Para imediatamente a voz (< 0.5s) e NÃO silencia permanentemente a SARA
+      interruptSaraAndListen();
+      isCallModeRef.current = false;
+      isSaraSilencedRef.current = false;
+      setSaraCallMode(false);
+      setIsCallModeState(false);
+      setSaraSilenced(false);
+      setIsSaraSilencedState(false);
+      voiceDispatchInFlightRef.current = false;
+      lastVoiceDispatchRef.current = { norm: '', ts: 0 };
+      setIsVoiceProcessing(false);
+      setIsListeningAfterBargeIn(true);
+
+      if (trailingCommand && trailingCommand.trim()) {
+        setIsListeningAfterBargeIn(false);
+        setTimeout(() => {
+          dispatchVoiceCommandTextRef.current?.(trailingCommand.trim());
+        }, 40);
+        return;
+      }
+
+      showToast('A ouvir...');
+      if (speakAck) {
+        speakAsSara('Estou a ouvir, diz lá', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+          bypassSilence: true,
+          isBargeInAck: true,
+        });
+      }
+    },
+    [showToast]
+  );
+
   const handleListenMessageDetail = useCallback((msgText: string) => {
     if (isCallModeRef.current || isSaraSilencedRef.current) return;
     speakAsSara(msgText, true, { level: 'full', forceSpeak: true });
@@ -3742,6 +3790,11 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           pauseVoiceReading();
         }
         jarvisMediaControlRef.current?.pause();
+        return true;
+      }
+
+      if (cmd.type === 'interrupt_sara') {
+        handleBargeInAndListen(true, cmd.trailingCommand);
         return true;
       }
 
@@ -4981,6 +5034,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       callerVoc,
       callerShortVoc,
       effectiveStorageUid,
+      handleBargeInAndListen,
       handleForceSilenceSara,
       handleChangeWorkspaceMode,
       executeConfirmedAction,
@@ -5778,12 +5832,16 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       const cmd = parseVoiceCommand(trimmed, voiceContextRef.current);
       if (cmd.type === 'start_listening') {
-        startHandsFreeMicRef.current?.();
-        showToast('Microfone contínuo ativado!');
-        speakAsSara(`Microfone ligado, estou a ouvir${callerShortVoc}.`, voiceEnabledRef.current, {
-          level: 'short',
-          forceSpeak: true,
-        });
+        if (micAllowedSavedRef.current) {
+          startHandsFreeMicRef.current?.();
+          showToast('Microfone ligado ✅');
+          speakAsSara(`Microfone ligado, estou a ouvir${callerShortVoc}.`, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+        } else {
+          showToast('Clica no botão "Ativar Microfone" para permitir o microfone.');
+        }
         return;
       }
 
@@ -6457,11 +6515,93 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     [addConsoleLog]
   );
 
-  // Microfone Contínuo Mãos-Livres em 2.º plano (nunca morre por erros transitórios nem usa closures antigas)
+  // Microfone Contínuo Mãos-Livres em 2.º plano (ouve e fala em simultâneo, com interrupção imediata)
   const startHandsFreeMic = useCallback(() => {
     if (shouldKeepListeningRef.current) return;
     shouldKeepListeningRef.current = true;
     setIsListening(true);
+
+    const dispatchCleanVoiceInput = (rawVoiceText: string) => {
+      const voiceGuard = evaluateNonOwnerGuard(rawVoiceText, session);
+      if (voiceGuard.intercepted) {
+        speakAsSara(voiceGuard.voiceSummary || voiceGuard.reply || 'Não tens acesso a isso.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      const voiceRecon = reconstructDistortedVoiceInput(rawVoiceText, voiceContextRef.current);
+      const cleanTranscript = voiceRecon.reconstructed || voiceRecon.cleaned || rawVoiceText;
+      const normVoice = cleanTranscript
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9\s]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!normVoice) return;
+
+      // Evita apenas disparo duplicado imediato (< 0.85s) sem atrasar comandos consecutivos
+      const nowTs = Date.now();
+      if (
+        (lastVoiceDispatchRef.current.norm === normVoice && nowTs - lastVoiceDispatchRef.current.ts < 850) ||
+        voiceDispatchInFlightRef.current
+      ) {
+        return;
+      }
+
+      setIsListeningAfterBargeIn(false);
+
+      if (!voiceRecon.unintelligible) {
+        pushRecentUtterance(cleanTranscript);
+      }
+
+      const cmd = parseVoiceCommand(cleanTranscript, voiceContextRef.current);
+      addConsoleLog('info', '[Canal de Voz] Comando captado em 2.º plano.');
+
+      if (cmd.type === 'start_listening') {
+        speakAsSara(`Já estou a ouvir${callerShortVoc}.`, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return;
+      }
+
+      lastVoiceDispatchRef.current = { norm: normVoice, ts: nowTs };
+      voiceDispatchInFlightRef.current = true;
+      setIsVoiceProcessing(true);
+      const runner = executePlatformCommandRef.current || executePlatformCommand;
+      runner(cmd, cleanTranscript)
+        .then((handled) => {
+          if (!handled) {
+            const isImgIntent =
+              Boolean(extractImageGenRequest(cleanTranscript)) ||
+              Boolean(parseImageVoiceCommand(cleanTranscript));
+            if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
+              return jarvisPromptRef.current(cleanTranscript, 'voice');
+            }
+            if (
+              !isImgIntent &&
+              workspaceModeRef.current === 'builder' &&
+              isAssistantExplanationIntent(cleanTranscript)
+            ) {
+              handleChangeWorkspaceMode('jarvis', { silent: true });
+              setTimeout(() => {
+                void jarvisPromptRef.current?.(cleanTranscript, 'voice');
+              }, 90);
+              return;
+            }
+            return handleSendMessageRef.current?.(cleanTranscript, undefined, undefined, 'voice');
+          }
+        })
+        .finally(() => {
+          voiceDispatchInFlightRef.current = false;
+          setIsVoiceProcessing(false);
+        });
+    };
+
+    dispatchVoiceCommandTextRef.current = dispatchCleanVoiceInput;
 
     stopMicRef.current = startContinuousVoiceRecognition({
       shouldKeepListening: () => shouldKeepListeningRef.current,
@@ -6469,13 +6609,17 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         const silencedNow =
           isCallModeRef.current || isSaraSilencedRef.current || isSaraCallModeFlag() || isSaraSilencedFlag();
 
-        // Prioridade máxima: comandos instantâneos de calar/parar/retomar antes de qualquer reconstrução ou fila
+        // Prioridade máxima: comandos instantâneos de interrupção / calar / modo chamada
         const immediateBarge = detectBargeInCommand(transcript, {
           ...voiceContextRef.current,
           isSilenced: silencedNow,
           isCallMode: isCallModeRef.current || isSaraCallModeFlag(),
         });
         if (immediateBarge) {
+          if (immediateBarge.type === 'interrupt_sara') {
+            handleBargeInAndListen(true, immediateBarge.trailingCommand);
+            return;
+          }
           if (immediateBarge.type === 'silence_sara') {
             handleForceSilenceSara();
             return;
@@ -6489,7 +6633,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           return;
         }
 
-        // Quando está SILENCIADA ou em MODO CHAMADA, ignora tudo o que ouvir (inclusive conversa com outras pessoas)
+        // Quando está SILENCIADA ou em MODO CHAMADA, ignora conversa de fundo até retoma explícita
         if (silencedNow) {
           const quickCmd = parseVoiceCommand(transcript, {
             ...voiceContextRef.current,
@@ -6518,109 +6662,47 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           }
           const stripped = transcript.replace(/^(ei|hey|eh|oi)\s+sara[\s,.:!?-]*/i, '').trim();
           if (!stripped) {
-            showToast('Ei SARA ativo — estou a ouvir!');
-            speakAsSara(`Estou a ouvir${callerShortVoc}.`, voiceEnabledRef.current, {
+            setIsListeningAfterBargeIn(true);
+            showToast('A ouvir...');
+            speakAsSara('Estou a ouvir, diz lá', voiceEnabledRef.current, {
               level: 'short',
               forceSpeak: true,
+              isBargeInAck: true,
             });
             return;
           }
         }
 
-        // Bloqueio extra anti-eco: nunca despacha prompts normais enquanto a Sara fala ou logo após eco dos altifalantes
+        // Bloqueio extra anti-eco: nunca despacha prompts normais enquanto a Sara fala (exceto durante ack já interrompido)
         if (isSaraSpeakingRef.current || isSaraActivelySpeaking() || isProbableSaraEcho(transcript)) {
           return;
         }
 
-        const voiceGuard = evaluateNonOwnerGuard(transcript, session);
-        if (voiceGuard.intercepted) {
-          speakAsSara(voiceGuard.voiceSummary || voiceGuard.reply || 'Não tens acesso a isso.', voiceEnabledRef.current, {
-            level: 'short',
-            forceSpeak: true,
-          });
-          return;
-        }
-
-        const voiceRecon = reconstructDistortedVoiceInput(transcript, voiceContextRef.current);
-        const cleanTranscript = voiceRecon.reconstructed || voiceRecon.cleaned || transcript;
-        const normVoice = cleanTranscript
-          .toLowerCase()
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .replace(/[^a-z0-9\s]/g, '')
-          .replace(/\s+/g, ' ')
-          .trim();
-        if (!normVoice) return;
-
-        // Evita disparo duplicado do mesmo áudio final ou empilhamento de turnos simultâneos de voz
-        const nowTs = Date.now();
-        if (
-          (lastVoiceDispatchRef.current.norm === normVoice && nowTs - lastVoiceDispatchRef.current.ts < 2500) ||
-          voiceDispatchInFlightRef.current
-        ) {
-          return;
-        }
-
-        if (!voiceRecon.unintelligible) {
-          pushRecentUtterance(cleanTranscript);
-        }
-
-        const cmd = parseVoiceCommand(cleanTranscript, voiceContextRef.current);
-        addConsoleLog('info', '[Canal de Voz] Comando captado em 2.º plano.');
-
-        if (cmd.type === 'start_listening') {
-          speakAsSara(`Já estou a ouvir${callerShortVoc}.`, voiceEnabledRef.current, {
-            level: 'short',
-            forceSpeak: true,
-          });
-          return;
-        }
-
-        lastVoiceDispatchRef.current = { norm: normVoice, ts: nowTs };
-        voiceDispatchInFlightRef.current = true;
-        setIsVoiceProcessing(true);
-        const runner = executePlatformCommandRef.current || executePlatformCommand;
-        runner(cmd, cleanTranscript)
-          .then((handled) => {
-            if (!handled) {
-              const isImgIntent =
-                Boolean(extractImageGenRequest(cleanTranscript)) ||
-                Boolean(parseImageVoiceCommand(cleanTranscript));
-              if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
-                return jarvisPromptRef.current(cleanTranscript, 'voice');
-              }
-              if (
-                !isImgIntent &&
-                workspaceModeRef.current === 'builder' &&
-                isAssistantExplanationIntent(cleanTranscript)
-              ) {
-                handleChangeWorkspaceMode('jarvis', { silent: true });
-                setTimeout(() => {
-                  void jarvisPromptRef.current?.(cleanTranscript, 'voice');
-                }, 90);
-                return;
-              }
-              return handleSendMessageRef.current?.(cleanTranscript, undefined, undefined, 'voice');
-            }
-          })
-          .finally(() => {
-            voiceDispatchInFlightRef.current = false;
-            setIsVoiceProcessing(false);
-          });
+        dispatchCleanVoiceInput(transcript);
       },
       onError: (errMsg, fatal) => {
-        addConsoleLog('warn', errMsg);
         voiceDispatchInFlightRef.current = false;
         setIsVoiceProcessing(false);
         if (fatal) {
           shouldKeepListeningRef.current = false;
           setIsListening(false);
+          setIsListeningAfterBargeIn(false);
+          setMicErrorMsg(errMsg);
+          if (/not-allowed|service-not-allowed|NotAllowedError/i.test(errMsg)) {
+            setIsMicAllowedSaved(false);
+            try {
+              localStorage.removeItem(MIC_PERMISSION_GRANTED_KEY);
+            } catch {
+              // ignore
+            }
+          }
           showToast(errMsg);
         }
       },
       onEnd: () => {
         if (!shouldKeepListeningRef.current) {
           setIsListening(false);
+          setIsListeningAfterBargeIn(false);
         }
       },
     });
@@ -6628,6 +6710,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     addConsoleLog,
     callerShortVoc,
     executePlatformCommand,
+    handleBargeInAndListen,
     handleChangeWorkspaceMode,
     handleEnterCallMode,
     handleForceSilenceSara,
@@ -6636,23 +6719,54 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
   ]);
   startHandsFreeMicRef.current = startHandsFreeMic;
 
-  const handleToggleMic = useCallback(() => {
+  const handleToggleMic = useCallback(async () => {
     if (isSaraSpeakingRef.current) {
-      interruptSaraAndListen();
-      if (!isListening && !shouldKeepListeningRef.current) {
-        startHandsFreeMic();
-      }
-      showToast('Sara interrompida — podes falar agora!');
+      handleBargeInAndListen(false);
       return;
     }
     if (isListening || shouldKeepListeningRef.current) {
       stopHandsFreeMic();
       showToast('Microfone desligado');
-    } else {
-      startHandsFreeMic();
-      showToast('Microfone contínuo mãos-livres ativado!');
+      return;
     }
-  }, [isListening, startHandsFreeMic, stopHandsFreeMic, showToast]);
+
+    setMicErrorMsg(null);
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      const msg = 'Erro: NotSupportedError - Navegador sem suporte para getUserMedia.';
+      setMicErrorMsg(msg);
+      showToast(msg);
+      return;
+    }
+
+    // 1. Pede microfone APENAS dentro do clique do botão com getUserMedia({ audio: true })
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error: any) {
+      const errName = error?.name || 'Error';
+      const errMessage = error?.message || 'Não foi possível ativar o microfone.';
+      const exactError = `Erro: ${errName} - ${errMessage}`;
+      setMicErrorMsg(exactError);
+      setIsMicAllowedSaved(false);
+      try {
+        localStorage.removeItem(MIC_PERMISSION_GRANTED_KEY);
+      } catch {
+        // ignore
+      }
+      showToast(exactError);
+      return;
+    }
+
+    // 2. Só depois de aceitar, guarda que foi permitido e liga o webkitSpeechRecognition
+    setIsMicAllowedSaved(true);
+    try {
+      localStorage.setItem(MIC_PERMISSION_GRANTED_KEY, 'true');
+    } catch {
+      // ignore
+    }
+    startHandsFreeMic();
+    showToast('Microfone ligado ✅');
+  }, [handleBargeInAndListen, isListening, startHandsFreeMic, stopHandsFreeMic, showToast]);
 
   const handleToggleVoice = () => {
     setVoiceEnabled((prev) => {
@@ -6897,6 +7011,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           externalNotifyChatRef={jarvisNotifyChatRef}
           onToggleMic={handleToggleMic}
           onSilenceSara={handleSilenceSara}
+          onBargeIn={() => handleBargeInAndListen(false)}
+          micErrorMsg={micErrorMsg}
+          isMicAllowedSaved={isMicAllowedSaved}
           onSwitchMode={handleChangeWorkspaceMode}
           onOpenSettings={() => session.isOwner && setShowSettingsModal(true)}
           onNotify={showToast}
@@ -7025,6 +7142,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             onConfirmPending={executeConfirmedAction}
             onCancelPending={cancelConfirmedAction}
             onToggleMic={handleToggleMic}
+            micErrorMsg={micErrorMsg}
+            isMicAllowedSaved={isMicAllowedSaved}
             onSendMessage={handleSendMessage}
             onImportZipAttachment={handleImportZipFromChat}
             onSelectProjectFile={handleSelectProjectFileFromChat}
@@ -7057,6 +7176,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             onApplySuggestion={(sug) => handleSendMessage(`Aplica esta melhoria mantendo tudo funcional: ${sug}`)}
             onListenMessageDetail={handleListenMessageDetail}
             onSilenceSara={handleForceSilenceSara}
+            onInterruptSpeaking={() => handleBargeInAndListen(false)}
             onSelectGeneratedImageStyle={(msgId, prompt, style) => {
               void runBuilderImageGeneration(prompt, {
                 targetMessageId: msgId,
@@ -7242,6 +7362,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       {(isListening ||
         isSaraSpeaking ||
         isVoiceProcessing ||
+        Boolean(micErrorMsg) ||
         showProjectsModal ||
         showSettingsModal ||
         showDeployModal ||
@@ -7249,61 +7370,55 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         isPreviewFullscreen ||
         isPresentationMode ||
         mobileTab !== 'chat') && (
-        <div className="fixed bottom-4 left-4 z-[75] flex items-center gap-2 px-3 py-2 rounded-2xl bg-[#090D16]/95 border border-cyan-500/40 backdrop-blur-md shadow-[0_8px_32px_rgba(0,0,0,0.65)]">
-          <button
-            type="button"
-            onClick={handleToggleMic}
-            className={`px-2.5 py-1.5 rounded-xl text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-              isListening
-                ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-200'
-                : 'bg-[#12121A] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white'
-            }`}
-            title={isListening ? 'Desligar escuta contínua' : 'Ligar escuta contínua'}
-          >
-            {isListening ? (
-              <Mic className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-            ) : (
-              <MicOff className="w-3.5 h-3.5" />
-            )}
-            <span>
-              {isSaraSpeaking
-                ? 'Sara a falar...'
-                : isVoiceProcessing
-                ? 'A executar...'
-                : isListening
-                ? 'Sara a ouvir'
-                : 'Ligar voz'}
-            </span>
-          </button>
+        <div className="fixed bottom-4 left-4 z-[75] flex flex-col items-start gap-1.5 max-w-[92vw]">
+          {micErrorMsg && (
+            <div className="px-3 py-1.5 rounded-xl bg-rose-950/95 border border-rose-400/60 text-[11px] font-mono text-rose-100 shadow-lg">
+              {micErrorMsg}
+            </div>
+          )}
+          <div className="flex items-center gap-2 px-3 py-2 rounded-2xl bg-[#090D16]/95 border border-cyan-500/40 backdrop-blur-md shadow-[0_8px_32px_rgba(0,0,0,0.65)]">
+            <button
+              type="button"
+              onClick={handleToggleMic}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer ${
+                isListening
+                  ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-200'
+                  : 'bg-gradient-to-r from-cyan-500/25 to-emerald-500/20 border border-cyan-400/60 text-white hover:brightness-110'
+              }`}
+              title={isListening ? 'Desligar microfone' : 'Ativar Microfone'}
+            >
+              {isListening ? (
+                <Mic className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+              ) : (
+                <MicOff className="w-3.5 h-3.5 text-cyan-300" />
+              )}
+              <span>
+                {isSaraSpeaking
+                  ? 'Sara a falar...'
+                  : isListeningAfterBargeIn
+                  ? 'A ouvir...'
+                  : isVoiceProcessing
+                  ? 'A executar...'
+                  : isListening
+                  ? 'Microfone ligado ✅'
+                  : 'Ativar Microfone'}
+              </span>
+            </button>
 
-          {isVoiceProcessing && <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
+            {isVoiceProcessing && <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
 
-          {isSaraSpeaking && (
-            <>
+            {isSaraSpeaking && (
               <button
                 type="button"
-                onClick={() => {
-                  interruptSaraAndListen();
-                  if (!shouldKeepListeningRef.current) startHandsFreeMic();
-                  showToast('Podes falar agora.');
-                }}
-                className="px-2 py-1.5 rounded-xl bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer hover:bg-cyan-500/30 transition"
-                title="Interromper Sara e falar imediatamente"
-              >
-                <Mic className="w-3.5 h-3.5" />
-                <span>Interromper</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleForceSilenceSara}
-                className="px-2 py-1.5 rounded-xl bg-rose-500/20 border border-rose-500/40 text-rose-200 text-[11px] font-semibold flex items-center gap-1 cursor-pointer hover:bg-rose-500/30 transition"
-                title="Calar Sara agora"
+                onClick={() => handleBargeInAndListen(false)}
+                className="px-3 py-1.5 rounded-xl bg-rose-500/25 border border-rose-400/70 text-rose-100 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer hover:bg-rose-500/35 transition shadow-[0_0_16px_rgba(244,63,94,0.3)]"
+                title="Parar de falar e ouvir o próximo comando"
               >
                 <VolumeX className="w-3.5 h-3.5" />
-                <span>Calar</span>
+                <span>Parar de Falar</span>
               </button>
-            </>
-          )}
+            )}
+          </div>
         </div>
       )}
       {/* Barra Flutuante Global de Leitura em Voz Alta (funciona em todas as abas e modos) */}
@@ -7529,6 +7644,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
         onToggleMic={handleToggleMic}
         onSilenceSara={handleForceSilenceSara}
+        onInterruptSpeaking={() => handleBargeInAndListen(false)}
         onSendPrompt={(text) => {
           if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
             void jarvisPromptRef.current(text, 'text');

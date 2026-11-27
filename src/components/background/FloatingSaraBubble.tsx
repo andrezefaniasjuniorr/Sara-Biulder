@@ -20,6 +20,7 @@ interface FloatingSaraBubbleProps {
   latestReply: string;
   onToggleMic: () => void;
   onSilenceSara: () => void;
+  onInterruptSpeaking?: () => void;
   onSendPrompt: (text: string) => void;
   onStopBackground: () => void;
   onDismissBubble: () => void;
@@ -35,6 +36,7 @@ export const FloatingSaraBubble: React.FC<FloatingSaraBubbleProps> = ({
   latestReply,
   onToggleMic,
   onSilenceSara,
+  onInterruptSpeaking,
   onSendPrompt,
   onStopBackground,
   onDismissBubble,
@@ -209,11 +211,12 @@ export const FloatingSaraBubble: React.FC<FloatingSaraBubbleProps> = ({
               {isSaraSpeaking && (
                 <button
                   type="button"
-                  onClick={onSilenceSara}
-                  className="px-2.5 py-2 rounded-xl bg-rose-500/20 border border-rose-400/60 text-rose-200 text-xs font-bold cursor-pointer"
-                  title="Calar SARA"
+                  onClick={onInterruptSpeaking || onSilenceSara}
+                  className="px-2.5 py-2 rounded-xl bg-rose-500/25 border border-rose-400/70 text-rose-100 text-xs font-bold flex items-center gap-1 cursor-pointer hover:bg-rose-500/35"
+                  title="Parar de falar e ouvir o próximo comando"
                 >
                   <VolumeX className="w-3.5 h-3.5" />
+                  <span>Parar de Falar</span>
                 </button>
               )}
 

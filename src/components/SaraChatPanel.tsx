@@ -48,6 +48,8 @@ interface SaraChatPanelProps {
   isSaraSpeaking: boolean;
   isListening: boolean;
   isVoiceProcessing?: boolean;
+  micErrorMsg?: string | null;
+  isMicAllowedSaved?: boolean;
   pendingConfirmation?: PendingVoiceConfirmation | null;
   liveBuild: LiveBuildInfo;
   mission: MissionState;
@@ -77,6 +79,7 @@ interface SaraChatPanelProps {
   onApplySuggestion: (suggestion: string) => void;
   onListenMessageDetail: (text: string) => void;
   onSilenceSara: () => void;
+  onInterruptSpeaking?: () => void;
   onRegenerateGeneratedImage?: (
     msgId: string,
     prompt: string,
@@ -192,6 +195,8 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   isSaraSpeaking,
   isListening,
   isVoiceProcessing = false,
+  micErrorMsg = null,
+  isMicAllowedSaved: _isMicAllowedSaved = false,
   pendingConfirmation = null,
   liveBuild,
   mission,
@@ -219,6 +224,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   onApplySuggestion,
   onListenMessageDetail,
   onSilenceSara,
+  onInterruptSpeaking,
   onRegenerateGeneratedImage,
   onSelectGeneratedImageStyle,
   onTopQualityGeneratedImage,
@@ -453,7 +459,7 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
               {isSaraSpeaking
                 ? 'Sara a falar...'
                 : isListening
-                ? 'A ouvir em modo contínuo...'
+                ? 'A ouvir...'
                 : isThinking || liveBuild.isBuilding
                 ? `${
                     liveBuild.activeFile
@@ -474,15 +480,29 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={onToggleMic}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap border ${
+              isListening
+                ? 'bg-emerald-500/20 border-emerald-400/60 text-emerald-200'
+                : 'bg-gradient-to-r from-cyan-500/25 to-emerald-500/20 border-cyan-400/70 text-white hover:brightness-110'
+            }`}
+            title={isListening ? 'Microfone ligado' : 'Ativar Microfone'}
+          >
+            {isListening ? <Mic className="w-3.5 h-3.5 text-emerald-300" /> : <MicOff className="w-3.5 h-3.5 text-cyan-300" />}
+            <span>{isListening ? 'Microfone ligado ✅' : 'Ativar Microfone'}</span>
+          </button>
+
           {isSaraSpeaking && (
             <button
               type="button"
-              onClick={onSilenceSara}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/20 border border-rose-500/50 text-rose-200 hover:bg-rose-500/30 transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap animate-pulse"
-              title="Calar Sara imediatamente"
+              onClick={onInterruptSpeaking || onSilenceSara}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-rose-500/25 border border-rose-400/70 text-rose-100 hover:bg-rose-500/35 transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-[0_0_14px_rgba(244,63,94,0.28)]"
+              title="Parar de falar e ouvir o próximo comando"
             >
               <VolumeX className="w-3.5 h-3.5" />
-              <span>Calar Sara</span>
+              <span>Parar de Falar</span>
             </button>
           )}
 
@@ -540,20 +560,20 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
             </span>
             <span className="text-[11px] font-mono text-cyan-200/90 truncate">
               {isSaraSpeaking
-                ? 'Voz em 2.º plano · Sara a responder em áudio'
+                ? 'Voz em 2.º plano · Sara a falar'
                 : isVoiceProcessing
                 ? 'Voz em 2.º plano · A executar comando...'
-                : 'Voz em 2.º plano · Escuta ativa'}
+                : 'Voz em 2.º plano · A ouvir...'}
             </span>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
             {isSaraSpeaking && (
               <button
                 type="button"
-                onClick={onSilenceSara}
-                className="px-2 py-0.5 rounded bg-rose-500/20 border border-rose-500/40 text-[10px] font-mono text-rose-200 hover:bg-rose-500/30 cursor-pointer"
+                onClick={onInterruptSpeaking || onSilenceSara}
+                className="px-2.5 py-0.5 rounded bg-rose-500/25 border border-rose-400/60 text-[10px] font-bold font-mono text-rose-100 hover:bg-rose-500/35 cursor-pointer"
               >
-                Calar
+                Parar de Falar
               </button>
             )}
             {isListening && (
@@ -566,6 +586,12 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {micErrorMsg && (
+        <div className="px-4 py-2 bg-rose-950/85 border-b border-rose-400/60 text-xs font-mono text-rose-100 break-words shrink-0">
+          {micErrorMsg}
         </div>
       )}
 

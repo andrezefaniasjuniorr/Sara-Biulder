@@ -213,6 +213,9 @@ interface JarvisWorkspaceProps {
   externalNotifyChatRef?: React.MutableRefObject<((shortMsg: string) => void) | null>;
   onToggleMic: () => void;
   onSilenceSara: () => void;
+  onBargeIn?: () => void;
+  micErrorMsg?: string | null;
+  isMicAllowedSaved?: boolean;
   onSwitchMode: (mode: WorkspaceMode) => void;
   onOpenSettings?: () => void;
   onNotify: (msg: string) => void;
@@ -432,6 +435,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   externalNotifyChatRef,
   onToggleMic,
   onSilenceSara,
+  onBargeIn,
+  micErrorMsg = null,
+  isMicAllowedSaved = false,
   onSwitchMode,
   onOpenSettings,
   onNotify,
@@ -2470,12 +2476,16 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   }, [conversation, streamingReply, isThinking]);
 
   const handleBargeIn = useCallback(() => {
+    if (onBargeIn) {
+      onBargeIn();
+      return;
+    }
     interruptSaraAndListen();
     if (!isListening) {
       onToggleMic();
     }
-    onNotify('Podes falar agora.');
-  }, [isListening, onToggleMic, onNotify]);
+    onNotify('A ouvir...');
+  }, [isListening, onBargeIn, onToggleMic, onNotify]);
 
   const handleTriggerDailyRoutine = useCallback(() => {
     const pendingTasks = tasks.filter((t) => !t.done).length;
@@ -3970,7 +3980,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           : isSaraSpeaking
                           ? 'A FALAR'
                           : isListening
-                          ? 'ESCUTA ATIVA'
+                          ? 'A OUVIR...'
                           : 'EM ESPERA'}
                       </span>
                     </div>
@@ -3979,14 +3989,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       <button
                         type="button"
                         onClick={onToggleMic}
-                        className={`flex-1 py-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition cursor-pointer border ${
+                        className={`flex-1 py-3 rounded-xl text-xs font-extrabold flex items-center justify-center gap-2 transition cursor-pointer border ${
                           isListening
                             ? 'bg-emerald-500/20 border-emerald-400 text-emerald-200'
-                            : 'bg-cyan-500/20 border-cyan-400/60 text-cyan-200 hover:bg-cyan-500/30'
+                            : 'bg-gradient-to-r from-cyan-500/25 to-emerald-500/20 border-cyan-400/70 text-white hover:brightness-110'
                         }`}
                       >
                         {isListening ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-                        <span>{isListening ? 'Desligar Mic' : 'Ativar Mãos-Livres'}</span>
+                        <span>{isListening ? 'Microfone ligado ✅' : 'Ativar Microfone'}</span>
                       </button>
                       <button
                         type="button"
@@ -4002,6 +4012,12 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       </button>
                     </div>
 
+                    {micErrorMsg && (
+                      <div className="p-2.5 rounded-xl bg-rose-950/80 border border-rose-400/60 text-xs font-mono text-rose-100 break-words">
+                        {micErrorMsg}
+                      </div>
+                    )}
+
                     {isSaraSpeaking && (
                       <button
                         type="button"
@@ -4009,7 +4025,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                         className="w-full py-2 rounded-xl bg-rose-500/20 border border-rose-400/60 text-rose-200 text-xs font-bold flex items-center justify-center gap-2 hover:bg-rose-500/30 cursor-pointer"
                       >
                         <Square className="w-3.5 h-3.5 fill-current" />
-                        <span>Interromper SARA e Falar</span>
+                        <span>Parar de Falar</span>
                       </button>
                     )}
                   </div>
@@ -5554,6 +5570,39 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       <span>Anexado: {pendingDoc.name}</span>
                     </div>
                   )}
+
+                  {/* Botão Grande e Direto "Ativar Microfone" / Estado "Microfone ligado ✅" na Página Principal */}
+                  <div className="mt-3 flex flex-col items-center gap-2 w-full max-w-sm px-3">
+                    <button
+                      type="button"
+                      onClick={onToggleMic}
+                      title={
+                        isListening
+                          ? 'Desligar microfone'
+                          : isMicAllowedSaved
+                          ? 'Microfone autorizado — clica para ligar'
+                          : 'Clica para permitir e ativar o microfone'
+                      }
+                      className={`w-full py-3.5 px-6 rounded-2xl text-sm font-extrabold flex items-center justify-center gap-2.5 transition cursor-pointer border ${
+                        isListening
+                          ? 'bg-emerald-500/25 border-emerald-400 text-emerald-100 shadow-[0_0_24px_rgba(16,185,129,0.35)]'
+                          : 'bg-gradient-to-r from-[#00E5FF]/25 via-cyan-500/25 to-emerald-500/25 border-[#00E5FF] text-white shadow-[0_0_24px_rgba(0,229,255,0.35)] hover:brightness-110'
+                      }`}
+                    >
+                      {isListening ? (
+                        <Mic className="w-5 h-5 text-emerald-300 animate-pulse" />
+                      ) : (
+                        <Mic className="w-5 h-5 text-cyan-300" />
+                      )}
+                      <span>{isListening ? 'Microfone ligado ✅' : 'Ativar Microfone'}</span>
+                    </button>
+
+                    {micErrorMsg && (
+                      <div className="w-full px-3.5 py-2 rounded-xl bg-rose-950/90 border border-rose-400/70 text-xs font-mono text-rose-100 text-center break-words shadow-lg">
+                        {micErrorMsg}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Faixa de Telemetria Stark na Base do Palco Holográfico */}
@@ -5589,7 +5638,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                           : isSaraSpeaking
                           ? 'VOZ ATIVA'
                           : isListening
-                          ? 'ESCUTA'
+                          ? 'A OUVIR...'
                           : 'PRONTO'}
                       </div>
                     </div>
@@ -5963,10 +6012,11 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 <button
                   type="button"
                   onClick={handleBargeIn}
-                  className="px-2.5 h-10 rounded-xl bg-rose-500/20 border border-rose-400/60 text-rose-200 text-[11px] font-bold flex items-center gap-1 shrink-0 cursor-pointer hover:bg-rose-500/30"
+                  className="px-3 h-10 rounded-xl bg-rose-500/25 border border-rose-400/70 text-rose-100 text-[11px] font-bold flex items-center gap-1.5 shrink-0 cursor-pointer hover:bg-rose-500/35 shadow-[0_0_16px_rgba(244,63,94,0.28)]"
+                  title="Parar de falar e ouvir o próximo comando"
                 >
                   <VolumeX className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Interromper</span>
+                  <span>Parar de Falar</span>
                 </button>
               )}
 
