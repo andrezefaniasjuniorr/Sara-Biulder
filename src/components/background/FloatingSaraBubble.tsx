@@ -212,11 +212,11 @@ export const FloatingSaraBubble: React.FC<FloatingSaraBubbleProps> = ({
                 <button
                   type="button"
                   onClick={onInterruptSpeaking || onSilenceSara}
-                  className="px-2.5 py-2 rounded-xl bg-rose-500/25 border border-rose-400/70 text-rose-100 text-xs font-bold flex items-center gap-1 cursor-pointer hover:bg-rose-500/35"
-                  title="Parar de falar e ouvir o próximo comando"
+                  className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 border-2 border-red-200 text-white text-xs font-black uppercase tracking-wider flex items-center gap-1 cursor-pointer shadow-[0_0_16px_rgba(239,68,68,0.55)]"
+                  title="Parar a SARA imediatamente"
                 >
                   <VolumeX className="w-3.5 h-3.5" />
-                  <span>Parar de Falar</span>
+                  <span>PARAR</span>
                 </button>
               )}
 

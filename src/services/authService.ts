@@ -300,13 +300,13 @@ async function resolveAccountByEmail(email: string): Promise<SaraUserAccount | n
 
 export function getSavedActiveSession(): SaraSession | null {
   try {
-    const raw = sessionStorage.getItem(ACTIVE_SESSION_KEY) || localStorage.getItem(ACTIVE_SESSION_KEY);
+    const raw = localStorage.getItem(ACTIVE_SESSION_KEY) || sessionStorage.getItem(ACTIVE_SESSION_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as SaraSession;
     if (!parsed?.userId || !parsed?.sessionId) return null;
     if (parsed.isGuest) return null; // Convidado nunca sobrevive fora da sessão efémera
 
-    let changed = false;
+    let changed = !localStorage.getItem(ACTIVE_SESSION_KEY);
     if (!parsed.saraId || !/^SARA-[A-Z0-9]{4}$/.test(parsed.saraId)) {
       const localAccounts = safeReadArray<SaraUserAccount>(ACCOUNTS_KEY);
       const matched = localAccounts.find(
@@ -333,6 +333,11 @@ export function getSavedActiveSession(): SaraSession | null {
   } catch {
     return null;
   }
+}
+
+export function refreshActiveSessionKeepAlive(session: SaraSession | null): void {
+  if (!session || session.isGuest) return;
+  persistActiveSession(session);
 }
 
 export async function verifySessionAccountPassword(
@@ -900,16 +905,13 @@ export async function fetchAllAdminData(caller: SaraSession | null): Promise<Adm
     }
   }
 
-  // Marca sessões antigas sem heartbeat há > 3 minutos como Ausente (ou Saiu se > 20m)
+  // Marca apenas como Ausente no painel admin se sem heartbeat há > 3m (nunca encerra sessão automaticamente)
   const nowMs = Date.now();
   const normalizedSessions = Array.from(sessMap.values())
     .map((s) => {
       if (s.status === 'Saiu') return s;
       const lastActMs = Date.parse(s.lastActivityAt) || Date.parse(s.loginAt) || nowMs;
       const idleMs = nowMs - lastActMs;
-      if (idleMs > 20 * 60 * 1000) {
-        return { ...s, status: 'Saiu' as SessionPresenceStatus };
-      }
       if (idleMs > 3 * 60 * 1000) {
         return { ...s, status: 'Ausente' as SessionPresenceStatus };
       }

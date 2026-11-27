@@ -26,6 +26,7 @@ import {
   Code2,
   Volume2,
   VolumeX,
+  Square,
 } from 'lucide-react';
 import type {
   AgentMode,
@@ -498,11 +499,11 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
             <button
               type="button"
               onClick={onInterruptSpeaking || onSilenceSara}
-              className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-rose-500/25 border border-rose-400/70 text-rose-100 hover:bg-rose-500/35 transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-[0_0_14px_rgba(244,63,94,0.28)]"
-              title="Parar de falar e ouvir o próximo comando"
+              className="px-3.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 border-2 border-red-200 text-white transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-[0_0_18px_rgba(239,68,68,0.6)]"
+              title="Parar a SARA imediatamente (ou pressiona ESPAÇO)"
             >
-              <VolumeX className="w-3.5 h-3.5" />
-              <span>Parar de Falar</span>
+              <Square className="w-3.5 h-3.5 fill-current" />
+              <span>PARAR</span>
             </button>
           )}
 
@@ -571,9 +572,9 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
               <button
                 type="button"
                 onClick={onInterruptSpeaking || onSilenceSara}
-                className="px-2.5 py-0.5 rounded bg-rose-500/25 border border-rose-400/60 text-[10px] font-bold font-mono text-rose-100 hover:bg-rose-500/35 cursor-pointer"
+                className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 border border-red-200 text-[11px] font-black font-mono uppercase text-white cursor-pointer shadow-[0_0_14px_rgba(239,68,68,0.5)]"
               >
-                Parar de Falar
+                PARAR
               </button>
             )}
             {isListening && (

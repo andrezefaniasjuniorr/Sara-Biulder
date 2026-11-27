@@ -93,7 +93,6 @@ import {
   verificarUsuario,
 } from './services/firebaseService';
 import {
-  INACTIVITY_LIMIT_MS,
   checkSessionStillValid,
   evaluateNonOwnerGuard,
   getSavedActiveSession,
@@ -101,6 +100,7 @@ import {
   logAdminAlert,
   logoutCurrentSession,
   recordActivityEvent,
+  refreshActiveSessionKeepAlive,
   updatePresenceHeartbeat,
   verifySessionAccountPassword,
 } from './services/authService';
@@ -170,13 +170,13 @@ import {
 import { buildStandaloneHtml, downloadProjectZip, importProjectZip } from './utils/zipService';
 import { getSavedGitHubToken, pushProjectToGitHub } from './utils/githubService';
 import {
+  acquireVoiceMicPermissionStream,
   adjustVoiceSpeed,
   detectAmbiguousOrDangerousPrompt,
   detectBargeInCommand,
   getBackgroundBuildDoneSpeech,
   getGuestExpirySpeech,
   getHumanChoice,
-  getInactivityLogoutSpeech,
   getLoginGreetingSpeech,
   getManualStepApprovalSpeech,
   getModeSwitchSpeech,
@@ -1329,17 +1329,30 @@ export default function App() {
     }
   }, [showToast]);
 
-  // Marcar encerramento se o navegador fechar com Segundo Plano ligado + visibilidade para mini-janela/bolha
+  // Marcar encerramento se o navegador fechar com Segundo Plano ligado + visibilidade (nunca encerra sessão em 2.º plano)
   useEffect(() => {
     const handleVisibility = () => {
       const hidden = document.visibilityState === 'hidden';
       setIsPageHidden(hidden);
-      if (!hidden && bgSettingsRef.current.backgroundAllowed) {
-        void requestScreenWakeLock();
+      const sess = sessionRef.current;
+      if (!hidden && sess) {
+        refreshActiveSessionKeepAlive(sess);
+        updatePresenceHeartbeat(sess, 'Online');
+        fetch('/api/keepalive', { method: 'GET', keepalive: true }).catch(() => {});
+        if (bgSettingsRef.current.backgroundAllowed) {
+          void requestScreenWakeLock();
+        }
       }
     };
     const handleBlur = () => setIsPageHidden(true);
-    const handleFocus = () => setIsPageHidden(false);
+    const handleFocus = () => {
+      setIsPageHidden(false);
+      const sess = sessionRef.current;
+      if (sess) {
+        refreshActiveSessionKeepAlive(sess);
+        updatePresenceHeartbeat(sess, 'Online');
+      }
+    };
     const handleUnload = () => {
       const sess = sessionRef.current;
       if (sess && !sess.isGuest && bgSettingsRef.current.backgroundAllowed) {
@@ -1765,10 +1778,13 @@ export default function App() {
     [session]
   );
 
-  // Watchdog de 15 minutos de inatividade + Modo Convidado 5m + Heartbeat & Kick/Block check
+  // Keep-Alive silencioso a cada 25 segundos (SEM logout por inatividade) + Modo Convidado 5m + Kick/Block check
   useEffect(() => {
     if (!session) return;
     lastInteractionRef.current = Date.now();
+    refreshActiveSessionKeepAlive(session);
+    updatePresenceHeartbeat(session, 'Online');
+    fetch('/api/keepalive', { method: 'GET', keepalive: true }).catch(() => {});
 
     const onActivity = () => {
       lastInteractionRef.current = Date.now();
@@ -1778,18 +1794,10 @@ export default function App() {
     window.addEventListener('touchstart', onActivity);
     window.addEventListener('wheel', onActivity);
 
-    const idleCheckTimer = setInterval(() => {
-      if (Date.now() - lastInteractionRef.current >= INACTIVITY_LIMIT_MS) {
-        void handleLogout(
-          'Sessão encerrada automaticamente após 15 minutos de inatividade.',
-          getInactivityLogoutSpeech()
-        );
-      }
-    }, 10000);
-
     const heartbeatTimer = setInterval(() => {
-      const idleForMs = Date.now() - lastInteractionRef.current;
-      updatePresenceHeartbeat(session, idleForMs > 3 * 60 * 1000 ? 'Ausente' : 'Online');
+      refreshActiveSessionKeepAlive(session);
+      updatePresenceHeartbeat(session, 'Online');
+      fetch('/api/keepalive', { method: 'GET', keepalive: true }).catch(() => {});
       if (session.isOwner) {
         setUnreadAlertsCount(getUnreadAlertsLocal(session).length);
       }
@@ -1825,7 +1833,6 @@ export default function App() {
       window.removeEventListener('keydown', onActivity);
       window.removeEventListener('touchstart', onActivity);
       window.removeEventListener('wheel', onActivity);
-      clearInterval(idleCheckTimer);
       clearInterval(heartbeatTimer);
       if (validityTimer) clearInterval(validityTimer);
       if (guestTimer) clearInterval(guestTimer);
@@ -2401,13 +2408,15 @@ export default function App() {
         setIsPresentationMode(false);
         setIsEditorFullscreen(false);
         setIsPreviewFullscreen(false);
-        interruptSaraAndListen();
+        if (isSaraSpeakingRef.current || isSaraActivelySpeaking()) {
+          handleBargeInAndListen(true);
+        }
       } else if (
         e.code === 'Space' &&
         !e.ctrlKey &&
         !e.metaKey &&
         !e.altKey &&
-        isSaraSpeakingRef.current
+        (isSaraSpeakingRef.current || isSaraActivelySpeaking())
       ) {
         const target = e.target as HTMLElement | null;
         const tag = target?.tagName || '';
@@ -2418,7 +2427,7 @@ export default function App() {
           Boolean(target?.isContentEditable);
         if (!isEditable) {
           e.preventDefault();
-          interruptSaraAndListen();
+          handleBargeInAndListen(true);
         }
       }
     };
@@ -3374,9 +3383,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
   const dispatchVoiceCommandTextRef = useRef<((text: string) => void) | null>(null);
 
   const handleBargeInAndListen = useCallback(
-    (speakAck = false, trailingCommand?: string) => {
-      // Para imediatamente a voz (< 0.5s) e NÃO silencia permanentemente a SARA
+    (speakAck = true, trailingCommand?: string) => {
+      // Para imediatamente a voz (< 200ms), limpa fila/leitura/buffer e espera comando
       interruptSaraAndListen();
+      stopVoiceReading();
       isCallModeRef.current = false;
       isSaraSilencedRef.current = false;
       setSaraCallMode(false);
@@ -3388,6 +3398,10 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       setIsVoiceProcessing(false);
       setIsListeningAfterBargeIn(true);
 
+      if (!shouldKeepListeningRef.current) {
+        startHandsFreeMicRef.current?.();
+      }
+
       if (trailingCommand && trailingCommand.trim()) {
         setIsListeningAfterBargeIn(false);
         setTimeout(() => {
@@ -3396,9 +3410,8 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return;
       }
 
-      showToast('Microfone ligado ✅');
       if (speakAck) {
-        speakAsSara('Estou a ouvir, diz lá', voiceEnabledRef.current, {
+        speakAsSara('Parei. O que queres?', voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
           bypassSilence: true,
@@ -3406,7 +3419,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         });
       }
     },
-    [showToast]
+    []
   );
 
   const handleListenMessageDetail = useCallback((msgText: string) => {
@@ -6629,6 +6642,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     stopMicRef.current = startContinuousVoiceRecognition({
       shouldKeepListening: () => shouldKeepListeningRef.current,
       getParseContext: () => voiceContextRef.current,
+      onBargeInStop: (trailingCommand) => {
+        handleBargeInAndListen(true, trailingCommand);
+      },
       onClarify: (clarifierSpeech) => {
         if (
           isCallModeRef.current ||
@@ -6698,6 +6714,24 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           return;
         }
 
+        // Despertar automático ao dizer "SARA" ou "Ei SARA"
+        if (/^sara[.!?]*$/i.test(transcript.trim())) {
+          setBubbleDismissed(false);
+          if (isSaraSilencedRef.current && !isCallModeRef.current) {
+            isSaraSilencedRef.current = false;
+            setSaraSilenced(false);
+            setIsSaraSilencedState(false);
+          }
+          setIsListeningAfterBargeIn(true);
+          speakAsSara('Estou aqui. O que queres?', voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+            bypassSilence: true,
+            isBargeInAck: true,
+          });
+          return;
+        }
+
         // Comando de despertar "Ei SARA" configurável nas definições de Segundo Plano
         if (bgSettingsRef.current.eiSaraEnabled && isEiSaraWakePhrase(transcript)) {
           setBubbleDismissed(false);
@@ -6709,7 +6743,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           const stripped = transcript.replace(/^(ei|hey|eh|oi)\s+sara[\s,.:!?-]*/i, '').trim();
           if (!stripped) {
             setIsListeningAfterBargeIn(true);
-            showToast('Microfone ligado ✅');
             speakAsSara('Estou a ouvir, diz lá', voiceEnabledRef.current, {
               level: 'short',
               forceSpeak: true,
@@ -6765,9 +6798,69 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
   ]);
   startHandsFreeMicRef.current = startHandsFreeMic;
 
+  // Ligar o microfone AUTOMATICAMENTE ao abrir a SARA (com fallback silencioso na 1.ª interação se o browser bloquear antes de gesto)
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    let gestureRetryAttached = false;
+
+    const removeGestureListeners = () => {
+      if (!gestureRetryAttached) return;
+      gestureRetryAttached = false;
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
+      window.removeEventListener('touchstart', onFirstGesture);
+    };
+
+    const tryAutoEnableMic = async () => {
+      if (cancelled || shouldKeepListeningRef.current) {
+        removeGestureListeners();
+        return;
+      }
+      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
+      try {
+        const probeStream = await acquireVoiceMicPermissionStream();
+        probeStream.getTracks().forEach((track) => track.stop());
+        if (cancelled) return;
+        setMicErrorMsg(null);
+        setIsMicAllowedSaved(true);
+        try {
+          localStorage.setItem(MIC_PERMISSION_GRANTED_KEY, 'true');
+        } catch {
+          // ignore
+        }
+        startHandsFreeMic();
+        removeGestureListeners();
+      } catch {
+        // Se o browser exigir gesto do utilizador antes de ligar o microfone, ativa automaticamente no 1.º toque/tecla
+        if (!cancelled && !gestureRetryAttached) {
+          gestureRetryAttached = true;
+          window.addEventListener('pointerdown', onFirstGesture, { once: true, passive: true });
+          window.addEventListener('keydown', onFirstGesture, { once: true, passive: true });
+          window.addEventListener('touchstart', onFirstGesture, { once: true, passive: true });
+        }
+      }
+    };
+
+    const onFirstGesture = () => {
+      gestureRetryAttached = false;
+      void tryAutoEnableMic();
+    };
+
+    const timer = setTimeout(() => {
+      void tryAutoEnableMic();
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      removeGestureListeners();
+    };
+  }, [session, startHandsFreeMic]);
+
   const handleToggleMic = useCallback(async () => {
-    if (isSaraSpeakingRef.current) {
-      handleBargeInAndListen(false);
+    if (isSaraSpeakingRef.current || isSaraActivelySpeaking()) {
+      handleBargeInAndListen(true);
       return;
     }
     if (isListening || shouldKeepListeningRef.current) {
@@ -6784,24 +6877,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       return;
     }
 
-    // 1. Pede microfone APENAS dentro do clique do botão com echoCancellation, noiseSuppression e autoGainControl
+    // 1. Pede microfone com echoCancellation: true, noiseSuppression: true, autoGainControl: false
     try {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-      } catch (constraintErr: any) {
-        if (constraintErr?.name === 'OverconstrainedError') {
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        } else {
-          throw constraintErr;
-        }
-      }
+      const stream = await acquireVoiceMicPermissionStream();
       stream.getTracks().forEach((track) => track.stop());
     } catch (error: any) {
       const errName = error?.name || 'Error';
@@ -7072,7 +7150,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           externalNotifyChatRef={jarvisNotifyChatRef}
           onToggleMic={handleToggleMic}
           onSilenceSara={handleSilenceSara}
-          onBargeIn={() => handleBargeInAndListen(false)}
+          onBargeIn={() => handleBargeInAndListen(true)}
           micErrorMsg={micErrorMsg}
           isMicAllowedSaved={isMicAllowedSaved}
           onSwitchMode={handleChangeWorkspaceMode}
@@ -7237,7 +7315,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             onApplySuggestion={(sug) => handleSendMessage(`Aplica esta melhoria mantendo tudo funcional: ${sug}`)}
             onListenMessageDetail={handleListenMessageDetail}
             onSilenceSara={handleForceSilenceSara}
-            onInterruptSpeaking={() => handleBargeInAndListen(false)}
+            onInterruptSpeaking={() => handleBargeInAndListen(true)}
             onSelectGeneratedImageStyle={(msgId, prompt, style) => {
               void runBuilderImageGeneration(prompt, {
                 targetMessageId: msgId,
@@ -7419,66 +7497,54 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }}
       />
 
-      {/* HUD Global de Voz Contínua (sempre acessível em todas as abas, modais e ecrãs cheios) */}
-      {(isListening ||
-        isSaraSpeaking ||
-        isVoiceProcessing ||
-        Boolean(micErrorMsg) ||
+      {/* Botão Grande Vermelho PARAR sempre visível enquanto a SARA fala */}
+      {isSaraSpeaking && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[90] flex items-center justify-center pointer-events-auto">
+          <button
+            type="button"
+            onClick={() => handleBargeInAndListen(true)}
+            className="px-7 py-3.5 rounded-2xl bg-red-600 hover:bg-red-500 active:scale-95 border-2 border-red-200 text-white font-black text-base tracking-[0.2em] uppercase flex items-center gap-2.5 cursor-pointer shadow-[0_0_32px_rgba(239,68,68,0.85)] animate-pulse"
+            title="Parar a SARA imediatamente (ou pressiona ESPAÇO)"
+          >
+            <Square className="w-5 h-5 fill-current" />
+            <span>PARAR</span>
+          </button>
+        </div>
+      )}
+
+      {/* Controlo Discreto no Canto (fora do Estúdio / modais / mobile, nunca por baixo do holograma) */}
+      {((workspaceMode !== 'jarvis' && (isListening || isVoiceProcessing || Boolean(micErrorMsg))) ||
         showProjectsModal ||
         showSettingsModal ||
         showDeployModal ||
         isEditorFullscreen ||
         isPreviewFullscreen ||
-        isPresentationMode ||
-        mobileTab !== 'chat') && (
-        <div className="fixed bottom-4 left-4 z-[75] flex flex-col items-start gap-1.5 max-w-[92vw]">
+        isPresentationMode) && (
+        <div className="fixed bottom-3 left-3 z-[75] flex flex-col items-start gap-1 max-w-[85vw]">
           {micErrorMsg && (
-            <div className="px-3 py-1.5 rounded-xl bg-rose-950/95 border border-rose-400/60 text-[11px] font-mono text-rose-100 shadow-lg">
+            <div className="px-2.5 py-1 rounded-lg bg-rose-950/95 border border-rose-400/60 text-[10px] font-mono text-rose-100 shadow-lg">
               {micErrorMsg}
             </div>
           )}
-          <div className="flex items-center gap-2 px-3 py-2 rounded-2xl bg-[#090D16]/95 border border-cyan-500/40 backdrop-blur-md shadow-[0_8px_32px_rgba(0,0,0,0.65)]">
+          <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-xl bg-[#090D16]/90 border border-cyan-500/35 backdrop-blur-md shadow-lg">
             <button
               type="button"
               onClick={handleToggleMic}
-              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold flex items-center gap-1.5 transition cursor-pointer ${
+              className={`p-1.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition cursor-pointer ${
                 isListening
                   ? 'bg-emerald-500/20 border border-emerald-400/50 text-emerald-200'
-                  : 'bg-gradient-to-r from-cyan-500/25 to-emerald-500/20 border border-cyan-400/60 text-white hover:brightness-110'
+                  : 'bg-cyan-500/15 border border-cyan-400/50 text-cyan-200 hover:brightness-110'
               }`}
-              title={isListening ? 'Desligar microfone' : 'Ativar Microfone'}
+              title={isListening ? 'Microfone ligado (clica para pausar)' : 'Ligar microfone'}
             >
               {isListening ? (
-                <Mic className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                <Mic className="w-3.5 h-3.5 text-emerald-400" />
               ) : (
                 <MicOff className="w-3.5 h-3.5 text-cyan-300" />
               )}
-              <span>
-                {isSaraSpeaking
-                  ? 'Sara a falar...'
-                  : isListeningAfterBargeIn
-                  ? 'Microfone ligado ✅'
-                  : isVoiceProcessing
-                  ? 'A executar...'
-                  : isListening
-                  ? 'Microfone ligado ✅'
-                  : 'Ativar Microfone'}
-              </span>
+              {isListeningAfterBargeIn && <span className="hidden sm:inline">Ativo</span>}
             </button>
-
             {isVoiceProcessing && <Loader2 className="w-3.5 h-3.5 text-cyan-400 animate-spin" />}
-
-            {isSaraSpeaking && (
-              <button
-                type="button"
-                onClick={() => handleBargeInAndListen(false)}
-                className="px-3 py-1.5 rounded-xl bg-rose-500/25 border border-rose-400/70 text-rose-100 text-[11px] font-bold flex items-center gap-1.5 cursor-pointer hover:bg-rose-500/35 transition shadow-[0_0_16px_rgba(244,63,94,0.3)]"
-                title="Parar de falar e ouvir o próximo comando"
-              >
-                <VolumeX className="w-3.5 h-3.5" />
-                <span>Parar de Falar</span>
-              </button>
-            )}
           </div>
         </div>
       )}
@@ -7705,7 +7771,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }
         onToggleMic={handleToggleMic}
         onSilenceSara={handleForceSilenceSara}
-        onInterruptSpeaking={() => handleBargeInAndListen(false)}
+        onInterruptSpeaking={() => handleBargeInAndListen(true)}
         onSendPrompt={(text) => {
           if (workspaceModeRef.current === 'jarvis' && jarvisPromptRef.current) {
             void jarvisPromptRef.current(text, 'text');

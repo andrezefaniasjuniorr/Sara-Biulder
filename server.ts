@@ -486,6 +486,10 @@ async function startServer() {
     return res.json({ ok: true, ...cleared });
   });
 
+  app.get('/api/keepalive', (_req, res) => {
+    return res.status(200).json({ ok: true, ts: Date.now() });
+  });
+
   app.get('/api/image/status', async (_req, res) => {
     return res.json({
       ok: true,
