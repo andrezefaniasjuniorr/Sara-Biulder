@@ -829,20 +829,13 @@ export function reconstructDistortedVoiceInput(
   const effectiveDomain: VoiceDomainTopic =
     domainHint !== 'general' ? domainHint : context?.lastTopic || 'general';
 
-  // Verifica se é ruído puro 0% entendível (sem letras vocálicas reais ou sequência aleatória sem nenhuma palavra conhecida)
+  // Verifica se é ruído puro 0% entendível (apenas tosse/hesitação ou sequência sem vogais reais)
   const words = lower.split(/\s+/).filter(Boolean);
   const hasRealVowelWord =
     /\b(sh{2,}|xiu)\b/i.test(lower) ||
-    words.some((w) => /[aeiouy0-9]/.test(w) && w.length >= 2);
-  const hasRecognizedSignal =
-    /(sara|ei|oi|ola|ya|sim|nao|bora|fixe|painel|builder|assistente|abre|fecha|toca|bota|mete|poe|solta|musica|som|pausa|para|continua|proxima|seguinte|passa|pula|saltar|salta|anterior|volta|adianta|avanca|recua|sobe|aumenta|desce|baixa|baralha|mistura|shuffle|loop|repete|gostei|curti|guarda|favorit|recent|canta|mudo|silenc|cala|calad|chega|stop|espera|quiet|sh{2,}|xiu|atrapalh|respond|fala|podes|pode|voltei|acabei|terminei|livre|chamada|reuniao|aula|ocupad|telefone|ligacao|alguem|oky|okay|ok|tudo|liga|ligar|acende|desliga|apaga|luz|ventoinha|porta|tomada|modo|site|app|jogo|loja|portfolio|explica|calcula|ohm|volt|ampere|watt|disjuntor|cabo|motor|cubo|esfera|lembra|anota|marca|agenda|alarme|tarefa|clima|tempo|bateria|wifi|obrigado|tchau|bazar|chefe|admin|sair|local|minha|minhas|meu|meus|pc|telemovel|celular|offline|internet|ficheiro|arquivo|documento|relatorio|apresentacao|tabela|pdf|word|excel|powerpoint|foto|fotos|imagem|imagens|video|videos|filme|gravacao|pasta|tela|cheia|marrabenta|amapiano|como|que|qual|onde|quando|quanto|porque|para|mapa|radar|rastreia|rastrea|rastrear|satelite|terreno|ruas|rua|rota|leva|gps|zona|historico|print|endereco|compartilha|\d+)/i.test(
-      lower
-    );
+    words.some((w) => /[aeiouy0-9]/.test(w) && w.length >= 1);
 
-  if (
-    !hasRealVowelWord ||
-    (!hasRecognizedSignal && words.length <= 2 && words.every((w) => w.length <= 4 && !/^(ai|ok|eu|tu)$/.test(w)))
-  ) {
+  if (!hasRealVowelWord || NOISE_OR_COUGH_ONLY_REGEX.test(lower)) {
     return {
       original,
       cleaned,
@@ -850,7 +843,7 @@ export function reconstructDistortedVoiceInput(
       wasDistorted: true,
       domainHint: effectiveDomain,
       unintelligible: true,
-      clarifierSpeech: 'Quiseste dizer tocar música, criar um site ou controlar a luz?',
+      clarifierSpeech: 'Queres falar de algum tema ou abrir alguma função?',
     };
   }
 
@@ -1149,10 +1142,9 @@ export function parseVoiceCommand(
     return { type: 'voice_level', level: 'short', raw: clean };
   }
 
-  // Microfone desligar / ligar ("SARA PARA" para o microfone imediatamente)
+  // Microfone desligar / ligar (apenas pedidos explícitos de desligar microfone; "SARA para" nunca desliga o microfone)
   if (
     /^(?:sara[,\s]+)?(?:para\s+de\s+ouvir|para\s+de\s+escutar|para\s+microfone)$/i.test(lower) ||
-    /^(?:sara[,\s]+para|para[,\s]+sara)$/i.test(lower) ||
     lower.includes('para de ouvir') ||
     lower.includes('para de escutar') ||
     lower.includes('desliga o microfone') ||
@@ -1316,9 +1308,12 @@ export function parseVoiceCommand(
     return { type: 'prev_music', raw: clean };
   }
 
-  // Repetir última resposta ou pedido de clarificação ("não percebi", "o quê", "fala de novo")
+  // Repetir última resposta ou pedido de clarificação ("não percebi", "não ouvi", "repete", "fala de novo")
   if (
-    /^(sara[,\s]+)?(repete|repete isso|podes repetir|diz outra vez|o que disseste|fala de novo|nao percebi|o que|como|ha)$/i.test(
+    /^(?:(?:ei|olha|epa|desculpa)[,\s]+)*(?:sara[,\s]+)?(?:repete(?:\s+(?:la|isso|por\s+favor))?|podes\s+repetir|pode\s+repetir|diz\s+(?:outra\s+vez|de\s+novo)|o\s+que\s+disseste|o\s+que\s+e\s+que\s+disseste|fala\s+(?:de\s+novo|outra\s+vez)|nao\s+percebi(?:\s+bem)?|nao\s+ouvi(?:\s+bem)?|nao\s+entendi(?:\s+bem)?|como\s+assim|como|o\s+que|ha)(?:[,\s]+sara)?$/i.test(
+      lower
+    ) ||
+    /\b(?:fala\s+de\s+novo|repete\s+la|repete\s+isso|nao\s+percebi|nao\s+ouvi|diz\s+outra\s+vez|podes\s+repetir)\b/i.test(
       lower
     )
   ) {
@@ -2376,6 +2371,7 @@ let lastSaraSpeechEndedAt = 0;
 let activeRecognition: any = null;
 let micShouldBeActive = false;
 let resumeMicFn: (() => void) | null = null;
+let pauseRecognitionForTtsFn: (() => void) | null = null;
 let clearActiveVoiceBufferFn: (() => void) | null = null;
 let restartAfterSpeechTimer: ReturnType<typeof setTimeout> | null = null;
 let currentSpeechSeq = 0;
@@ -2383,9 +2379,38 @@ let bargeInEpoch = 0;
 let lastBargeInAt = 0;
 let bargeInAckActive = false;
 let bargeInAckNormalized = '';
+let stopCooldownUntil = 0;
 
-const POST_TTS_SILENCE_COOLDOWN_MS = 300;
+const POST_TTS_SILENCE_COOLDOWN_MS = 800;
+const STOP_COOLDOWN_LOCK_MS = 3000;
 const MIN_VOICE_CONFIDENCE = 0.6;
+
+const BARGE_IN_STOP_VARIATIONS = [
+  'Ok, parei. Estou aqui.',
+  'Pronto, já parei. Diz-me.',
+  'Entendido, fiquei calada. O que precisas?',
+  'Ok ok, parei. Fala.',
+  'Feito, parei. Estou a ouvir.',
+  'Certo, parei por aqui. Conta-me.',
+];
+let lastStopAckIndex = -1;
+
+export function getVariedStopAckSpeech(): string {
+  let idx = Math.floor(Math.random() * BARGE_IN_STOP_VARIATIONS.length);
+  if (BARGE_IN_STOP_VARIATIONS.length > 1 && idx === lastStopAckIndex) {
+    idx = (idx + 1 + Math.floor(Math.random() * (BARGE_IN_STOP_VARIATIONS.length - 1))) % BARGE_IN_STOP_VARIATIONS.length;
+  }
+  lastStopAckIndex = idx;
+  return BARGE_IN_STOP_VARIATIONS[idx];
+}
+
+export function activateStopCooldown(durationMs = STOP_COOLDOWN_LOCK_MS): void {
+  stopCooldownUntil = Date.now() + durationMs;
+}
+
+export function isWithinStopCooldown(): boolean {
+  return Date.now() < stopCooldownUntil;
+}
 
 // Detector de Voz Humana (VAD) com Web Audio API + echoCancellation + noiseSuppression + autoGainControl: false
 let persistentMicStream: MediaStream | null = null;
@@ -2595,7 +2620,7 @@ export function isProbableSaraEcho(
   const norm = normalizeForRepeatCheck(transcript);
   if (!norm) return true;
 
-  // Durante ou logo após resposta de paragem ("Parei. O que queres?"), rejeita eco dessa frase
+  // Durante ou logo após resposta de paragem, rejeita eco dessa frase
   if (bargeInAckActive) {
     if (
       norm === bargeInAckNormalized ||
@@ -2612,7 +2637,7 @@ export function isProbableSaraEcho(
 
   const msSinceEnded = lastSaraSpeechEndedAt > 0 ? nowMs - lastSaraSpeechEndedAt : 999999;
 
-  // Janela curta de 300ms de silêncio após a Sara terminar de falar
+  // Janela de 800ms de silêncio após a Sara terminar de falar
   if (contaminatedWhileSpeaking) {
     return true;
   }
@@ -2667,39 +2692,16 @@ function normalizeAsciiPhrase(text: string): string {
     .trim();
 }
 
-/**
- * Modo BARGE-IN estrito enquanto a Sara fala:
- * O microfone fica 100% mutado para comandos normais e só aceita palavras de paragem
- * ("SARA PARA", "PARA", "CALA", "CHEGA", "STOP") para parar o TTS em < 200ms.
- */
-function parseBargeInStopOnly(
-  rawInput: string,
-  utteranceNorm = ''
-): VoiceCommandAction | null {
-  const lower = normalizeAsciiPhrase(rawInput);
-  if (!lower) return null;
-
-  const stopPhraseMatch = lower.match(
-    /(?:^|\b)((?:sara\s+)?(?:para(?:\s+de\s+falar)?|parar\s+de\s+falar|cala(?:\s+te|\s+a\s+boca)?|calate|chega|stop|sara\s+cara|sara\s+sala))(?:\s+sara)?$/i
-  );
-  if (!stopPhraseMatch) return null;
-
-  const matchedToken = normalizeForRepeatCheck(stopPhraseMatch[1]);
-  const words = lower.split(/\s+/).filter(Boolean);
-  if (words.length > 5) return null;
-
-  if (utteranceNorm && matchedToken.length >= 5 && utteranceNorm.includes(matchedToken)) {
-    return null;
-  }
-
-  return { type: 'interrupt_sara', raw: rawInput };
-}
 
 function parseInterruptionIntent(
   rawInput: string,
   isSpeaking = false,
   utteranceNorm = ''
 ): VoiceCommandAction | null {
+  if (isWithinStopCooldown() || isSpeaking || isSaraActivelySpeaking()) {
+    return null;
+  }
+
   const lower = normalizeAsciiPhrase(rawInput);
   if (!lower) return null;
 
@@ -2710,18 +2712,22 @@ function parseInterruptionIntent(
     return null;
   }
 
-  if (/^(?:sara[,\s]+para|para[,\s]+sara)$/i.test(lower)) {
+  // Comandos diretos e sinónimos flexíveis ("cala", "para lá", "chega", "podes parar", "espera aí", "calma", etc.)
+  if (
+    /^(?:(?:ok|oky|okay|ei|olha|epa)[,\s]+)*(?:sara[,\s]+)?(?:para(?:\s+la)?|cala(?:\s+te)?|calate|chega|calma(?:\s+ai)?|podes?\s+parar|espera(?:\s+ai)?|stop)(?:[,\s]+sara)?$/i.test(
+      lower
+    )
+  ) {
     return { type: 'interrupt_sara', raw: rawInput };
   }
 
-  // Frases de interrupção imediata (Barge-In): "SARA PARA", "PARA", "CALA", "CHEGA", "STOP"
   const explicitMatch = lower.match(
-    /\b(sara\s+para\s+de\s+falar|para\s+de\s+falar\s+sara|para\s+de\s+falar|parar\s+de\s+falar|deixa\s+de\s+falar|chega\s+de\s+falar|sara\s+para(?:\s+agora|\s+ja)?|para\s+sara|sara\s+cala(?:\s+te)?|cala\s+sara|sara\s+cara|sara\s+sala|cala\s+a\s+boca|cala[-\s]?te|calate|sara\s+espera|espera\s+sara|sara\s+ouve(?:\s+me)?|ouve\s+sara|sara\s+escuta(?:\s+me)?|escuta\s+sara|podes\s+parar|pode\s+parar|para\s+agora|para\s+ja|para\s+com\s+isso|espera\s+ai|espera\s+um\s+pouco|ouve\s+me|escuta\s+me|sara\s+stop|sara\s+chega|ja\s+chega)\b/i
+    /\b(sara\s+para\s+de\s+falar|para\s+de\s+falar\s+sara|para\s+de\s+falar|parar\s+de\s+falar|deixa\s+de\s+falar|chega\s+de\s+falar|sara\s+para(?:\s+la|\s+agora|\s+ja)?|para\s+la(?:\s+sara)?|para\s+sara|sara\s+cala(?:\s+te)?|cala\s+sara|cala\s+a\s+boca|cala[-\s]?te|calate|sara\s+espera|espera\s+sara|sara\s+ouve(?:\s+me)?|ouve\s+sara|sara\s+escuta(?:\s+me)?|escuta\s+sara|podes\s+parar|pode\s+parar|para\s+agora|para\s+ja|para\s+com\s+isso|espera\s+ai|espera\s+um\s+pouco|calma\s+ai|sara\s+calma|ouve\s+me|escuta\s+me|sara\s+stop|sara\s+chega|ja\s+chega)\b/i
   );
 
   if (explicitMatch) {
     const matchedNorm = normalizeForRepeatCheck(explicitMatch[0]);
-    if (isSpeaking && utteranceNorm && matchedNorm && utteranceNorm.includes(matchedNorm)) {
+    if (utteranceNorm && matchedNorm && utteranceNorm.includes(matchedNorm)) {
       return null;
     }
 
@@ -2731,7 +2737,7 @@ function parseInterruptionIntent(
     if (idx >= 0) {
       const afterNorm = lower
         .slice(idx + explicitMatch[0].length)
-        .replace(/^(?:sara|por\s+favor|agora|ja|ai|um\s+pouco|de\s+falar|com\s+isso)\b\s*/gi, '')
+        .replace(/^(?:sara|por\s+favor|agora|ja|ai|la|um\s+pouco|de\s+falar|com\s+isso)\b\s*/gi, '')
         .trim();
       if (afterNorm.length >= 3) {
         const rawWords = rawInput.trim().split(/\s+/);
@@ -2745,19 +2751,6 @@ function parseInterruptionIntent(
       trailingCommand: trailing || undefined,
       raw: rawInput,
     };
-  }
-
-  // Palavras curtas isoladas enquanto a Sara fala ("para", "cala", "chega", "stop")
-  if (isSpeaking) {
-    const shortMatch = lower.match(
-      /(?:^|\s)(?:sara\s+)?(cala|para|stop|chega)(?:\s+(?:sara|por\s+favor|agora|ja|ai))?$/i
-    );
-    if (shortMatch) {
-      const token = normalizeForRepeatCheck(shortMatch[1]);
-      if (!utteranceNorm || !utteranceNorm.includes(token)) {
-        return { type: 'interrupt_sara', raw: rawInput };
-      }
-    }
   }
 
   return null;
@@ -2863,15 +2856,14 @@ export function detectBargeInCommand(
 ): VoiceCommandAction | null {
   const raw = String(transcript || '').trim();
   if (!raw) return null;
-  const norm = normalizeForRepeatCheck(raw);
   const speakingNow = isSaraActivelySpeaking();
 
-  // Enquanto a Sara fala, só aceita palavras estritas de paragem
+  // Nunca aceita comandos de voz vindos enquanto o TTS está ativo (microfone está surdo à própria voz)
   if (speakingNow) {
-    return parseBargeInStopOnly(raw, currentUtteranceNormalized);
+    return null;
   }
 
-  // Verifica primeiro comandos de modo chamada ou silêncio persistente explícito
+  // Verifica primeiro comandos de modo chamada, silêncio persistente ou retomada
   const cmd = parseVoiceCommand(raw, {
     ...context,
     isSilenced: saraSilenciada || context?.isSilenced,
@@ -2881,15 +2873,21 @@ export function detectBargeInCommand(
   if (
     cmd.type === 'enter_call_mode' ||
     cmd.type === 'silence_sara' ||
-    cmd.type === 'stop_all_and_pause' ||
-    cmd.type === 'pause_current_activity' ||
     cmd.type === 'unsilence_sara' ||
     cmd.type === 'stop_listening'
   ) {
     return cmd;
   }
 
-  // Verifica interrupção imediata ("SARA para", "SARA cala", "SARA espera", "SARA ouve", "SARA para de falar")
+  // Trava de 3s após parar: ignora qualquer "para" / pause automático nessa janela
+  if (isWithinStopCooldown()) {
+    return null;
+  }
+
+  if (cmd.type === 'stop_all_and_pause' || cmd.type === 'pause_current_activity') {
+    return cmd;
+  }
+
   const interruptCmd = parseInterruptionIntent(raw, speakingNow, currentUtteranceNormalized);
   if (interruptCmd) {
     return interruptCmd;
@@ -2899,6 +2897,8 @@ export function detectBargeInCommand(
 }
 
 export function interruptSaraForBargeIn(): void {
+  activateStopCooldown(STOP_COOLDOWN_LOCK_MS);
+  pauseRecognitionForTtsFn?.();
   // Cancela síntese de voz imediatamente (< 200ms) antes de qualquer atualização de estado
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     try {
@@ -3192,21 +3192,23 @@ function isLooseOrNoiseUtterance(
   const isImageAction = Boolean(extractImageGenRequest(cleanedText) || parseImageVoiceCommand(cleanedText));
   const isConcreteCommand = cmd.type !== 'prompt' && cmd.type !== 'unintelligible_clarify';
 
-  // Palavras soltas sem comando nem contexto (ignora murmúrios isolados de 1 palavra, mas aceita "SARA" e comandos concretos)
-  if (words.length < 2) {
-    if (context?.hasPendingConfirm && (cmd.type === 'confirm_pending' || cmd.type === 'cancel_pending')) {
-      return false;
-    }
-    if (words[0] === 'sara' || isConcreteCommand || isImageAction) {
-      return false;
-    }
-    if (domain !== 'general' && (confidence === 0 || confidence >= 0.72)) {
-      return false;
-    }
-    return true;
+  // Frases naturais de 2+ palavras (sem precisar começar por "SARA") são sempre aceites
+  if (words.length >= 2) {
+    return false;
   }
 
-  return false;
+  // Palavras curtas úteis de 1 palavra (comandos, saudações, confirmações, sinónimos de parar/repetir)
+  if (context?.hasPendingConfirm && (cmd.type === 'confirm_pending' || cmd.type === 'cancel_pending')) {
+    return false;
+  }
+  if (words[0] === 'sara' || isConcreteCommand || isImageAction || domain !== 'general') {
+    return false;
+  }
+  if (/^(ola|oi|obrigado|obrigada|valeu|tchau|fixe|top|bora|ya|sim|nao|cala|para|chega|calma|espera|repete|continua|como|onde|quem|porque|ajuda|fome|agua)$/i.test(words[0])) {
+    return false;
+  }
+
+  return true;
 }
 
 interface HypothesisSelectionOutcome {
@@ -3230,7 +3232,7 @@ function selectBestVoiceHypothesis(
     const isImageCmd = Boolean(extractImageGenRequest(cleaned) || parseImageVoiceCommand(cleaned));
     const isConcreteAction = cmd.type !== 'prompt' && cmd.type !== 'unintelligible_clarify';
     const rawConf = typeof cand.confidence === 'number' && cand.confidence > 0 ? cand.confidence : 0;
-    const priorConf = rawConf > 0 ? rawConf : Math.max(0.42, 0.78 - rankIdx * 0.08);
+    const priorConf = rawConf > 0 ? rawConf : Math.max(0.45, 0.8 - rankIdx * 0.08);
     const vocabMatches = cleaned.match(new RegExp(SARA_VOCAB_REGEX.source, 'gi'))?.length || 0;
     const normWords = normalizeAsciiPhrase(cleaned).split(/\s+/).filter(Boolean);
 
@@ -3238,7 +3240,7 @@ function selectBestVoiceHypothesis(
     if (isConcreteAction || isImageCmd) score += 0.48;
     if (domain !== 'general') score += 0.28;
     score += Math.min(0.32, vocabMatches * 0.14);
-    if (normWords.length >= 3) score += 0.08;
+    if (normWords.length >= 2) score += 0.12;
     if (recon.unintelligible) score -= 0.55;
     if (isLooseOrNoiseUtterance(cleaned, cmd, rawConf, domain, context)) score -= 0.75;
 
@@ -3261,11 +3263,11 @@ function selectBestVoiceHypothesis(
   const best = evaluated[0];
   if (!best) return { decision: 'ignore' };
 
-  // Se todas as hipóteses forem ruído, confiança < 0.60 ou tosse, ignora em silêncio
+  // Se todas as hipóteses forem ruído puro, confiança < 0.60 ou tosse, ignora em silêncio
   if (evaluated.every((e) => e.looseOrNoise || e.recon.unintelligible)) {
     const bestWords = normalizeAsciiPhrase(best.cleaned).split(/\s+/).filter(Boolean);
     if (
-      (bestWords.length < 2 && !best.isConcreteAction && !best.isImageCmd && bestWords[0] !== 'sara') ||
+      bestWords.length < 2 ||
       (best.rawConf > 0 && best.rawConf < MIN_VOICE_CONFIDENCE) ||
       NOISE_OR_COUGH_ONLY_REGEX.test(normalizeAsciiPhrase(best.cleaned))
     ) {
@@ -3274,16 +3276,19 @@ function selectBestVoiceHypothesis(
     const labels = Array.from(
       new Set(evaluated.map((e) => e.label).filter((lbl): lbl is string => Boolean(lbl)))
     ).slice(0, 2);
-    const clarifier =
-      labels.length >= 2
-        ? `Quiseste dizer ${labels[0]} ou ${labels[1]}?`
-        : labels.length === 1
-        ? `Quiseste dizer ${labels[0]}?`
-        : 'Quiseste dizer...? Podes repetir?';
-    return { decision: 'clarify', clarifierSpeech: clarifier };
+    if (labels.length >= 2) {
+      return {
+        decision: 'clarify',
+        clarifierSpeech: `Queres dizer ${labels[0]} ou ${labels[1]}?`,
+      };
+    }
+    return {
+      decision: 'execute',
+      transcript: best.cleaned,
+    };
   }
 
-  // Se houver dúvida relevante (confiança baixa sem comando claro OU empate próximo entre 2 comandos diferentes)
+  // Se houver empate próximo entre 2 comandos diferentes, pergunta naturalmente "Queres dizer X ou Y?"
   const second = evaluated[1];
   const hasCloseCommandConflict =
     Boolean(second) &&
@@ -3291,19 +3296,19 @@ function selectBestVoiceHypothesis(
     best.isConcreteAction &&
     second.cmd.type !== best.cmd.type &&
     best.score - second.score < 0.1 &&
-    (best.rawConf > 0 && best.rawConf < 0.9);
+    best.rawConf > 0 &&
+    best.rawConf < 0.85;
 
   if (hasCloseCommandConflict) {
     const labels = Array.from(
       new Set(evaluated.map((e) => e.label).filter((lbl): lbl is string => Boolean(lbl)))
     ).slice(0, 2);
-    const clarifier =
-      labels.length >= 2
-        ? `Quiseste dizer ${labels[0]} ou ${labels[1]}?`
-        : labels.length === 1
-        ? `Quiseste dizer ${labels[0]}?`
-        : 'Quiseste dizer...? Podes repetir?';
-    return { decision: 'clarify', clarifierSpeech: clarifier };
+    if (labels.length >= 2) {
+      return {
+        decision: 'clarify',
+        clarifierSpeech: `Queres dizer ${labels[0]} ou ${labels[1]}?`,
+      };
+    }
   }
 
   return {
@@ -3331,11 +3336,10 @@ export function startContinuousVoiceRecognition(options: {
   micShouldBeActive = true;
   void startHumanVoiceVad();
   let manuallyStopped = false;
+  let isTtsRecognitionOff = isSaraActivelySpeaking();
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
   let silenceFlushTimer: ReturnType<typeof setTimeout> | null = null;
-  let consecutiveErrors = 0;
 
-  let lastBargeInHandled: { key: string; ts: number } | null = null;
   let bufferedSegments: Array<VoiceHypothesisCandidate[]> = [];
 
   const clearSentenceBuffer = () => {
@@ -3384,7 +3388,7 @@ export function startContinuousVoiceRecognition(options: {
       clearTimeout(silenceFlushTimer);
       silenceFlushTimer = null;
     }
-    if (manuallyStopped || !options.shouldKeepListening() || isSaraActivelySpeaking()) {
+    if (manuallyStopped || isTtsRecognitionOff || !options.shouldKeepListening() || isSaraActivelySpeaking()) {
       bufferedSegments = [];
       return;
     }
@@ -3416,12 +3420,14 @@ export function startContinuousVoiceRecognition(options: {
     }
   };
 
-  const scheduleRestart = (delayMs = 50) => {
-    if (manuallyStopped || !options.shouldKeepListening()) return;
+  const scheduleRestart = (delayMs = 500) => {
+    if (manuallyStopped || isTtsRecognitionOff || isSaraActivelySpeaking() || !options.shouldKeepListening()) return;
     if (restartTimer) clearTimeout(restartTimer);
     restartTimer = setTimeout(() => {
       restartTimer = null;
-      startSession();
+      if (!manuallyStopped && !isTtsRecognitionOff && !isSaraActivelySpeaking()) {
+        startSession();
+      }
     }, delayMs);
   };
 
@@ -3429,6 +3435,11 @@ export function startContinuousVoiceRecognition(options: {
     if (manuallyStopped || !options.shouldKeepListening()) {
       micShouldBeActive = false;
       options.onEnd();
+      return;
+    }
+
+    // Enquanto o TTS toca, o reconhecimento permanece 100% desligado
+    if (isTtsRecognitionOff || isSaraActivelySpeaking()) {
       return;
     }
 
@@ -3441,40 +3452,32 @@ export function startContinuousVoiceRecognition(options: {
     activeRecognition = recognition;
     recognition.lang = 'pt-PT';
     recognition.continuous = true;
-    // interimResults=true permite detetar "PARA/CALA/CHEGA/STOP" em < 200ms durante TTS; comandos normais só usam isFinal
-    recognition.interimResults = true;
+    recognition.interimResults = false;
     recognition.maxAlternatives = 5;
 
     const processedFinalIndices = new Set<number>();
     let sessionBargeEpoch = bargeInEpoch;
 
-    const applySynchronousBargeLock = (trailingCmd?: string) => {
-      clearSentenceBuffer();
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    recognition.onstart = () => {
+      if (isTtsRecognitionOff || isSaraActivelySpeaking() || activeRecognition !== recognition) {
         try {
-          window.speechSynthesis.cancel();
+          recognition.abort?.();
         } catch {
           // ignore
         }
+        return;
       }
-
-      interruptSaraForBargeIn();
-      sessionBargeEpoch = bargeInEpoch;
-
-      if (options.onBargeInStop) {
-        options.onBargeInStop(trailingCmd);
-      } else {
-        options.onResult('Sara, para');
-      }
-    };
-
-    recognition.onstart = () => {
-      consecutiveErrors = 0;
       broadcastVoiceBusEvent({ type: 'mic_status', listening: true });
     };
 
     recognition.onresult = (event: any) => {
-      consecutiveErrors = 0;
+      if (isTtsRecognitionOff || isSaraActivelySpeaking() || activeRecognition !== recognition) {
+        clearSentenceBuffer();
+        for (let k = 0; k < event.results.length; k++) {
+          if (event.results[k]?.isFinal) processedFinalIndices.add(k);
+        }
+        return;
+      }
 
       if (sessionBargeEpoch !== bargeInEpoch) {
         sessionBargeEpoch = bargeInEpoch;
@@ -3485,42 +3488,10 @@ export function startContinuousVoiceRecognition(options: {
         return;
       }
 
-      const speakingNow = isSaraActivelySpeaking();
       const withinPostSpeechSilence =
-        !bargeInAckActive &&
         lastSaraSpeechEndedAt > 0 &&
         Date.now() - lastSaraSpeechEndedAt < POST_TTS_SILENCE_COOLDOWN_MS;
 
-      // 1. DURANTE O TTS: pausa comandos normais e aceita apenas palavras de paragem ("SARA PARA", "PARA", "CALA", "CHEGA", "STOP")
-      if (speakingNow && !bargeInAckActive) {
-        clearSentenceBuffer();
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const res = event.results[i];
-          if (res?.isFinal) processedFinalIndices.add(i);
-          const altCount = Math.min(5, res?.length || 0);
-          for (let altIdx = 0; altIdx < altCount; altIdx++) {
-            const cand = (res?.[altIdx]?.transcript || '').trim();
-            if (!cand) continue;
-            const stopHit = parseBargeInStopOnly(cand, currentUtteranceNormalized);
-            if (stopHit) {
-              const key = `stop:${normalizeForRepeatCheck(cand)}`;
-              const nowTs = Date.now();
-              if (lastBargeInHandled && lastBargeInHandled.key === key && nowTs - lastBargeInHandled.ts < 800) {
-                return;
-              }
-              lastBargeInHandled = { key, ts: nowTs };
-              for (let k = 0; k < event.results.length; k++) {
-                if (event.results[k]?.isFinal) processedFinalIndices.add(k);
-              }
-              applySynchronousBargeLock();
-              return;
-            }
-          }
-        }
-        return;
-      }
-
-      // 2. JANELA CURTA DE 300ms APÓS O TTS: ignora apenas finais dessa janela sem envenenar resultados provisórios
       if (withinPostSpeechSilence) {
         clearSentenceBuffer();
         for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -3533,7 +3504,6 @@ export function startContinuousVoiceRecognition(options: {
 
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const res = event.results[i];
-        // Comandos normais só avançam depois do resultado final (interim serve apenas para barge-in imediato)
         if (!res?.isFinal || processedFinalIndices.has(i)) continue;
         processedFinalIndices.add(i);
 
@@ -3589,32 +3559,38 @@ export function startContinuousVoiceRecognition(options: {
         return;
       }
 
-      // Reinício automático garantido em 500ms em caso de erro ou silêncio
-      if (errCode !== 'no-speech' && errCode !== 'aborted') {
-        consecutiveErrors += 1;
-      }
       if (activeRecognition === recognition) {
         activeRecognition = null;
       }
-      if (!manuallyStopped && options.shouldKeepListening()) {
+      if (!manuallyStopped && !isTtsRecognitionOff && !isSaraActivelySpeaking() && options.shouldKeepListening()) {
         scheduleRestart(500);
       }
     };
 
     recognition.onend = () => {
-      if (bufferedSegments.length > 0 && !manuallyStopped && options.shouldKeepListening()) {
+      if (
+        bufferedSegments.length > 0 &&
+        !manuallyStopped &&
+        !isTtsRecognitionOff &&
+        !isSaraActivelySpeaking() &&
+        options.shouldKeepListening()
+      ) {
         if (silenceFlushTimer) {
           clearTimeout(silenceFlushTimer);
         }
         silenceFlushTimer = setTimeout(() => {
           flushBufferedSentence();
         }, VOICE_SENTENCE_SILENCE_MS);
+      } else if (isTtsRecognitionOff || isSaraActivelySpeaking()) {
+        clearSentenceBuffer();
       }
       if (activeRecognition === recognition) {
         activeRecognition = null;
       }
       if (!manuallyStopped && options.shouldKeepListening()) {
-        scheduleRestart(500);
+        if (!isTtsRecognitionOff && !isSaraActivelySpeaking()) {
+          scheduleRestart(500);
+        }
       } else {
         clearSentenceBuffer();
         micShouldBeActive = false;
@@ -3636,14 +3612,40 @@ export function startContinuousVoiceRecognition(options: {
         options.onEnd();
         return;
       }
-      if (!manuallyStopped && options.shouldKeepListening()) {
+      if (!manuallyStopped && !isTtsRecognitionOff && !isSaraActivelySpeaking() && options.shouldKeepListening()) {
         scheduleRestart(500);
+      }
+    }
+  };
+
+  pauseRecognitionForTtsFn = () => {
+    isTtsRecognitionOff = true;
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+    clearSentenceBuffer();
+    const rec = activeRecognition;
+    activeRecognition = null;
+    if (rec) {
+      try {
+        rec.onstart = null;
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+        rec.abort?.();
+        rec.stop?.();
+      } catch {
+        // ignore
       }
     }
   };
 
   resumeMicFn = () => {
     if (manuallyStopped || !options.shouldKeepListening()) return;
+    if (isSaraActivelySpeaking()) return;
+    isTtsRecognitionOff = false;
+    clearSentenceBuffer();
     micShouldBeActive = true;
     broadcastVoiceBusEvent({ type: 'mic_status', listening: true });
     if (!activeRecognition) {
@@ -3651,15 +3653,19 @@ export function startContinuousVoiceRecognition(options: {
     }
   };
 
-  // Watchdog contínuo: garante que o microfone nunca fica parado
+  // Watchdog contínuo: garante que o microfone volta sempre 800ms depois da fala e nunca fica preso
   const watchdogId = setInterval(() => {
+    if (manuallyStopped || !micShouldBeActive || !options.shouldKeepListening()) return;
     if (
-      !manuallyStopped &&
-      micShouldBeActive &&
-      options.shouldKeepListening() &&
-      !activeRecognition &&
-      !restartTimer
+      isTtsRecognitionOff &&
+      !isSaraActivelySpeaking() &&
+      !restartAfterSpeechTimer &&
+      (lastSaraSpeechEndedAt === 0 || Date.now() - lastSaraSpeechEndedAt >= POST_TTS_SILENCE_COOLDOWN_MS)
     ) {
+      isTtsRecognitionOff = false;
+      clearSentenceBuffer();
+    }
+    if (!isTtsRecognitionOff && !isSaraActivelySpeaking() && !activeRecognition && !restartTimer) {
       startSession();
     }
   }, 500);
@@ -3669,6 +3675,8 @@ export function startContinuousVoiceRecognition(options: {
       typeof document !== 'undefined' &&
       document.visibilityState === 'visible' &&
       !manuallyStopped &&
+      !isTtsRecognitionOff &&
+      !isSaraActivelySpeaking() &&
       micShouldBeActive &&
       options.shouldKeepListening() &&
       !activeRecognition
@@ -3684,11 +3692,15 @@ export function startContinuousVoiceRecognition(options: {
     window.addEventListener('focus', handleTabWake);
   }
 
-  startSession();
+  if (!isTtsRecognitionOff) {
+    startSession();
+  }
 
   return () => {
     manuallyStopped = true;
     micShouldBeActive = false;
+    isTtsRecognitionOff = true;
+    pauseRecognitionForTtsFn = null;
     resumeMicFn = null;
     clearActiveVoiceBufferFn = null;
     clearSentenceBuffer();
@@ -3770,6 +3782,7 @@ export function setSpeakingStateListener(cb: ((speaking: boolean) => void) | nul
 const queuedSpeeches: Array<{ text: string; enabled: boolean; options?: SpeakOptions }> = [];
 
 export function stopSaraSpeech(): void {
+  pauseRecognitionForTtsFn?.();
   currentSpeechSeq += 1;
   queuedSpeeches.length = 0;
   clearActiveVoiceBufferFn?.();
@@ -3795,7 +3808,7 @@ export function stopSaraSpeech(): void {
   if (micShouldBeActive && resumeMicFn) {
     restartAfterSpeechTimer = setTimeout(() => {
       restartAfterSpeechTimer = null;
-      if (micShouldBeActive) {
+      if (micShouldBeActive && !isSaraActivelySpeaking()) {
         resumeMicFn?.();
       }
     }, POST_TTS_SILENCE_COOLDOWN_MS);
@@ -3803,18 +3816,18 @@ export function stopSaraSpeech(): void {
 }
 
 /**
- * Interrupção imediata (Barge-In): cala a Sara no instante (< 200ms)
- * limpando fila e buffers para responder "Parei. O que queres?".
+ * Interrupção imediata (Barge-In): cala a Sara no instante (< 200ms),
+ * ativa a trava de 3s, limpa todo o áudio antigo e religa o microfone após 800ms.
  */
 export function interruptSaraAndListen(): void {
   interruptSaraForBargeIn();
   if (micShouldBeActive && resumeMicFn) {
     restartAfterSpeechTimer = setTimeout(() => {
       restartAfterSpeechTimer = null;
-      if (micShouldBeActive) {
+      if (micShouldBeActive && !isSaraActivelySpeaking()) {
         resumeMicFn?.();
       }
-    }, 35);
+    }, POST_TTS_SILENCE_COOLDOWN_MS);
   }
 }
 
@@ -3946,16 +3959,16 @@ export function speakAsSara(
       return;
     }
 
-    // Não repetir a mesma informação já dita recentemente por voz
+    // Permite responder sempre naturalmente sem substituir por frases robóticas repetidas
     const normKey = normalizeForRepeatCheck(spoken);
-    if (!opts.forceSpeak && normKey && recentSpokenNormalized.includes(normKey)) {
-      if (opts.isQuestionReply) {
-        spoken = 'Já te passei esse detalhe há pouco — está tudo no painel.';
-      } else {
+    if (!opts.forceSpeak && !opts.isQuestionReply && normKey && recentSpokenNormalized.includes(normKey)) {
+      // Ainda regista no log mas evita apenas repetir mensagens de sistema exatamente idênticas em sequência imediata
+      if (recentSpokenNormalized[recentSpokenNormalized.length - 1] === normKey) {
         opts.onFinished?.();
         return;
       }
-    } else if (normKey) {
+    }
+    if (normKey) {
       recentSpokenNormalized.push(normKey);
       if (recentSpokenNormalized.length > 8) recentSpokenNormalized.shift();
     }
@@ -3975,7 +3988,8 @@ export function speakAsSara(
       return;
     }
 
-    // Limpa o buffer de áudio sempre que a Sara começa a falar e mantém barge-in estrito ativo
+    // Desliga completamente o reconhecimento de voz durante o TTS e limpa áudio antigo
+    pauseRecognitionForTtsFn?.();
     clearActiveVoiceBufferFn?.();
     const mySpeechSeq = ++currentSpeechSeq;
     const isAckSpeech = Boolean(opts.isBargeInAck);
@@ -4127,9 +4141,11 @@ export function speakAsSara(
     speakingStateListener?.(false);
     opts.onFinished?.();
     if (micShouldBeActive && resumeMicFn) {
-      setTimeout(() => {
+      if (restartAfterSpeechTimer) clearTimeout(restartAfterSpeechTimer);
+      restartAfterSpeechTimer = setTimeout(() => {
+        restartAfterSpeechTimer = null;
         if (!saraEstaAFalar && micShouldBeActive) resumeMicFn?.();
-      }, 250);
+      }, POST_TTS_SILENCE_COOLDOWN_MS);
     }
   }
 }
@@ -4278,7 +4294,8 @@ function speakNextReadingChunk(mySeq: number): void {
   const chunk = readingChunks[readingCursor];
   emitReadingStatus();
 
-  // Limpa buffer de áudio e mantém barge-in estrito ativo durante a leitura
+  // Desliga reconhecimento de voz e limpa buffer durante a leitura
+  pauseRecognitionForTtsFn?.();
   saraEstaAFalar = true;
   currentUtteranceNormalized = normalizeForRepeatCheck(chunk);
   recordSpokenEcho(chunk);
@@ -4400,6 +4417,7 @@ export function speakPronunciation(text: string, lang: 'pt-PT' | 'en-US' | 'fr-F
   if (saraSilenciada || saraModoChamada) return;
   if (typeof window === 'undefined' || !('speechSynthesis' in window) || !text.trim()) return;
   try {
+    pauseRecognitionForTtsFn?.();
     clearActiveVoiceBufferFn?.();
     window.speechSynthesis.cancel();
     const trimmed = text.trim();
@@ -4421,6 +4439,13 @@ export function speakPronunciation(text: string, lang: 'pt-PT' | 'en-US' | 'fr-F
       saraEstaAFalar = false;
       currentUtteranceNormalized = '';
       speakingStateListener?.(false);
+      if (micShouldBeActive && resumeMicFn) {
+        if (restartAfterSpeechTimer) clearTimeout(restartAfterSpeechTimer);
+        restartAfterSpeechTimer = setTimeout(() => {
+          restartAfterSpeechTimer = null;
+          if (!saraEstaAFalar && micShouldBeActive) resumeMicFn?.();
+        }, POST_TTS_SILENCE_COOLDOWN_MS);
+      }
     };
     utter.onstart = () => {
       if (mySeq === currentSpeechSeq) speakingStateListener?.(true);
@@ -4432,6 +4457,11 @@ export function speakPronunciation(text: string, lang: 'pt-PT' | 'en-US' | 'fr-F
     clearActiveVoiceBufferFn?.();
     lastSaraSpeechEndedAt = Date.now();
     saraEstaAFalar = false;
+    if (micShouldBeActive && resumeMicFn) {
+      setTimeout(() => {
+        if (!saraEstaAFalar && micShouldBeActive) resumeMicFn?.();
+      }, POST_TTS_SILENCE_COOLDOWN_MS);
+    }
   }
 }
 

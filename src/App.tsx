@@ -181,6 +181,7 @@ import {
   getModeSwitchSpeech,
   getPlatformCommandSpeech,
   getSpokenBuildRecap,
+  getVariedStopAckSpeech,
   getVoiceReadingStatus,
   getWorkspaceSwitchSpeech,
   inferDomainFromText,
@@ -190,6 +191,7 @@ import {
   isSaraActivelySpeaking,
   isSaraCallMode as isSaraCallModeFlag,
   isSaraSilenced as isSaraSilencedFlag,
+  isWithinStopCooldown,
   parseVoiceCommand,
   pauseVoiceReading,
   playCompletionChime,
@@ -3437,7 +3439,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (speakAck) {
-        speakAsSara('Parei. O que queres?', voiceEnabledRef.current, {
+        speakAsSara(getVariedStopAckSpeech(), voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
           bypassSilence: true,
@@ -3833,6 +3835,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'interrupt_sara') {
+        if (isWithinStopCooldown()) {
+          return true;
+        }
         handleBargeInAndListen(true, cmd.trailingCommand);
         return true;
       }
@@ -6705,6 +6710,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         });
         if (immediateBarge) {
           if (immediateBarge.type === 'interrupt_sara') {
+            if (isWithinStopCooldown()) {
+              return;
+            }
             handleBargeInAndListen(true, immediateBarge.trailingCommand);
             return;
           }

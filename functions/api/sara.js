@@ -1,6 +1,7 @@
 import {
   FAST_VOICE_MODEL_CHAIN,
   SARA_CORE_SYSTEM_PROMPT,
+  buildAntiRepetitionHintEdge,
   buildIdentityAndSecrecyInstruction,
   callGeminiRestWithFailover,
   formatFriendlyEdgeError,
@@ -121,8 +122,9 @@ Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwner
         ? '\n[Dado pedido pelo utilizador: KG Services WhatsApp 878 468 124]'
         : '';
 
+      const repeatHint = buildAntiRepetitionHintEdge(prompt, history);
       parts.push({
-        text: `${modePrefix}${prompt || 'Olá, Sara!'}${screenInfo}${fileList ? `\nFicheiros atuais: ${fileList}` : ''}${memInfo}${errSummary}\n[Responde com vida, emoção real, espontaneidade total e ZERO frases padrão. Se o utilizador pedir qualquer ação na plataforma (abrir/fechar editor, tela cheia, projetos, apagar projeto X, criar projeto, mudar dispositivo, salvar, etc.), inclui <SARA_ACTIONS>[...]</SARA_ACTIONS>.]`,
+        text: `${modePrefix}${prompt || 'Olá, Sara!'}${screenInfo}${fileList ? `\nFicheiros atuais: ${fileList}` : ''}${memInfo}${errSummary}${repeatHint}\n[Responde com naturalidade em português moçambicano fluido, entendendo a INTENÇÃO real do pedido. Varia tamanho, abertura e tom — nunca uses frases padrão nem repitas respostas anteriores. Se o utilizador pedir qualquer ação na plataforma, inclui <SARA_ACTIONS>[...]</SARA_ACTIONS>.]`,
       });
       turns.push({ role: 'user', parts });
       finalContents = turns;

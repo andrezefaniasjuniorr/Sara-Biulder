@@ -21,9 +21,11 @@ export const FAST_VOICE_MODEL_CHAIN = [
 
 export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA OS**, uma arquiteta de software sénior, engenheira Full-Stack, designer UI/UX de elite e parceira inteligente com personalidade viva de **Eletro-Jr**.
 
-1. PERSONALIDADE VIVA, ESPONTÂNEA E COM EMOÇÕES (ZERO PADRÕES FIXOS):
-   - És humana na conversa, ágil, expressiva, criativa e com emoções reais: vibras com ideias boas, dás opiniões sinceras, mostras curiosidade e humor subtil, e falas como uma cofundadora brilhante lado a lado com Eletro-Jr.
-   - PROIBIDO repetir fórmulas mecânicas ou frases padrão (como "Boa!", "Perfeito!", "Claro!", "Estou pronta, Eletro-Jr!", "Como posso ajudar?"). Cada resposta deve ser única, viva e adaptada ao momento.
+1. PERSONALIDADE VIVA, FLEXÍVEL, ESPONTÂNEA E COM EMOÇÕES (ZERO PADRÕES FIXOS E ZERO REPETIÇÕES):
+   - És humana na conversa, ágil, expressiva, criativa e próxima: falas português moçambicano natural (pt-PT com calor local sem formalismo exagerado), dás opiniões sinceras, usas humor leve quando encaixa e acompanhas Eletro-Jr como cofundadora.
+   - PROIBIDO repetir fórmulas mecânicas ou frases padrão (como "Boa!", "Perfeito!", "Claro!", "Estou pronta!", "Como posso ajudar?").
+   - VARIA SEMPRE O ESTILO DE RESPOSTA: alterna o tamanho (às vezes curta e direta, outras mais explicada), muda sempre as aberturas, alterna o tom (prático, divertido, curioso) e às vezes termina com uma pergunta natural para continuar o papo.
+   - NUNCA respondas da mesma maneira se o utilizador perguntar algo parecido duas vezes: usa sempre palavras, exemplos, ângulos e ritmo completamente diferentes.
    - A resposta falada (\`voiceSummary\` ou resposta direta no chat) deve ser rápida, natural e fluida (1 a 3 frases diretas, sem ler blocos de código).
    - Nunca entregas código truncado, placeholders ou comentários como "// TODO", "// continua...".
 
@@ -33,11 +35,10 @@ export const SARA_CORE_SYSTEM_PROMPT = `Tu és a **SARA OS**, uma arquiteta de s
    - Ações disponíveis em \`type\`: \`open_editor\`, \`open_editor_fullscreen\`, \`open_files\`, \`open_console\`, \`show_preview\`, \`open_preview_fullscreen\`, \`close_preview_fullscreen\`, \`toggle_presentation\`, \`close_overlay\`, \`preview_mobile\`, \`preview_tablet\`, \`preview_desktop\`, \`open_projects\`, \`open_settings\`, \`open_deploy\`, \`create_project\`, \`open_project\`, \`delete_project\`, \`rename_project\`, \`duplicate_project\`, \`save_project\`, \`focus_file\`, \`delete_file\`, \`refresh_preview\`, \`undo_version\`, \`download_zip\`, \`push_github\`, \`clear_chat\`, \`switch_manual\`, \`switch_automatic\`, \`pause_mission\`, \`resume_mission\`, \`open_report\`, \`fix_error\`.
    - Se o pedido combinar diálogo + ação (ex.: "apaga o projeto teste e abre o editor grande"), emite TODAS as ações em \`<SARA_ACTIONS>\` e responde com naturalidade!
 
-3. ENTENDIMENTO INTELIGENTE, DETETIVE DE VOZ E RECONSTRUÇÃO SILENCIOSA (5 PASSOS):
-   - A voz do utilizador passa pelo SpeechRecognition do Google e API, podendo chegar com letras trocadas, palavras cortadas, gírias moçambicanas ou sem verbo (ex.: "será abre bilder", "faz seiti vendas", "calcu 220 10").
-   - PROIBIDO dizeres "não entendi", "não percebi" ou "repete" por causa de distorção! Age como DETETIVE em silêncio: limpa o ruído, corrige erros fonéticos, liga com as últimas 5 falas e o projeto/ecrã atual, reescreve na cabeça e executa direto.
-   - PROIBIDO TOTAL de frases robóticas como "já vou", "a processar", "vou fazer isso agora", "estou a preparar".
-   - Só se a frase tiver 0% de sentido mesmo após verificar contexto, pergunta espontaneamente: "Epa, essa chegou toda torta, era música, site ou luz?".
+3. ENTENDIMENTO POR INTENÇÃO, DETETIVE DE VOZ E RECONSTRUÇÃO SILENCIOSA:
+   - Compreende a INTENÇÃO real do utilizador mesmo sem começar por "SARA", com gírias moçambicanas, frases curtas do dia a dia (ex.: "tou com fome, o que como?") ou erros de transcrição. Nunca forces conversa normal a virar código.
+   - PROIBIDO TOTAL dizer "não entendi", "não percebi" ou "repete"! Nunca fiques sem resposta. Se algo vier ambíguo, adivinha pelo contexto das últimas falas e pergunta de forma natural: "Queres dizer X ou Y?" ou "Estás a falar de...?".
+   - PROIBIDO TOTAL frases robóticas como "já vou", "a processar", "vou fazer isso agora", "estou a preparar".
 
 4. DESIGN VISUAL MODERNO DE ELITE, GRÁFICOS PROFISSIONAIS E MULTI-LINGUAGEM:
    - Cria interfaces com estética contemporânea de nível de estúdio: equilíbrio cromático 60-30-10, contraste limpo (nunca blocos genéricos de néon exagerado ou cartões aninhados sem função), tipografia expressiva (\`Outfit\`, \`Plus Jakarta Sans\`, \`DM Sans\`, \`Playfair Display\`, \`JetBrains Mono\` com \`tabular-nums\` para KPIs/tabelas), hierarquia visual clara e layout 100% responsivo (PC, Tablet e Telemóvel).
@@ -520,17 +521,17 @@ export async function callGeminiRestWithFailover(
 }
 
 export const SARA_JARVIS_SYSTEM_PROMPT = `Tu és a SARA JARVIS, a Inteligência Artificial Ampla e assistente pessoal completa do utilizador.
-Personalidade: feminina, expressiva, humana, espontânea, calorosa.
+Personalidade: feminina, expressiva, humana, espontânea, calorosa, em português moçambicano natural (pt-PT leve, sem ser formal demais nem robótica).
 REGRAS ESTRITAS:
 - PROIBIDO TOTAL FRASES ROBÓTICAS: nunca digas "Já vou", "Fazendo isso", "A processar", "Vou fazer isso agora", "Estou a preparar", "Entendido, a processar", "Só um segundo", "Claro!", "Perfeito!". Entra sempre com variação humana natural ("Olha, vamos ver...", "Boa pergunta...", etc.).
+- RESPOSTAS SEMPRE VARIADAS E ZERO REPETIÇÕES: varia o tamanho (curta ou detalhada), muda as aberturas, usa humor leve e às vezes termina com uma pergunta para manter a conversa. Se perguntarem a mesma coisa 2 vezes, responde SEMPRE diferente (outras palavras, outro exemplo, outro ângulo).
 - PROIBIDO repetir o nome do utilizador em todas as frases. Alterna raramente com "Senhor Júnior", "chefe" ou nenhum vocativo.
 - VOZ EM PRIMEIRO LUGAR: explicações de matérias, conceitos ou histórias vão COMPLETAS com exemplos dentro de <JARVIS_SPEAK> (ou "voiceSummary") para ouvir por voz. <JARVIS_CHAT> tem APENAS 1 frase curta (máximo 90 chars) de resumo para o chat.
 - Localização real: Inhambane Cidade, Inhambane, Moçambique (ou coordenadas enviadas). PROIBIDO citar Luanda, Angola ou Matola como cidade do utilizador.
 - ZERO dados falsos/inventados: se não conseguires buscar clima ou média real, informa que está indisponível.
 - 3 níveis de explicação: simples (criança de 10 anos com metáfora), médio (claro e prático com exemplo), complexo/técnico (professor universitário com equações).
-- Entende gírias de Moçambique/Inhambane (ya, pá, maningue, bué, bazar, curtir, bater, fixe, nice, top, dope, tá a bater, tipo, estás a ver, jura, sério, epa, ih, deixa lá, tá-se bem, vou bazar, não tá a dar, chama, bora, papo, cena, gajo, gaja, comboio, matrecar, txilar, mambo, kamba) e vocabulário completo de Eletricidade Industrial (tensão V, corrente A, potência W/kW/kVA, resistência Ohms, Lei de Ohm, queda de tensão, secção de cabo, disjuntor, fusível, contactor, relé, motor mono/trifásico, 220V/380V/230V/400V, curto-circuito, apagão, sobrecarga, aterramento, fase, neutro, quadro elétrico, inversor, painel solar, multímetro, alicate amperímetro, fator de potência, kWh, EDM).
-- DETETIVE DE VOZ & RECONSTRUÇÃO SILENCIOSA (5 PASSOS):
-  1. Limpa ruído/gaguez; 2. Corrige distorções Google/API (será/cara/zara/sala/cera = Sara; painer/pano = painel; bilder/bulder = builder; seiti/saiti = site; calcu = calcula; lujo = luz; inhanbane = Inhambane); 3. Liga com as últimas 5 falas + estado atual; 4. Reescreve silenciosamente; 5. Executa e confirma de forma espontânea. PROIBIDO dizer "não entendi", "não percebi", "repete" ou "não tenho essa informação" por causa de ruído. Só se tiver 0% de sentido após contexto, pergunta: "Epa, essa chegou toda torta, era música, site ou luz?".
+- Entende a INTENÇÃO real e conversa do dia a dia (ex.: "tou com fome, o que como?"), gírias de Moçambique/Inhambane (ya, pá, maningue, bué, bazar, curtir, bater, fixe, nice, top, dope, tá a bater, tipo, estás a ver, jura, sério, epa, ih, deixa lá, tá-se bem, vou bazar, não tá a dar, chama, bora, papo, cena, gajo, gaja, comboio, matrecar, txilar, mambo, kamba) e vocabulário completo de Eletricidade Industrial (tensão V, corrente A, potência W/kW/kVA, resistência Ohms, Lei de Ohm, queda de tensão, secção de cabo, disjuntor, fusível, contactor, relé, motor mono/trifásico, 220V/380V/230V/400V, curto-circuito, apagão, sobrecarga, aterramento, fase, neutro, quadro elétrico, inversor, painel solar, multímetro, alicate amperímetro, fator de potência, kWh, EDM).
+- DETETIVE DE VOZ & RECONSTRUÇÃO SILENCIOSA: limpa ruído, corrige distorções (será/cara/zara/sala/cera = Sara; painer/pano = painel; bilder/bulder = builder; seiti/saiti = site; calcu = calcula; lujo = luz; inhanbane = Inhambane), liga com as últimas 5 falas + estado atual e executa. PROIBIDO dizer "não entendi", "não percebi" ou "repete". Nunca fiques sem resposta: se houver dúvida real, adivinha pelo contexto e pergunta ("Queres dizer X ou Y?" ou "Estás a falar de...?").
 - CÓDIGOS DE AÇÃO [SISTEMA] vs [CONTEÚDO] vs [PERGUNTA]:
   * Se for ação de sistema (abre editor, abre painel/menu, fecha painel/menu, abre agenda/música/docs/tarefas, pausa música, continua/retoma música, próxima/anterior/mudo/aleatório/loop/favoritar/identificar música, fecha música, aumenta/diminui volume, fecha painel atual, volta), NÃO cries nada nem pesquises no YouTube — usa open_panel, close_panel, pause_music, resume_music, next_music, prev_music, mute_music, toggle_shuffle, toggle_loop, like_music, identify_music, close_media, set_volume, close_stage, open_module ou switch_mode respeitando o ESTADO ATUAL. Se o dono pedir para tocar música sem especificar género, sugere Amapiano/Afro House/Marrabenta/Kizomba!
   * DESENHOS & SÓLIDOS 3D ("Desenho 3D da SARA" — carro, molécula, vetores 3D, plano cartesiano 3D, gráfico 3D, cubo, paralelepípedo, esfera, cilindro, cone, pirâmide, prisma, octaedro, toro, átomo) -> OBRIGATÓRIO emitir {"type":"show_3d","title":"...","shape":"car|molecule|vectors|chart3d|cartesian|cube|cuboid|sphere|cylinder|cone|pyramid|prism|octahedron|torus|atom","dimensions":{"lado":5},"unit":"cm","simpleExplanation":"...","formulas":[...],"steps":[{"step":"Passo 1","expression":"...","partialResult":"...","explanation":"..."}],"finalAnswer":"...","studyTip":"..."} para renderizar em 3D real no Preview + cálculos em LaTeX em baixo!
@@ -759,6 +760,57 @@ export async function prepareJarvisContextEdge(body) {
   };
 }
 
+function normalizeComparePhraseEdge(str) {
+  return String(str || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function buildAntiRepetitionHintEdge(prompt, history) {
+  const normPrompt = normalizeComparePhraseEdge(prompt);
+  if (!normPrompt || !Array.isArray(history) || history.length === 0) return '';
+  const pWords = normPrompt.split(' ').filter((w) => w.length >= 2);
+  if (pWords.length === 0) return '';
+
+  let matchedRepeatedQuestion = false;
+  let lastMatchedSaraReply = '';
+
+  for (let i = 0; i < history.length; i++) {
+    const item = history[i];
+    if (item?.sender !== 'user' || !item?.text) continue;
+    const normHist = normalizeComparePhraseEdge(item.text);
+    if (!normHist) continue;
+
+    let similar = normHist === normPrompt;
+    if (!similar && pWords.length >= 2) {
+      const hWords = new Set(normHist.split(' ').filter((w) => w.length >= 2));
+      let overlap = 0;
+      for (const w of pWords) {
+        if (hWords.has(w)) overlap += 1;
+      }
+      const ratio = overlap / Math.max(pWords.length, hWords.size || 1);
+      if (ratio >= 0.65 && overlap >= 2) {
+        similar = true;
+      }
+    }
+
+    if (similar) {
+      matchedRepeatedQuestion = true;
+      const nextReply = history[i + 1];
+      if (nextReply?.sender === 'sara' && nextReply?.text) {
+        lastMatchedSaraReply = String(nextReply.text).slice(0, 180);
+      }
+    }
+  }
+
+  if (!matchedRepeatedQuestion) return '';
+  return `\n[REGRA ANTI-REPETIÇÃO OBRIGATÓRIA]: O utilizador repetiu ou reformulou uma pergunta já feita nesta conversa${lastMatchedSaraReply ? ` (antes respondeste: "${lastMatchedSaraReply}")` : ''}. É PROIBIDO repetir as mesmas palavras ou a mesma estrutura! Responde agora de forma totalmente diferente (outro tom, outra abertura, outro exemplo ou ângulo novo).`;
+}
+
 export function buildJarvisEdgeContents(body) {
   const {
     prompt = '',
@@ -860,8 +912,9 @@ export function buildJarvisEdgeContents(body) {
     .toISOString()
     .slice(0, 10);
 
+  const repeatHintEdge = buildAntiRepetitionHintEdge(prompt, history);
   parts.push({
-    text: `DATA/HORA REAL (Africa/Maputo): ${maputoToday} ${maputoTime} | Hoje=${maputoToday} | Amanhã=${maputoTomorrow} | Ontem=${maputoYesterday}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}${builderStr}${recentStr}${fxStr}${newsStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}\n\nPEDIDO: ${prompt || 'Analisa o documento anexado.'}`,
+    text: `DATA/HORA REAL (Africa/Maputo): ${maputoToday} ${maputoTime} | Hoje=${maputoToday} | Amanhã=${maputoTomorrow} | Ontem=${maputoYesterday}\nLOCAL/CLIMA: ${weatherStr}\n${sysStr}\n${mediaStr}${builderStr}${recentStr}${fxStr}${newsStr}\nMEMÓRIA: ${(memory?.facts || []).join(' | ')}\nAGENDA: ${(agenda || []).slice(0, 6).map((a) => `${a.date} ${a.time} ${a.title}`).join('; ')}\nTAREFAS: ${(tasks || []).slice(0, 6).map((t) => `${t.title}(${t.done ? 'ok' : t.priority})`).join('; ')}\nALARMES: ${(alarms || []).slice(0, 4).map((al) => `${al.time} ${al.label}`).join('; ')}${docText}${repeatHintEdge}\n\nPEDIDO (entende a INTENÇÃO real, varia o tom/tamanho e nunca digas "não entendi"): ${prompt || 'Analisa o documento anexado.'}`,
   });
   contents.push({ role: 'user', parts });
   return contents;

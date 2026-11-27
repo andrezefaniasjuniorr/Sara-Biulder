@@ -179,23 +179,38 @@ export function isPureConversationIntent(
     return false;
   }
 
-  // Saudações e conversa espontânea pura (apenas quando NÃO há intenção de construir/editar)
+  // Saudações, conversa espontânea, situações do dia a dia e perguntas abertas (não construção/edição de código)
   const pureChatCue =
-    /^(sara[,\s]+)?(ola|oi|hey|ei|bom dia|boa tarde|boa noite|tudo bem|como estas|como vai|obrigado|obrigada|valeu|tchau|ate logo|ate ja|ate amanha|adeus|quem es|estas ai|tas ai|ouves me)([!?,.\s]+(sara|tudo bem|como estas|como vai))*[!?,.\s]*$/i.test(
+    /^(sara[,\s]+)?(ola|oi|hey|ei|bom dia|boa tarde|boa noite|tudo bem|como estas|como vai|obrigado|obrigada|valeu|tchau|ate logo|ate ja|ate amanha|adeus|quem es|estas ai|tas ai|ouves me|fixe|top|ya|bora|ta se bem|tudo fixe)([!?,.\s]+(sara|tudo bem|como estas|como vai))*[!?,.\s]*$/i.test(
       p
     ) ||
-    /\b(ideia|ideias|sugere|sugest|como ganhar dinheiro|o que achas|pensar|conversa|explica|por que|porque|qual melhor|quem es)\b/i.test(
+    /\b(ideia|ideias|sugere|sugest|como ganhar dinheiro|o que achas|pensar|conversa|explica|por que|porque|qual melhor|quem es|estou com fome|tou com fome|com fome|o que como|o que comer|comida|almoco|jantar|mata bicho|matabicho|estou cansado|tou cansado|tenho sono|tou com sono|receita|piada|anedota|historia|conselho|o que fazer|me ajuda|ajuda me|fala comigo|como e que|qual e a tua opiniao|diz me)\b/i.test(
       p
     );
 
   if (pureChatCue) return true;
 
-  // Se já existe projeto com código, instruções curtas de ajuste (ex: "azul escuro", "com 3 colunas") vão para o Builder
-  if (hasExistingCode && p.length >= 4) {
+  // Se parece uma pergunta ou desabafo natural do dia a dia sem termos de UI/código, vai para conversa normal
+  if (
+    /[?]$/.test(p) ||
+    /^(o que|qual|quais|quem|onde|quando|porque|por que|como|sera que|posso|podes|tens|sabes|gostas|prefere|estou|tou|tenho|sinto|hoje|ontem|amanha)\b/i.test(
+      p
+    )
+  ) {
+    return true;
+  }
+
+  // Se já existe projeto com código, instruções curtas de ajuste visual (ex: "azul escuro", "com 3 colunas") vão para o Builder
+  if (
+    hasExistingCode &&
+    /\b(cor|cores|azul|verde|vermelho|amarelo|roxo|rosa|laranja|preto|branco|cinza|escuro|claro|dark|light|coluna|colunas|fonte|texto|titulo|logo|banner|preco|precos|moeda|mzn|metical|usd|menu|seccao|rodape|topo|lado|maior|menor|bonito|moderno|animado|imagem|foto)\b/i.test(
+      p
+    )
+  ) {
     return false;
   }
 
-  return p.split(/\s+/).length <= 2;
+  return true;
 }
 
 export interface StreamMeta {
