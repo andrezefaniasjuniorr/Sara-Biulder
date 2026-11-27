@@ -7,7 +7,6 @@ import {
   Power,
   Maximize2,
   MessageSquare,
-  VolumeX,
   Sparkles,
 } from 'lucide-react';
 
@@ -207,18 +206,6 @@ export const FloatingSaraBubble: React.FC<FloatingSaraBubbleProps> = ({
                 {isListening ? <Mic className="w-3.5 h-3.5" /> : <MicOff className="w-3.5 h-3.5" />}
                 <span>{isListening ? 'Mic Ativo' : 'Falar'}</span>
               </button>
-
-              {isSaraSpeaking && (
-                <button
-                  type="button"
-                  onClick={onInterruptSpeaking || onSilenceSara}
-                  className="px-3 py-2 rounded-xl bg-red-600 hover:bg-red-500 border-2 border-red-200 text-white text-xs font-black uppercase tracking-wider flex items-center gap-1 cursor-pointer shadow-[0_0_16px_rgba(239,68,68,0.55)]"
-                  title="Parar a SARA imediatamente"
-                >
-                  <VolumeX className="w-3.5 h-3.5" />
-                  <span>PARAR</span>
-                </button>
-              )}
 
               {backgroundActive && (
                 <button

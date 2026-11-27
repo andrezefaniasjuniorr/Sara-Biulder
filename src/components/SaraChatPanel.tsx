@@ -26,7 +26,6 @@ import {
   Code2,
   Volume2,
   VolumeX,
-  Square,
 } from 'lucide-react';
 import type {
   AgentMode,
@@ -495,18 +494,6 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
             <span>{isListening ? 'Microfone ligado ✅' : 'Ativar Microfone'}</span>
           </button>
 
-          {isSaraSpeaking && (
-            <button
-              type="button"
-              onClick={onInterruptSpeaking || onSilenceSara}
-              className="px-3.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wider bg-red-600 hover:bg-red-500 border-2 border-red-200 text-white transition flex items-center gap-1.5 cursor-pointer whitespace-nowrap shadow-[0_0_18px_rgba(239,68,68,0.6)]"
-              title="Parar a SARA imediatamente (ou pressiona ESPAÇO)"
-            >
-              <Square className="w-3.5 h-3.5 fill-current" />
-              <span>PARAR</span>
-            </button>
-          )}
-
           <button
             type="button"
             onClick={() => {
@@ -568,15 +555,6 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
             </span>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
-            {isSaraSpeaking && (
-              <button
-                type="button"
-                onClick={onInterruptSpeaking || onSilenceSara}
-                className="px-3 py-1 rounded bg-red-600 hover:bg-red-500 border border-red-200 text-[11px] font-black font-mono uppercase text-white cursor-pointer shadow-[0_0_14px_rgba(239,68,68,0.5)]"
-              >
-                PARAR
-              </button>
-            )}
             {isListening && (
               <button
                 type="button"

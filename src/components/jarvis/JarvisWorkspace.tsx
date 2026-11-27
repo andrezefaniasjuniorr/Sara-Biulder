@@ -47,7 +47,6 @@ import {
   ShieldCheck,
   SkipForward,
   Sparkles,
-  Square,
   Sun,
   Trash2,
   Upload,
@@ -129,7 +128,6 @@ import {
   getBackgroundBuildAckSpeech,
   getVoiceReadingStatus,
   inferDomainFromText,
-  interruptSaraAndListen,
   isSaraCallMode,
   parseVoiceCommand,
   pauseVoiceReading,
@@ -435,7 +433,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   externalNotifyChatRef,
   onToggleMic,
   onSilenceSara,
-  onBargeIn,
   micErrorMsg = null,
   isMicAllowedSaved = false,
   onSwitchMode,
@@ -2475,18 +2472,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversation, streamingReply, isThinking]);
 
-  const handleBargeIn = useCallback(() => {
-    if (onBargeIn) {
-      onBargeIn();
-      return;
-    }
-    interruptSaraAndListen();
-    stopVoiceReading();
-    if (!isListening) {
-      onToggleMic();
-    }
-  }, [isListening, onBargeIn, onToggleMic]);
-
   const handleTriggerDailyRoutine = useCallback(() => {
     const pendingTasks = tasks.filter((t) => !t.done).length;
     const todayStr = new Date().toISOString().slice(0, 10);
@@ -4030,17 +4015,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                       <div className="p-2.5 rounded-xl bg-rose-950/80 border border-rose-400/60 text-xs font-mono text-rose-100 break-words">
                         {micErrorMsg}
                       </div>
-                    )}
-
-                    {isSaraSpeaking && (
-                      <button
-                        type="button"
-                        onClick={handleBargeIn}
-                        className="w-full py-3 rounded-xl bg-red-600 hover:bg-red-500 border-2 border-red-200 text-white text-sm font-black uppercase tracking-widest flex items-center justify-center gap-2 cursor-pointer shadow-[0_0_20px_rgba(239,68,68,0.65)]"
-                      >
-                        <Square className="w-4 h-4 fill-current" />
-                        <span>PARAR</span>
-                      </button>
                     )}
                   </div>
 
@@ -5973,42 +5947,16 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             >
               <button
                 type="button"
-                onClick={isSaraSpeaking ? handleBargeIn : onToggleMic}
+                onClick={onToggleMic}
                 className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 border transition cursor-pointer ${
-                  isSaraSpeaking
-                    ? 'bg-rose-500/25 border-rose-400 text-rose-200 shadow-[0_0_20px_rgba(255,42,75,0.4)]'
-                    : isListening
+                  isListening
                     ? 'bg-emerald-500/25 border-emerald-400 text-emerald-300 shadow-[0_0_22px_rgba(16,185,129,0.45)]'
                     : 'bg-gradient-to-br from-cyan-500/25 to-[#FF2A4B]/20 border-[#00E5FF]/60 text-cyan-200 hover:shadow-[0_0_18px_rgba(0,229,255,0.35)]'
                 }`}
-                title={
-                  isSaraSpeaking
-                    ? 'Interromper Sara e falar agora'
-                    : isListening
-                    ? 'Microfone contínuo ativo'
-                    : 'Falar com a SARA'
-                }
+                title={isListening ? 'Microfone contínuo ativo' : 'Falar com a SARA'}
               >
-                {isSaraSpeaking ? (
-                  <Square className="w-4 h-4 fill-current" />
-                ) : isListening ? (
-                  <Mic className="w-5 h-5" />
-                ) : (
-                  <MicOff className="w-5 h-5" />
-                )}
+                {isListening ? <Mic className="w-5 h-5" /> : <MicOff className="w-5 h-5" />}
               </button>
-
-              {isSaraSpeaking && (
-                <button
-                  type="button"
-                  onClick={handleBargeIn}
-                  className="px-4 h-11 rounded-xl bg-red-600 hover:bg-red-500 border-2 border-red-200 text-white text-xs font-black uppercase tracking-wider flex items-center gap-1.5 shrink-0 cursor-pointer shadow-[0_0_20px_rgba(239,68,68,0.6)]"
-                  title="Parar a SARA imediatamente (ou pressiona ESPAÇO)"
-                >
-                  <Square className="w-3.5 h-3.5 fill-current" />
-                  <span>PARAR</span>
-                </button>
-              )}
 
               <button
                 type="button"

@@ -11,7 +11,6 @@ import {
   Loader2,
   Play,
   Pause,
-  Square,
   BookOpen,
   MapPin,
   Radio,
@@ -2431,8 +2430,35 @@ export default function App() {
         }
       }
     };
+    let lastTapAt = 0;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!isSaraSpeakingRef.current && !isSaraActivelySpeaking()) {
+        lastTapAt = 0;
+        return;
+      }
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName || '';
+      const isEditable =
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        Boolean(target?.isContentEditable);
+      if (isEditable) return;
+
+      const now = Date.now();
+      if (lastTapAt > 0 && now - lastTapAt >= 30 && now - lastTapAt <= 420) {
+        lastTapAt = 0;
+        handleBargeInAndListen(true);
+      } else {
+        lastTapAt = now;
+      }
+    };
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('pointerdown', onPointerDown, { passive: true });
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('pointerdown', onPointerDown);
+    };
   }, [handleSaveProjectToFirebase]);
 
   const formatMissionReportText = (rep: MissionReport): string => {
@@ -6819,8 +6845,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
       if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) return;
       try {
-        const probeStream = await acquireVoiceMicPermissionStream();
-        probeStream.getTracks().forEach((track) => track.stop());
+        await acquireVoiceMicPermissionStream();
         if (cancelled) return;
         setMicErrorMsg(null);
         setIsMicAllowedSaved(true);
@@ -6877,10 +6902,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       return;
     }
 
-    // 1. Pede microfone com echoCancellation: true, noiseSuppression: true, autoGainControl: false
+    // 1. Pede microfone uma vez com echoCancellation: true, noiseSuppression: true, autoGainControl: false e mantém aberto
     try {
-      const stream = await acquireVoiceMicPermissionStream();
-      stream.getTracks().forEach((track) => track.stop());
+      await acquireVoiceMicPermissionStream();
     } catch (error: any) {
       const errName = error?.name || 'Error';
       const errMessage = error?.message || 'Não foi possível ativar o microfone.';
@@ -7497,21 +7521,6 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         }}
       />
 
-      {/* Botão Grande Vermelho PARAR sempre visível enquanto a SARA fala */}
-      {isSaraSpeaking && (
-        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-[90] flex items-center justify-center pointer-events-auto">
-          <button
-            type="button"
-            onClick={() => handleBargeInAndListen(true)}
-            className="px-7 py-3.5 rounded-2xl bg-red-600 hover:bg-red-500 active:scale-95 border-2 border-red-200 text-white font-black text-base tracking-[0.2em] uppercase flex items-center gap-2.5 cursor-pointer shadow-[0_0_32px_rgba(239,68,68,0.85)] animate-pulse"
-            title="Parar a SARA imediatamente (ou pressiona ESPAÇO)"
-          >
-            <Square className="w-5 h-5 fill-current" />
-            <span>PARAR</span>
-          </button>
-        </div>
-      )}
-
       {/* Controlo Discreto no Canto (fora do Estúdio / modais / mobile, nunca por baixo do holograma) */}
       {((workspaceMode !== 'jarvis' && (isListening || isVoiceProcessing || Boolean(micErrorMsg))) ||
         showProjectsModal ||
@@ -7570,9 +7579,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             type="button"
             onClick={() => stopVoiceReading()}
             className="p-1.5 rounded-lg bg-rose-500/20 border border-rose-400/50 text-rose-200 hover:bg-rose-500/30 cursor-pointer"
-            title="Parar leitura"
+            title="Fechar leitura"
           >
-            <Square className="w-3.5 h-3.5 fill-current" />
+            <X className="w-3.5 h-3.5" />
           </button>
         </div>
       )}

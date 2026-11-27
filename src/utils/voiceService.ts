@@ -2384,10 +2384,12 @@ let lastBargeInAt = 0;
 let bargeInAckActive = false;
 let bargeInAckNormalized = '';
 
-const POST_TTS_SILENCE_COOLDOWN_MS = 700;
-const MIN_VOICE_CONFIDENCE = 0.85;
+const POST_TTS_SILENCE_COOLDOWN_MS = 300;
+const MIN_VOICE_CONFIDENCE = 0.6;
 
 // Detector de Voz Humana (VAD) com Web Audio API + echoCancellation + noiseSuppression + autoGainControl: false
+let persistentMicStream: MediaStream | null = null;
+let persistentMicStreamPromise: Promise<MediaStream> | null = null;
 let vadAudioCtx: AudioContext | null = null;
 let vadStream: MediaStream | null = null;
 let vadAnalyser: AnalyserNode | null = null;
@@ -2399,24 +2401,54 @@ let vadCurrentRms = 0;
 let vadRecentPeakRms = 0;
 let vadLastHumanVoiceAt = 0;
 
+function hasLiveAudioTrack(stream: MediaStream | null): stream is MediaStream {
+  if (!stream) return false;
+  try {
+    return stream.getAudioTracks().some((t) => t.readyState === 'live');
+  } catch {
+    return false;
+  }
+}
+
 export async function acquireVoiceMicPermissionStream(): Promise<MediaStream> {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     throw Object.assign(new Error('Navegador sem suporte para getUserMedia.'), { name: 'NotSupportedError' });
   }
-  try {
-    return await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: false,
-      },
-    });
-  } catch (constraintErr: any) {
-    if (constraintErr?.name === 'OverconstrainedError') {
-      return await navigator.mediaDevices.getUserMedia({ audio: true });
-    }
-    throw constraintErr;
+  if (hasLiveAudioTrack(persistentMicStream)) {
+    return persistentMicStream;
   }
+  if (persistentMicStreamPromise) {
+    return persistentMicStreamPromise;
+  }
+
+  persistentMicStreamPromise = (async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: false,
+        },
+      });
+      persistentMicStream = stream;
+      return stream;
+    } catch (constraintErr: any) {
+      if (constraintErr?.name === 'OverconstrainedError') {
+        const fallbackStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        persistentMicStream = fallbackStream;
+        return fallbackStream;
+      }
+      throw constraintErr;
+    } finally {
+      persistentMicStreamPromise = null;
+    }
+  })();
+
+  return persistentMicStreamPromise;
+}
+
+export async function ensurePersistentMicStream(): Promise<MediaStream> {
+  return acquireVoiceMicPermissionStream();
 }
 
 export async function startHumanVoiceVad(): Promise<boolean> {
@@ -2428,7 +2460,6 @@ export async function startHumanVoiceVad(): Promise<boolean> {
     const stream = await acquireVoiceMicPermissionStream();
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     if (!AudioCtx) {
-      stream.getTracks().forEach((t) => t.stop());
       return false;
     }
     const ctx: AudioContext = new AudioCtx();
@@ -2495,14 +2526,8 @@ export function stopHumanVoiceVad(): void {
     clearInterval(vadPollTimer);
     vadPollTimer = null;
   }
-  if (vadStream) {
-    try {
-      vadStream.getTracks().forEach((t) => t.stop());
-    } catch {
-      // ignore
-    }
-    vadStream = null;
-  }
+  // Mantém persistentMicStream aberto para nunca fechar/repedir getUserMedia a cada frase
+  vadStream = null;
   if (vadAudioCtx) {
     try {
       void vadAudioCtx.close();
@@ -2514,11 +2539,9 @@ export function stopHumanVoiceVad(): void {
   vadAnalyser = null;
 }
 
-export function hasRecentHumanVoiceActivity(windowMs = 4500): boolean {
-  if (!vadActive || vadDisabledByCaptureConflict) return true;
-  const age = Date.now() - vadLastHumanVoiceAt;
-  const minRequiredRms = Math.max(0.011, vadNoiseFloorRms * 1.75);
-  return age <= windowMs && (vadRecentPeakRms >= minRequiredRms || vadCurrentRms >= minRequiredRms);
+export function hasRecentHumanVoiceActivity(_windowMs = 4500): boolean {
+  // Não mutar nem bloquear SpeechRecognition por causa do VAD/eco; echoCancellation e noiseSuppression tratam o áudio
+  return true;
 }
 
 const recentSpokenEchoLog: Array<{ norm: string; words: string[]; ts: number }> = [];
@@ -2551,6 +2574,9 @@ export function clearSpokenEchoLog(): void {
 
 export function isSaraActivelySpeaking(): boolean {
   if (saraEstaAFalar) return true;
+  if (lastSaraSpeechEndedAt > 0) {
+    return false;
+  }
   if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
     try {
       return Boolean(window.speechSynthesis.speaking || window.speechSynthesis.pending);
@@ -2586,7 +2612,7 @@ export function isProbableSaraEcho(
 
   const msSinceEnded = lastSaraSpeechEndedAt > 0 ? nowMs - lastSaraSpeechEndedAt : 999999;
 
-  // Espera obrigatória de 700ms de silêncio após a Sara terminar de falar
+  // Janela curta de 300ms de silêncio após a Sara terminar de falar
   if (contaminatedWhileSpeaking) {
     return true;
   }
@@ -3157,25 +3183,26 @@ function isLooseOrNoiseUtterance(
   // Tosse / ruído / hesitação isolada
   if (NOISE_OR_COUGH_ONLY_REGEX.test(norm)) return true;
 
-  // Confiança abaixo de 0.85 deve ser ignorada
+  // Confiança abaixo de 0.60 deve ser ignorada
   if (confidence > 0 && confidence < MIN_VOICE_CONFIDENCE) {
     return true;
   }
 
   const words = norm.split(/\s+/).filter(Boolean);
-  // Ignorar comandos com menos de 2 palavras (exceto confirmação pendente sim/não ou wake "sara" claro)
+  const isImageAction = Boolean(extractImageGenRequest(cleanedText) || parseImageVoiceCommand(cleanedText));
+  const isConcreteCommand = cmd.type !== 'prompt' && cmd.type !== 'unintelligible_clarify';
+
+  // Palavras soltas sem comando nem contexto (ignora murmúrios isolados de 1 palavra, mas aceita "SARA" e comandos concretos)
   if (words.length < 2) {
     if (context?.hasPendingConfirm && (cmd.type === 'confirm_pending' || cmd.type === 'cancel_pending')) {
       return false;
     }
-    if (words[0] === 'sara') {
+    if (words[0] === 'sara' || isConcreteCommand || isImageAction) {
       return false;
     }
-    return true;
-  }
-
-  // Ruído de fundo muito curto ou sem sinal útil
-  if (confidence > 0 && confidence < MIN_VOICE_CONFIDENCE && cmd.type === 'prompt' && domain === 'general') {
+    if (domain !== 'general' && (confidence === 0 || confidence >= 0.72)) {
+      return false;
+    }
     return true;
   }
 
@@ -3234,11 +3261,11 @@ function selectBestVoiceHypothesis(
   const best = evaluated[0];
   if (!best) return { decision: 'ignore' };
 
-  // Se todas as hipóteses forem ruído, confiança < 0.85, tosse ou < 2 palavras, ignora em silêncio
+  // Se todas as hipóteses forem ruído, confiança < 0.60 ou tosse, ignora em silêncio
   if (evaluated.every((e) => e.looseOrNoise || e.recon.unintelligible)) {
     const bestWords = normalizeAsciiPhrase(best.cleaned).split(/\s+/).filter(Boolean);
     if (
-      bestWords.length < 2 ||
+      (bestWords.length < 2 && !best.isConcreteAction && !best.isImageCmd && bestWords[0] !== 'sara') ||
       (best.rawConf > 0 && best.rawConf < MIN_VOICE_CONFIDENCE) ||
       NOISE_OR_COUGH_ONLY_REGEX.test(normalizeAsciiPhrase(best.cleaned))
     ) {
@@ -3418,10 +3445,8 @@ export function startContinuousVoiceRecognition(options: {
     recognition.interimResults = true;
     recognition.maxAlternatives = 5;
 
-    const contaminatedIndices = new Set<number>();
     const processedFinalIndices = new Set<number>();
     let sessionBargeEpoch = bargeInEpoch;
-    let engineReportsPositiveConfidence = false;
 
     const applySynchronousBargeLock = (trailingCmd?: string) => {
       clearSentenceBuffer();
@@ -3434,7 +3459,6 @@ export function startContinuousVoiceRecognition(options: {
       }
 
       interruptSaraForBargeIn();
-      contaminatedIndices.clear();
       sessionBargeEpoch = bargeInEpoch;
 
       if (options.onBargeInStop) {
@@ -3456,7 +3480,6 @@ export function startContinuousVoiceRecognition(options: {
         sessionBargeEpoch = bargeInEpoch;
         clearSentenceBuffer();
         for (let k = 0; k < event.results.length; k++) {
-          contaminatedIndices.add(k);
           if (event.results[k]?.isFinal) processedFinalIndices.add(k);
         }
         return;
@@ -3468,12 +3491,10 @@ export function startContinuousVoiceRecognition(options: {
         lastSaraSpeechEndedAt > 0 &&
         Date.now() - lastSaraSpeechEndedAt < POST_TTS_SILENCE_COOLDOWN_MS;
 
-      // 1. MODO BARGE-IN ENQUANTO A SARA FALA: microfone 100% mutado para comandos normais,
-      //    ACEITA APENAS palavras de paragem ("SARA PARA", "PARA", "CALA", "CHEGA", "STOP") em < 200ms
+      // 1. DURANTE O TTS: pausa comandos normais e aceita apenas palavras de paragem ("SARA PARA", "PARA", "CALA", "CHEGA", "STOP")
       if (speakingNow && !bargeInAckActive) {
         clearSentenceBuffer();
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          contaminatedIndices.add(i);
           const res = event.results[i];
           if (res?.isFinal) processedFinalIndices.add(i);
           const altCount = Math.min(5, res?.length || 0);
@@ -3489,8 +3510,7 @@ export function startContinuousVoiceRecognition(options: {
               }
               lastBargeInHandled = { key, ts: nowTs };
               for (let k = 0; k < event.results.length; k++) {
-                contaminatedIndices.add(k);
-                processedFinalIndices.add(k);
+                if (event.results[k]?.isFinal) processedFinalIndices.add(k);
               }
               applySynchronousBargeLock();
               return;
@@ -3500,11 +3520,10 @@ export function startContinuousVoiceRecognition(options: {
         return;
       }
 
-      // 2. JANELA DE 700ms DE SILÊNCIO APÓS TERMINAR DE FALAR: descarta todo o áudio residual sem acumular buffer
+      // 2. JANELA CURTA DE 300ms APÓS O TTS: ignora apenas finais dessa janela sem envenenar resultados provisórios
       if (withinPostSpeechSilence) {
         clearSentenceBuffer();
         for (let i = event.resultIndex; i < event.results.length; i++) {
-          contaminatedIndices.add(i);
           if (event.results[i]?.isFinal) processedFinalIndices.add(i);
         }
         return;
@@ -3518,28 +3537,17 @@ export function startContinuousVoiceRecognition(options: {
         if (!res?.isFinal || processedFinalIndices.has(i)) continue;
         processedFinalIndices.add(i);
 
-        if (contaminatedIndices.has(i)) {
-          continue;
-        }
-
-        // Extrai até 5 hipóteses com filtragem estrita de confiança >= 0.85
+        // Extrai até 5 hipóteses com confiança mínima 0.60
         const alts: VoiceHypothesisCandidate[] = [];
         const altCount = Math.min(5, res.length || 0);
         for (let altIdx = 0; altIdx < altCount; altIdx++) {
           const cand = (res?.[altIdx]?.transcript || '').trim();
           if (!cand) continue;
           const conf = typeof res?.[altIdx]?.confidence === 'number' ? res[altIdx].confidence : 0;
-          if (conf > 0) engineReportsPositiveConfidence = true;
           if (conf > 0 && conf < MIN_VOICE_CONFIDENCE) continue;
-          if (conf === 0 && engineReportsPositiveConfidence) continue;
           alts.push({ transcript: cand, confidence: conf });
         }
         if (alts.length === 0) continue;
-
-        // Só processa se houver voz humana real (VAD), nunca ruído de fundo / som baixo
-        if (!hasRecentHumanVoiceActivity(4500)) {
-          continue;
-        }
 
         if (isProbableSaraEcho(alts[0].transcript, false)) {
           continue;
@@ -3564,7 +3572,6 @@ export function startContinuousVoiceRecognition(options: {
       clearSentenceBuffer();
       const errCode = event?.error || '';
       if (errCode === 'audio-capture' && vadActive) {
-        // Alguns dispositivos móveis não permitem stream VAD paralelo ao SpeechRecognition
         vadDisabledByCaptureConflict = true;
         stopHumanVoiceVad();
       }
@@ -3582,7 +3589,7 @@ export function startContinuousVoiceRecognition(options: {
         return;
       }
 
-      // Falhas transitórias (audio-capture, network, no-speech, aborted) recuperam silenciosamente sem interromper
+      // Reinício automático garantido em 500ms em caso de erro ou silêncio
       if (errCode !== 'no-speech' && errCode !== 'aborted') {
         consecutiveErrors += 1;
       }
@@ -3590,8 +3597,7 @@ export function startContinuousVoiceRecognition(options: {
         activeRecognition = null;
       }
       if (!manuallyStopped && options.shouldKeepListening()) {
-        const backoff = Math.min(800, (saraEstaAFalar ? 45 : 70) + consecutiveErrors * 120);
-        scheduleRestart(backoff);
+        scheduleRestart(500);
       }
     };
 
@@ -3608,8 +3614,7 @@ export function startContinuousVoiceRecognition(options: {
         activeRecognition = null;
       }
       if (!manuallyStopped && options.shouldKeepListening()) {
-        const delay = consecutiveErrors > 0 ? Math.min(800, 100 + consecutiveErrors * 120) : 40;
-        scheduleRestart(delay);
+        scheduleRestart(500);
       } else {
         clearSentenceBuffer();
         micShouldBeActive = false;
@@ -3632,18 +3637,21 @@ export function startContinuousVoiceRecognition(options: {
         return;
       }
       if (!manuallyStopped && options.shouldKeepListening()) {
-        scheduleRestart(220);
+        scheduleRestart(500);
       }
     }
   };
 
   resumeMicFn = () => {
-    if (!activeRecognition && !manuallyStopped && options.shouldKeepListening()) {
+    if (manuallyStopped || !options.shouldKeepListening()) return;
+    micShouldBeActive = true;
+    broadcastVoiceBusEvent({ type: 'mic_status', listening: true });
+    if (!activeRecognition) {
       startSession();
     }
   };
 
-  // Watchdog contínuo: garante que o microfone nunca desliga enquanto a Sara fala ou escuta
+  // Watchdog contínuo: garante que o microfone nunca fica parado
   const watchdogId = setInterval(() => {
     if (
       !manuallyStopped &&
@@ -3654,7 +3662,7 @@ export function startContinuousVoiceRecognition(options: {
     ) {
       startSession();
     }
-  }, 350);
+  }, 500);
 
   const handleTabWake = () => {
     if (
@@ -4010,12 +4018,19 @@ export function speakAsSara(
 
       saraEstaAFalar = false;
       currentUtteranceNormalized = '';
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // ignore
+        }
+      }
 
-      if (micShouldBeActive && resumeMicFn && !activeRecognition) {
+      if (micShouldBeActive && resumeMicFn) {
         if (restartAfterSpeechTimer) clearTimeout(restartAfterSpeechTimer);
         restartAfterSpeechTimer = setTimeout(() => {
           restartAfterSpeechTimer = null;
-          if (!activeRecognition && micShouldBeActive) {
+          if (micShouldBeActive) {
             resumeMicFn?.();
           }
         }, POST_TTS_SILENCE_COOLDOWN_MS);
@@ -4250,9 +4265,9 @@ function speakNextReadingChunk(mySeq: number): void {
     currentUtteranceNormalized = '';
     speakingStateListener?.(false);
     emitReadingStatus();
-    if (micShouldBeActive && resumeMicFn && !activeRecognition) {
+    if (micShouldBeActive && resumeMicFn) {
       setTimeout(() => {
-        if (!activeRecognition && micShouldBeActive) resumeMicFn?.();
+        if (micShouldBeActive) resumeMicFn?.();
       }, POST_TTS_SILENCE_COOLDOWN_MS);
     }
     return;
