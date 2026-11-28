@@ -82,7 +82,7 @@ export async function onRequestPost(context) {
                 'User-Agent': 'aistudio-build',
               },
               body: JSON.stringify({
-                system_instruction: { parts: [{ text: getSaraStreamPrompt(body?.userIdentity) || SARA_STREAM_PROTOCOL }] },
+                system_instruction: { parts: [{ text: getSaraStreamPrompt(body?.userIdentity, body) || SARA_STREAM_PROTOCOL }] },
                 contents: [{ role: 'user', parts }],
                 ...(Object.keys(generationConfig).length > 0 ? { generationConfig } : {}),
               }),

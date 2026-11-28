@@ -84,6 +84,7 @@ import {
   fetchLiveHudFeed,
   fetchLiveWeather,
   isFullBuilderAppRequest,
+  loadJarvisAlarms,
   loadJarvisLocalBundle,
   playJarvisAlarmSound,
   readDocumentFile,
@@ -164,11 +165,29 @@ import {
   getMaputoNowParts,
   getUpcomingAgendaCountdown,
   isQueryAgendaCommand,
+  normalizeAlarmHHmm,
   parseAgendaCommand,
   resolvePortugueseDate,
   sortAgendaItems,
   type TriggeredAgendaAlert,
 } from '../../utils/timeAgendaService';
+import {
+  CACHE_30_MIN_MS,
+  SARA_ALARMS_SYNC_EVENT,
+  SARA_PREFS_EVENT,
+  SARA_SPEECH_STYLE_OPTIONS,
+  SARA_VIGIA_EVENT,
+  UNIVERSAL_AREA_ONBOARDING_QUESTION,
+  getSavedSpeechStyle,
+  getSavedUserAreaProfile,
+  isVigiaModeActive,
+  isWeatherOrLocationQuery,
+  pickNonRepeatingOption,
+  saveSpeechStyle,
+  saveUserAreaProfile,
+  touchInteractiveActivity,
+  type SaraSpeechStyle,
+} from '../../services/saraPrefsService';
 import type {
   BackgroundReminder,
   BackgroundSettings,
@@ -217,6 +236,7 @@ interface JarvisWorkspaceProps {
   onSwitchMode: (mode: WorkspaceMode) => void;
   onOpenSettings?: () => void;
   onNotify: (msg: string) => void;
+  hasRingingAlarm?: boolean;
   onExecuteSystemCommand?: (cmd: VoiceCommandAction, rawText: string) => Promise<boolean>;
   onStageStateChange?: (state: JarvisMediaStateContext) => void;
   onPanelOpenChange?: (open: boolean) => void;
@@ -438,6 +458,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   onSwitchMode,
   onOpenSettings,
   onNotify,
+  hasRingingAlarm = false,
   onExecuteSystemCommand,
   onStageStateChange,
   onPanelOpenChange,
@@ -571,11 +592,18 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     windDirectionLabel: null,
     uvIndex: null,
     hourlyForecast: [],
-    condition: 'A obter clima real...',
-    city: 'Inhambane Cidade, Inhambane, Moçambique',
+    condition: 'Disponível sob pedido',
+    city: 'Localização sob pedido',
     loadedFromApi: false,
   });
   const [isRefreshingWeather, setIsRefreshingWeather] = useState(false);
+
+  const [isVigiaMode, setIsVigiaMode] = useState<boolean>(() => isVigiaModeActive());
+  const [speechStyle, setSpeechStyle] = useState<SaraSpeechStyle>(() => getSavedSpeechStyle());
+  const [userAreaInput, setUserAreaInput] = useState<string>(
+    () => getSavedUserAreaProfile(session.userId).area
+  );
+  const pendingAreaAnswerRef = useRef(false);
 
   const [hudFeed, setHudFeed] = useState<JarvisHudLiveFeed>({
     fx: null,
@@ -592,7 +620,6 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   const [telemetry, setTelemetry] = useState<JarvisSystemTelemetry>(() =>
     readSyncSystemTelemetry()
   );
-  const [activeRingingAlarm, setActiveRingingAlarm] = useState<JarvisAlarmItem | null>(null);
   const [activeAgendaAlert, setActiveAgendaAlert] = useState<TriggeredAgendaAlert | null>(null);
 
   // Inputs dos módulos dentro da gaveta [☰ PAINEL]
@@ -1099,22 +1126,58 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     agendaRef.current = sorted;
     saveJarvisAgenda(sorted, session.userId, session.isGuest);
   }, [agenda, session.userId, session.isGuest]);
-  useEffect(() => saveJarvisAlarms(alarms, session.userId, session.isGuest), [alarms, session.userId, session.isGuest]);
+  useEffect(() => {
+    void saveJarvisAlarms(alarms, session.userId, session.isGuest);
+  }, [alarms, session.userId, session.isGuest]);
   useEffect(() => saveJarvisTasks(tasks, session.userId, session.isGuest), [tasks, session.userId, session.isGuest]);
   useEffect(() => saveJarvisMemory(memory, session.userId, session.isGuest), [memory, session.userId, session.isGuest]);
   useEffect(() => saveJarvisDocuments(documents, session.userId, session.isGuest), [documents, session.userId, session.isGuest]);
   useEffect(() => saveJarvisConversation(conversation, session.userId, session.isGuest), [conversation, session.userId, session.isGuest]);
   useEffect(() => saveJarvisPlaylist(playlist, session.userId, session.isGuest), [playlist, session.userId, session.isGuest]);
 
-  // Inteligência Proativa & Continuidade entre dias
+  // Sincronização passiva de Alarmes, Modo Vigia e Preferências da SARA
+  useEffect(() => {
+    const onAlarmsSync = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ userId?: string; items?: JarvisAlarmItem[] }>).detail;
+      const incoming =
+        detail && Array.isArray(detail.items)
+          ? detail.items
+          : loadJarvisAlarms(session.userId, session.isGuest);
+      setAlarms((prev) =>
+        JSON.stringify(prev) === JSON.stringify(incoming) ? prev : incoming
+      );
+    };
+    const onVigia = (ev: Event) => {
+      const active = Boolean((ev as CustomEvent<{ active?: boolean }>).detail?.active);
+      setIsVigiaMode(active);
+    };
+    const onPrefs = () => {
+      setSpeechStyle(getSavedSpeechStyle());
+      setUserAreaInput(getSavedUserAreaProfile(session.userId).area);
+    };
+    window.addEventListener(SARA_ALARMS_SYNC_EVENT, onAlarmsSync);
+    window.addEventListener(SARA_VIGIA_EVENT, onVigia);
+    window.addEventListener(SARA_PREFS_EVENT, onPrefs);
+    return () => {
+      window.removeEventListener(SARA_ALARMS_SYNC_EVENT, onAlarmsSync);
+      window.removeEventListener(SARA_VIGIA_EVENT, onVigia);
+      window.removeEventListener(SARA_PREFS_EVENT, onPrefs);
+    };
+  }, [session.userId, session.isGuest]);
+
+  // Inteligência Proativa & Onboarding Universal (pergunta área apenas 1 vez)
   useEffect(() => {
     if (proactiveCheckedRef.current || session.isGuest) return;
     proactiveCheckedRef.current = true;
     const todayKey = new Date().toISOString().slice(0, 10);
     const sessionKey = `sara_proactive_checked_${session.userId}_${todayKey}`;
+    const areaProfile = getSavedUserAreaProfile(session.userId);
+    let alreadyCheckedToday = false;
     try {
-      if (sessionStorage.getItem(sessionKey)) return;
-      sessionStorage.setItem(sessionKey, '1');
+      alreadyCheckedToday = Boolean(sessionStorage.getItem(sessionKey));
+      if (!alreadyCheckedToday) {
+        sessionStorage.setItem(sessionKey, '1');
+      }
     } catch {
       // ignore storage restriction
     }
@@ -1132,20 +1195,24 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     );
 
     let proactiveMsg = '';
-    if (urgentToday) {
-      proactiveMsg = session.isOwner
-        ? `Chefe, hoje às ${urgentToday.time} tens "${urgentToday.title}" na agenda. Queres rever ou preparar alguma coisa agora?`
-        : `${session.callName}, hoje às ${urgentToday.time} tens "${urgentToday.title}" na agenda. Queres rever ou preparar alguma coisa agora?`;
-    } else if (urgentTask) {
-      proactiveMsg = `Tens "${urgentTask.title}" em aberto nas tarefas. Queres tratar disso já?`;
-    } else if (
-      memory.lastVisitDate &&
-      memory.lastVisitDate < todayKey &&
-      (activeBuilderProjectName || memory.lastActiveProjectName || memory.lastTopic)
-    ) {
-      const refName =
-        activeBuilderProjectName || memory.lastActiveProjectName || memory.lastTopic;
-      proactiveMsg = `Bom regresso! Continuamos "${refName}" de ontem ou vamos noutra direção hoje?`;
+    if (!areaProfile.asked) {
+      proactiveMsg = UNIVERSAL_AREA_ONBOARDING_QUESTION;
+      saveUserAreaProfile({ asked: true }, session.userId);
+      pendingAreaAnswerRef.current = true;
+    } else if (!alreadyCheckedToday) {
+      if (urgentToday) {
+        proactiveMsg = `Hoje às ${urgentToday.time} tens "${urgentToday.title}" na agenda. Queres rever ou preparar alguma coisa?`;
+      } else if (urgentTask) {
+        proactiveMsg = `Tens "${urgentTask.title}" em aberto nas tarefas. Queres tratar disso agora?`;
+      } else if (
+        memory.lastVisitDate &&
+        memory.lastVisitDate < todayKey &&
+        (activeBuilderProjectName || memory.lastActiveProjectName || memory.lastTopic)
+      ) {
+        const refName =
+          activeBuilderProjectName || memory.lastActiveProjectName || memory.lastTopic;
+        proactiveMsg = `Bom regresso. Continuamos "${refName}" ou preferes começar outra tarefa hoje?`;
+      }
     }
 
     setMemory((prev) => ({
@@ -1165,7 +1232,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
         },
       ]);
     }
-  }, [agenda, tasks, memory.lastVisitDate, memory.lastActiveProjectName, memory.lastTopic, activeBuilderProjectName]);
+  }, [agenda, tasks, memory.lastVisitDate, memory.lastActiveProjectName, memory.lastTopic, activeBuilderProjectName, session.userId, session.isGuest]);
 
   useEffect(() => {
     mediaVolumeRef.current = mediaVolume;
@@ -2085,8 +2152,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   }, [session.userId, session.isGuest, session.callName, session.isOwner]);
 
   useEffect(() => {
-    if (session.isGuest) return;
+    if (session.isGuest || isVigiaModeActive()) return;
     const t = setTimeout(() => {
+      if (isVigiaModeActive()) return;
       salvarJarvisStateFirebase({ agenda, alarms, tasks, memory }, session.userId).catch(() => {});
     }, 1800);
     return () => clearTimeout(t);
@@ -2167,7 +2235,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     };
   }, [voiceEnabled, isSaraSilenced, isCallMode, onNotify]);
 
-  // Relógio ao vivo (1s) Maputo + Uptime + Verificador real de alarmes
+  // Relógio ao vivo (1s) + Uptime (alarmes globais correm no App.tsx para funcionar em todos os modos e Vigia)
   useEffect(() => {
     const interval = setInterval(() => {
       const current = new Date();
@@ -2175,33 +2243,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       setUptimeSeconds((s) => s + 1);
       setHudPulseTick((t) => (t + 1) % 3600);
       setTelemetry(readSyncSystemTelemetry(batteryInfoRef.current));
-
-      const maputoNow = getMaputoNowParts(current);
-      const hhmm = maputoNow.timeHHmm;
-      const todayKey = maputoNow.isoDate;
-
-      setAlarms((prevAlarms) => {
-        let changed = false;
-        const updated = prevAlarms.map((al) => {
-          if (al.enabled && al.time === hhmm && al.triggeredTodayDate !== todayKey) {
-            changed = true;
-            setActiveRingingAlarm(al);
-            if (!isCallMode && !isSaraSilenced) {
-              playJarvisAlarmSound();
-              speakAsSara(`Atenção! Alarme das ${al.time}: ${al.label}.`, voiceEnabled, {
-                level: 'short',
-                forceSpeak: true,
-              });
-            }
-            return { ...al, triggeredTodayDate: todayKey };
-          }
-          return al;
-        });
-        return changed ? updated : prevAlarms;
-      });
     }, 1000);
     return () => clearInterval(interval);
-  }, [voiceEnabled, isCallMode, isSaraSilenced]);
+  }, []);
 
   // Verificador automático em 2.º plano da Agenda (a cada 30s + imediato ao atualizar agenda)
   useEffect(() => {
@@ -2239,7 +2283,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     return () => clearInterval(timer);
   }, [agenda, voiceEnabled, isSaraSilenced, isCallMode, onNotify]);
 
-  // Clima real via Open-Meteo + Geolocalização (Inhambane Cidade fallback fixo) a cada 10 minutos
+  // Clima sob pedido (só consulta rede quando o utilizador pede ou clica em atualizar)
   const refreshWeatherNow = useCallback(async (force = false) => {
     setIsRefreshingWeather(true);
     try {
@@ -2250,16 +2294,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     }
   }, []);
 
-  useEffect(() => {
-    void refreshWeatherNow(false);
-    const t = setInterval(() => {
-      void refreshWeatherNow(true);
-    }, 10 * 60 * 1000);
-    return () => clearInterval(t);
-  }, [refreshWeatherNow]);
-
-  // Feed ao vivo Moçambique: Cotação real Metical + Manchetes reais RSS
+  // Feed económico: cache de 30 minutos no PC, zero pedidos em Modo Vigia
   const refreshHudFeedNow = useCallback(async (force = false) => {
+    if (!force && isVigiaModeActive()) return;
     const data = await fetchLiveHudFeed(force);
     setHudFeed(data);
   }, []);
@@ -2267,8 +2304,10 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
   useEffect(() => {
     void refreshHudFeedNow(false);
     const t = setInterval(() => {
-      void refreshHudFeedNow(true);
-    }, 10 * 60 * 1000);
+      if (!isVigiaModeActive()) {
+        void refreshHudFeedNow(true);
+      }
+    }, CACHE_30_MIN_MS);
     return () => clearInterval(t);
   }, [refreshHudFeedNow]);
 
@@ -2476,11 +2515,21 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     const pendingTasks = tasks.filter((t) => !t.done).length;
     const todayStr = new Date().toISOString().slice(0, 10);
     const todayEvents = agenda.filter((a) => a.date === todayStr).length;
-    const weatherPart =
-      weather.loadedFromApi && weather.tempC !== null
-        ? `Em ${weather.city} estão ${weather.tempC} graus com ${weather.condition.toLowerCase()}.`
-        : `Não consegui obter o clima de ${weather.city} neste momento.`;
-    const greeting = `Olá! ${weatherPart} Hoje tens ${pendingTasks} tarefa(s) pendente(s) e ${todayEvents} compromisso(s) na agenda. Por onde começamos?`;
+    const areaProfile = getSavedUserAreaProfile(session.userId);
+    const baseGreeting = pickNonRepeatingOption(
+      [
+        `Hoje tens ${pendingTasks} tarefa(s) pendente(s) e ${todayEvents} compromisso(s) na agenda. Por onde começamos?`,
+        `Resumo de hoje: ${pendingTasks} tarefa(s) em aberto e ${todayEvents} compromisso(s) marcados. O que queres fazer primeiro?`,
+        `Para hoje há ${pendingTasks} tarefa(s) pendente(s) e ${todayEvents} item(ns) na agenda. Em que te ajudo agora?`,
+      ],
+      'daily_routine'
+    );
+    let greeting = baseGreeting;
+    if (!areaProfile.asked && !session.isGuest) {
+      greeting = `${baseGreeting} ${UNIVERSAL_AREA_ONBOARDING_QUESTION}`;
+      saveUserAreaProfile({ asked: true }, session.userId);
+      pendingAreaAnswerRef.current = true;
+    }
     setMood('happy');
     setConversation((prev) => [
       ...prev.slice(-30),
@@ -2493,7 +2542,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     ]);
     setMemory((prev) => ({ ...prev, lastRoutineGreetingDate: todayStr }));
     speakAsSara(greeting, voiceEnabled, { level: 'medium', forceSpeak: true });
-  }, [tasks, agenda, weather, voiceEnabled]);
+  }, [tasks, agenda, voiceEnabled, session.userId, session.isGuest]);
 
   // Executa ações estruturadas retornadas pela SARA JARVIS
   const applyJarvisActions = useCallback(
@@ -2541,15 +2590,30 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           }
           case 'add_alarm': {
             onUserActivity?.('agenda');
+            const validHHmm = normalizeAlarmHHmm(act.time || '');
+            if (!validHHmm) {
+              const failMsg = 'Não consegui criar, tenta de novo.';
+              onNotify(failMsg);
+              speakAsSara(failMsg, voiceEnabled, { level: 'short', forceSpeak: true });
+              break;
+            }
             const item: JarvisAlarmItem = {
               id: `al_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-              time: act.time || '07:00',
+              time: validHHmm,
               label: act.label || act.title || 'Alarme SARA',
               enabled: true,
             };
-            setAlarms((prev) => [item, ...prev]);
+            const nextList = [item, ...alarms];
+            const savedOk = saveJarvisAlarms(nextList, session.userId, session.isGuest);
+            if (!savedOk) {
+              const failMsg = 'Não consegui criar, tenta de novo.';
+              onNotify(failMsg);
+              speakAsSara(failMsg, voiceEnabled, { level: 'short', forceSpeak: true });
+              break;
+            }
+            setAlarms(nextList);
             setActiveModule('agenda');
-            onNotify(`Alarme ligado para ${item.time}`);
+            onNotify(`Alarme criado para ${item.time}`);
             break;
           }
           case 'add_task': {
@@ -2995,19 +3059,23 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       const rawClean = rawText.trim();
       const docToSend = pendingDoc;
       if (!rawClean && !docToSend) return;
+      touchInteractiveActivity('jarvis_prompt');
 
       // Em Modo Silêncio ou Modo Chamada, comandos de voz não liberam conversa nem disparam IA
       if (source === 'voice' && (isCallMode || isSaraSilenced)) {
         const wakeOrSilence = parseVoiceCommand(rawClean, {
           isSilenced: isSaraSilenced,
           isCallMode,
+          hasRingingAlarm,
         });
         if (
           onExecuteSystemCommand &&
           (wakeOrSilence.type === 'unsilence_sara' ||
             wakeOrSilence.type === 'silence_sara' ||
             wakeOrSilence.type === 'enter_call_mode' ||
-            wakeOrSilence.type === 'stop_all_and_pause')
+            wakeOrSilence.type === 'stop_all_and_pause' ||
+            wakeOrSilence.type === 'dismiss_alarm' ||
+            wakeOrSilence.type === 'snooze_alarm')
         ) {
           await onExecuteSystemCommand(wakeOrSilence, rawClean);
         }
@@ -3041,6 +3109,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
       // RECONSTRUÇÃO SILENCIOSA DE VOZ DISTORCIDA (5 Passos + Contexto das últimas 5 falas)
       const parseCtx = {
         workspaceMode: 'jarvis' as const,
+        hasRingingAlarm,
         hasActiveMedia: stageContent?.kind === 'music' || stageContent?.kind === 'video',
         mediaSource:
           stageContent?.kind === 'music' || stageContent?.kind === 'video'
@@ -3159,7 +3228,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           if (session.isOwner && onRequestAdmin) {
             if (source === 'text') setInputText('');
             onRequestAdmin();
-            speakAsSara('Painel Admin aberto, chefe.', voiceEnabled, {
+            speakAsSara('Painel Admin aberto.', voiceEnabled, {
               level: 'short',
               forceSpeak: true,
             });
@@ -3174,6 +3243,34 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           }
         }
       }
+
+      // Captura resposta única da área de trabalho do utilizador (Universal)
+      if (
+        pendingAreaAnswerRef.current &&
+        clean &&
+        !docToSend &&
+        !clean.includes('?') &&
+        clean.length <= 140 &&
+        !isFullBuilderAppRequest(clean)
+      ) {
+        pendingAreaAnswerRef.current = false;
+        const cleanArea = clean.replace(/^(eu\s+trabalho\s+(em|na|no|com)\s+|a\s+minha\s+[aá]rea\s+[eé]\s+)/i, '').trim() || clean;
+        saveUserAreaProfile({ asked: true, area: cleanArea }, session.userId);
+        setUserAreaInput(cleanArea);
+        if (source === 'text') setInputText('');
+        const ackArea = `Registei que trabalhas com ${cleanArea}. Vou adaptar-me a isso. Como posso ajudar agora?`;
+        const tsArea = new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' });
+        setConversation((prev) => [
+          ...prev.slice(-28),
+          ...(source === 'text'
+            ? [{ id: `usr_area_${Date.now()}`, sender: 'user' as const, text: clean, timestamp: tsArea }]
+            : []),
+          { id: `sara_area_${Date.now()}`, sender: 'sara', text: ackArea, timestamp: tsArea },
+        ]);
+        speakAsSara(ackArea, voiceEnabled, { level: 'short', forceSpeak: true });
+        return;
+      }
+      pendingAreaAnswerRef.current = false;
 
       // LEMBRETES EM SEGUNDO PLANO ("SARA lembra-me às 17h")
       if (clean && !docToSend && onScheduleBackgroundReminder) {
@@ -3370,6 +3467,16 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
       let spokenDuringStream = false;
 
+      let effectiveWeather = weather;
+      if (isWeatherOrLocationQuery(userLabel) && !weather.loadedFromApi && navigator.onLine) {
+        try {
+          effectiveWeather = await fetchLiveWeather(false);
+          setWeather(effectiveWeather);
+        } catch {
+          // ignore
+        }
+      }
+
       const res = await askJarvisAssistantStream(
         {
           prompt: userLabel,
@@ -3378,7 +3485,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
           agenda,
           tasks,
           alarms,
-          weather,
+          weather: effectiveWeather,
           telemetry,
           mediaState: currentMediaState,
           userIdentity,
@@ -3704,7 +3811,9 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
     second: '2-digit',
   });
 
-  const shortCityName = weather.city.split(',')[0].trim() || 'Inhambane Cidade';
+  const shortCityName = weather.loadedFromApi
+    ? weather.city.split(',')[0].trim() || 'Clima'
+    : 'Clima';
   const jsHeapPct =
     telemetry.jsHeapUsedMb !== null && telemetry.jsHeapLimitMb
       ? Math.min(100, Math.round((telemetry.jsHeapUsedMb / telemetry.jsHeapLimitMb) * 100))
@@ -3806,24 +3915,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
   return (
     <div className="flex-1 min-h-0 flex flex-col bg-[#020612] text-white overflow-hidden relative">
-      {/* Alarme ou Alerta de Agenda no topo */}
-      {activeRingingAlarm && (
-        <div className="z-50 px-4 py-2 bg-gradient-to-r from-[#FF2A4B]/30 via-[#081529] to-[#00E5FF]/25 border-b border-[#FF2A4B] flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-white">
-            <BellRing className="w-4 h-4 text-[#FF2A4B] animate-bounce" />
-            <span>
-              ALARME ATIVO ({activeRingingAlarm.time}): {activeRingingAlarm.label}
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setActiveRingingAlarm(null)}
-            className="px-3 py-1 rounded-lg bg-[#FF2A4B] text-white text-xs font-bold cursor-pointer hover:opacity-90"
-          >
-            Dispensar
-          </button>
-        </div>
-      )}
+      {/* Alerta de Agenda no topo (alarmes tocam em banner global no App.tsx) */}
 
       {activeAgendaAlert && (
         <div
@@ -3888,12 +3980,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
               </button>
             </div>
 
-            {/* Navegação de Sistema: Assistente / Builder (+ Config só para o Dono) */}
-            <div
-              className={`p-2.5 grid gap-1.5 border-b border-cyan-500/20 bg-[#030815] shrink-0 ${
-                session.isOwner ? 'grid-cols-3' : 'grid-cols-2'
-              }`}
-            >
+            {/* Navegação de Sistema: Assistente / Builder / Definições (para TODOS) */}
+            <div className="p-2.5 grid gap-1.5 border-b border-cyan-500/20 bg-[#030815] shrink-0 grid-cols-3">
               <button
                 type="button"
                 onClick={() => {
@@ -3916,19 +4004,17 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 <Hammer className="w-3.5 h-3.5 text-rose-400" />
                 <span>Estúdio SARA</span>
               </button>
-              {session.isOwner && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    updatePanelOpen(false);
-                    onOpenSettings?.();
-                  }}
-                  className="py-2 px-2 rounded-xl bg-[#071126] border border-cyan-500/25 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:border-cyan-400"
-                >
-                  <Settings className="w-3.5 h-3.5 text-cyan-300" />
-                  <span>Config</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => {
+                  updatePanelOpen(false);
+                  onOpenSettings?.();
+                }}
+                className="py-2 px-2 rounded-xl bg-[#071126] border border-cyan-500/25 text-slate-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer hover:border-cyan-400"
+              >
+                <Settings className="w-3.5 h-3.5 text-cyan-300" />
+                <span>Definições</span>
+              </button>
             </div>
 
             {/* Abas dos 6 módulos dentro da gaveta */}
@@ -4024,7 +4110,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     </div>
                     {[
                       'Explica física quântica de forma simples e depois profunda',
-                      'Faz-me um teste de 4 perguntas sobre eletricidade básica',
+                      'Faz-me um teste de 4 perguntas de cultura geral e ciência',
                       'Cria 5 flashcards de inglês para negócios com pronúncia',
                       'Notícias de Moçambique e do mundo resumidas em 1 minuto',
                       'Quanto vale 1500 Meticais em ZAR, Dólar e Euro hoje?',
@@ -4049,6 +4135,66 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
 
               {activeModule === 'sistema' && (
                 <div className="space-y-3">
+                  {/* Definições da SARA: Forma de Falar + Área do Utilizador */}
+                  <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/35 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
+                        Definições da SARA
+                      </span>
+                      {isVigiaMode && (
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-400/40 text-[9px] font-mono text-emerald-300">
+                          SARA em Vigia - 0 KB/min
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-xs font-semibold text-white">Como queres que eu fale?</div>
+                    <div className="grid grid-cols-1 gap-1.5">
+                      {SARA_SPEECH_STYLE_OPTIONS.map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          onClick={() => {
+                            saveSpeechStyle(opt.id);
+                            setSpeechStyle(opt.id);
+                            onNotify(`Forma de falar: ${opt.label}`);
+                          }}
+                          className={`text-left px-2.5 py-2 rounded-xl border text-xs transition cursor-pointer ${
+                            speechStyle === opt.id
+                              ? 'bg-cyan-500/20 border-cyan-400 text-cyan-100 font-bold'
+                              : 'bg-[#040916] border-cyan-500/20 text-slate-300 hover:border-cyan-400/50'
+                          }`}
+                        >
+                          <div>{opt.label}</div>
+                          <div className="text-[10px] text-slate-400 font-normal">{opt.description}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="pt-1 border-t border-cyan-500/20 space-y-1.5">
+                      <label className="block text-[11px] font-semibold text-cyan-200">
+                        Em que área trabalhas ou o que queres que eu te ajude?
+                      </label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          value={userAreaInput}
+                          onChange={(e) => setUserAreaInput(e.target.value)}
+                          placeholder="Ex: comércio, estudos, cozinha, programação..."
+                          className="flex-1 px-2.5 py-1.5 rounded-lg bg-[#040916] border border-cyan-500/30 text-xs text-white focus:outline-none focus:border-cyan-400"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            saveUserAreaProfile({ asked: true, area: userAreaInput }, session.userId);
+                            onNotify('Área guardada.');
+                          }}
+                          className="px-2.5 py-1.5 rounded-lg bg-cyan-500/25 border border-cyan-400/60 text-cyan-100 text-xs font-bold cursor-pointer"
+                        >
+                          Guardar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="p-3.5 rounded-2xl bg-[#071126] border border-cyan-500/30 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-mono uppercase tracking-widest text-cyan-300">
@@ -4368,16 +4514,25 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        setAlarms((prev) => [
-                          {
-                            id: `al_${Date.now()}`,
-                            time: newAlarmTime,
-                            label: newAlarmLabel.trim() || 'Alarme SARA',
-                            enabled: true,
-                          },
-                          ...prev,
-                        ]);
-                        onNotify(`Alarme definido para ${newAlarmTime}`);
+                        const validHHmm = normalizeAlarmHHmm(newAlarmTime);
+                        if (!validHHmm) {
+                          onNotify('Não consegui criar, tenta de novo.');
+                          return;
+                        }
+                        const item: JarvisAlarmItem = {
+                          id: `al_${Date.now()}`,
+                          time: validHHmm,
+                          label: newAlarmLabel.trim() || 'Alarme SARA',
+                          enabled: true,
+                        };
+                        const nextList = [item, ...alarms];
+                        const ok = saveJarvisAlarms(nextList, session.userId, session.isGuest);
+                        if (!ok) {
+                          onNotify('Não consegui criar, tenta de novo.');
+                          return;
+                        }
+                        setAlarms(nextList);
+                        onNotify(`Alarme criado para ${validHHmm}`);
                       }}
                       className="w-full py-1.5 rounded-lg bg-rose-500/20 border border-rose-400/50 text-rose-200 text-xs font-bold cursor-pointer"
                     >
@@ -4992,8 +5147,8 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                   )}
                 </>
               ) : (
-                <div className="text-[11px] text-amber-300">
-                  {weather.errorMsg || 'A obter dados reais de Inhambane...'}
+                <div className="text-[11px] text-slate-300">
+                  {weather.errorMsg || 'Clima disponível sob pedido. Clica em atualizar se precisares.'}
                 </div>
               )}
             </div>
@@ -5259,9 +5414,14 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
             </div>
 
             <div className="flex items-center gap-2.5">
+              {isVigiaMode && (
+                <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-400/45 text-[10px] font-mono font-bold text-emerald-300">
+                  SARA em Vigia - 0 KB/min
+                </span>
+              )}
               <span
                 className={`flex items-center gap-1 text-[10px] font-mono ${
-                  weather.loadedFromApi ? 'text-rose-300' : 'text-amber-300'
+                  weather.loadedFromApi ? 'text-rose-300' : 'text-slate-400'
                 }`}
               >
                 <CloudSun className="w-3.5 h-3.5" />
@@ -5323,7 +5483,7 @@ export const JarvisWorkspace: React.FC<JarvisWorkspaceProps> = ({
                 {/* Colchetes de telemetria flutuantes nas laterais do holograma */}
                 <div className="hidden xl:flex pointer-events-none absolute left-4 top-6 flex-col gap-1 text-[9px] font-mono text-cyan-300/75">
                   <span>// BIOMETRIA VOCAL: CALIBRADA</span>
-                  <span>// GEOLOC: INHAMBANE (-23.86°, 35.38°)</span>
+                  <span>// {isVigiaMode ? 'SARA EM VIGIA - 0 KB/MIN' : 'ESTADO: UNIVERSAL · ATIVO'}</span>
                   <span>// MODO: {effectiveMood.toUpperCase()}</span>
                 </div>
                 <div className="hidden xl:flex pointer-events-none absolute right-4 top-6 flex-col items-end gap-1 text-[9px] font-mono text-rose-300/75">

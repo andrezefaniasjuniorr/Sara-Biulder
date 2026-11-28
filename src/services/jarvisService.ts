@@ -21,6 +21,19 @@ import type { SaraUserIdentityPayload } from '../types/auth';
 import { sanitizeNonOwnerAiReply } from './authService';
 import { normalizePhoneticVoiceTranscript } from '../utils/voiceService';
 import { getMaputoNowParts, resolvePortugueseDate } from '../utils/timeAgendaService';
+import {
+  CACHE_30_MIN_MS,
+  getSavedSpeechStyle,
+  getSavedUserAreaProfile,
+  isUserJoking,
+  isUserSadOrTired,
+  isVigiaModeActive,
+  isWeatherOrLocationQuery,
+  nextReplyShouldIncludeLightHumor,
+  pickNonRepeatingJoke,
+  sanitizeOutgoingFormalText,
+  SARA_ALARMS_SYNC_EVENT,
+} from './saraPrefsService';
 
 const JARVIS_STORAGE_KEYS = {
   agenda: 'sara_jarvis_agenda_v1',
@@ -38,10 +51,10 @@ function scopedJarvisKey(baseKey: string, userId?: string): string {
   return userId ? `${baseKey}_${userId}` : baseKey;
 }
 
-const INHAMBANE_DEFAULT = {
+const DEFAULT_WEATHER_COORDS = {
   lat: -23.865,
   lon: 35.3833,
-  city: 'Inhambane Cidade, Inhambane, Moçambique',
+  city: 'Localização sob pedido',
 };
 
 const LEGACY_MOCK_AGENDA_IDS = new Set(['ag_welcome']);
@@ -50,8 +63,8 @@ const LEGACY_MOCK_TRACK_IDS = new Set(['synth_stark_pulse', 'yt_lofi_study', 'sy
 
 export const DEFAULT_JARVIS_MEMORY: JarvisMemoryState = {
   userName: 'Utilizador',
-  preferences: ['Inhambane Cidade, Inhambane, Moçambique'],
-  facts: ['Localização base: Inhambane Cidade, Inhambane, Moçambique'],
+  preferences: [],
+  facts: [],
 };
 
 export const DEFAULT_JARVIS_TRACKS: JarvisTrack[] = [];
@@ -78,18 +91,12 @@ function safeWriteJson(key: string, value: unknown): boolean {
 }
 
 const OWNER_DEFAULT_PREFS = [
-  'Amapiano, Afro House, Marrabenta, Kizomba',
-  'Inhambane Cidade, Inhambane, Moçambique',
-  'Estúdio SARA em 2.º plano automático para pedidos de site/app',
+  'Estúdio SARA em 2.º plano automático para pedidos de site ou aplicação',
 ];
 
 const OWNER_DEFAULT_FACTS = [
-  'Criador e Dono: Eletro-Jr (Eletro-Júnior), 24 anos',
-  'Área técnica: estudante de Eletricidade Industrial no IICEM',
-  'Localização: Inhambane Cidade / Matola, Moçambique',
-  'Estilo de comunicação: português moçambicano com gírias locais (Inhambane)',
-  'Preferência de música (quando não especifica): Amapiano / Afro House / Marrabenta / Kizomba',
-  'Preferências de fluxo: "faz um site" -> Estúdio 2.º plano | "explica" -> voz completa + preview | "calcula" -> passo a passo',
+  'Criador e Dono: Eletro-Júnior',
+  'Estilo de comunicação: português formal simples, sem gírias',
 ];
 
 export function loadJarvisLocalBundle(
@@ -98,11 +105,13 @@ export function loadJarvisLocalBundle(
   isGuest = false,
   isOwner = false
 ) {
+  const userArea = getSavedUserAreaProfile(userId).area;
+  const areaFact = userArea ? [`Área de interesse/trabalho do utilizador: ${userArea}`] : [];
   const defaultMemory: JarvisMemoryState = isOwner && !isGuest
     ? {
         userName: callName || 'Eletro-Júnior',
         preferences: OWNER_DEFAULT_PREFS,
-        facts: OWNER_DEFAULT_FACTS,
+        facts: [...OWNER_DEFAULT_FACTS, ...areaFact],
         likedTracks: [],
         smartDevices: {
           luz: false,
@@ -115,8 +124,8 @@ export function loadJarvisLocalBundle(
       }
     : {
         userName: callName || DEFAULT_JARVIS_MEMORY.userName,
-        preferences: ['Inhambane Cidade, Inhambane, Moçambique'],
-        facts: ['Localização base: Inhambane Cidade, Inhambane, Moçambique'],
+        preferences: [],
+        facts: areaFact,
         likedTracks: [],
         smartDevices: {
           luz: false,
@@ -166,21 +175,22 @@ export function loadJarvisLocalBundle(
     scopedJarvisKey(JARVIS_STORAGE_KEYS.memory, userId),
     defaultMemory
   );
-  const cleanedFacts = (rawMem?.facts || []).filter((f) =>
-    isOwner ? !/\b(luanda|angola)\b/i.test(f) : !/\b(luanda|angola|matola|iicem|24 anos)\b/i.test(f)
+  const cleanedFacts = (rawMem?.facts || []).filter(
+    (f) => !/\b(luanda|angola|matola|iicem|inhambane|eletricidade\s+industrial|g[ií]rias)\b/i.test(f)
+  );
+  const cleanedPrefs = (rawMem?.preferences || []).filter(
+    (p) => !/\b(luanda|angola|matola|inhambane|g[ií]rias)\b/i.test(p)
   );
   const mergedOwnerFacts =
     isOwner && !isGuest
-      ? Array.from(new Set([...OWNER_DEFAULT_FACTS, ...cleanedFacts])).slice(-25)
-      : cleanedFacts.length > 0
-      ? cleanedFacts
-      : defaultMemory.facts;
+      ? Array.from(new Set([...OWNER_DEFAULT_FACTS, ...areaFact, ...cleanedFacts])).slice(-25)
+      : Array.from(new Set([...areaFact, ...cleanedFacts])).slice(-25);
 
   const memory: JarvisMemoryState = {
     userName: callName || rawMem?.userName || defaultMemory.userName,
     preferences:
-      rawMem?.preferences && rawMem.preferences.length > 0
-        ? rawMem.preferences
+      cleanedPrefs.length > 0
+        ? cleanedPrefs
         : defaultMemory.preferences,
     facts: mergedOwnerFacts,
     lastRoutineGreetingDate: rawMem?.lastRoutineGreetingDate,
@@ -233,9 +243,32 @@ export function saveJarvisAgenda(items: JarvisAgendaItem[], userId?: string, isG
   return safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.agenda, userId), items);
 }
 
-export function saveJarvisAlarms(items: JarvisAlarmItem[], userId?: string, isGuest = false) {
-  if (isGuest || userId?.startsWith('guest_')) return;
-  safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.alarms, userId), items);
+export function loadJarvisAlarms(userId?: string, isGuest = false): JarvisAlarmItem[] {
+  if (isGuest || userId?.startsWith('guest_')) return [];
+  const raw = safeReadJson<JarvisAlarmItem[]>(scopedJarvisKey(JARVIS_STORAGE_KEYS.alarms, userId), []);
+  return Array.isArray(raw) ? raw : [];
+}
+
+export function saveJarvisAlarms(
+  items: JarvisAlarmItem[],
+  userId?: string,
+  isGuest = false
+): boolean {
+  if (isGuest || userId?.startsWith('guest_')) {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent(SARA_ALARMS_SYNC_EVENT, { detail: { userId, items } })
+      );
+    }
+    return true;
+  }
+  const ok = safeWriteJson(scopedJarvisKey(JARVIS_STORAGE_KEYS.alarms, userId), items);
+  if (ok && typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent(SARA_ALARMS_SYNC_EVENT, { detail: { userId, items } })
+    );
+  }
+  return ok;
 }
 
 export function saveJarvisTasks(items: JarvisTaskItem[], userId?: string, isGuest = false) {
@@ -918,18 +951,24 @@ async function runSingleJarvisAttempt(
           rawActions
         );
         const cleanReply =
-          sanitizeNonOwnerAiReply(
-            sanitizeAssistantPlainText(finalParsed.reply || strippedFallback || finalParsed.speak),
-            isOwner
+          sanitizeOutgoingFormalText(
+            sanitizeNonOwnerAiReply(
+              sanitizeAssistantPlainText(finalParsed.reply || strippedFallback || finalParsed.speak),
+              isOwner
+            )
           ) || 'Mostrei no preview.';
-        const cleanChatSummary = sanitizeNonOwnerAiReply(
-          sanitizeAssistantPlainText(finalParsed.chatSummary || ''),
-          isOwner
+        const cleanChatSummary = sanitizeOutgoingFormalText(
+          sanitizeNonOwnerAiReply(
+            sanitizeAssistantPlainText(finalParsed.chatSummary || ''),
+            isOwner
+          )
         );
         const cleanSpeak =
-          sanitizeNonOwnerAiReply(
-            sanitizeAssistantPlainText(finalParsed.speak || cleanReply),
-            isOwner
+          sanitizeOutgoingFormalText(
+            sanitizeNonOwnerAiReply(
+              sanitizeAssistantPlainText(finalParsed.speak || cleanReply),
+              isOwner
+            )
           ) || cleanReply;
 
         if (!speakEmitted && cleanSpeak) {
@@ -981,6 +1020,10 @@ export async function askJarvisAssistantStream(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey) headers['x-gemini-api-key'] = apiKey;
 
+  const wantsWeatherContext = isWeatherOrLocationQuery(params.prompt);
+  const speechStyle = getSavedSpeechStyle();
+  const userArea = getSavedUserAreaProfile(params.userIdentity?.userId).area;
+  const includeLightHumor = nextReplyShouldIncludeLightHumor(params.prompt);
   const requestBody = JSON.stringify({
     prompt: params.prompt,
     history: params.history.slice(-10),
@@ -988,11 +1031,19 @@ export async function askJarvisAssistantStream(
     agenda: params.agenda,
     tasks: params.tasks,
     alarms: params.alarms,
-    weather: params.weather || null,
+    weather: wantsWeatherContext ? params.weather || null : null,
     telemetry: params.telemetry || null,
     mediaState: params.mediaState || null,
     builderContext: params.builderContext || null,
     userIdentity: params.userIdentity || null,
+    speechStyle,
+    userArea,
+    humorHint: includeLightHumor ? pickNonRepeatingJoke() : null,
+    userEmotion: isUserSadOrTired(params.prompt)
+      ? 'sad_or_tired'
+      : isUserJoking(params.prompt)
+      ? 'joking'
+      : 'neutral',
     recentUserUtterances: params.recentUserUtterances?.slice(-5) || [],
     lastDomain: params.lastDomain || params.memory?.lastDomain || 'general',
     documentAttachment: params.documentAttachment
@@ -1073,15 +1124,21 @@ async function askJarvisAssistantFallbackJson(
           (data.actions || []).map(normalizeJarvisAction)
         );
         const cleanReply =
-          sanitizeNonOwnerAiReply(sanitizeAssistantPlainText(data.reply), isOwner) || 'Feito.';
-        const cleanChat = sanitizeNonOwnerAiReply(
-          sanitizeAssistantPlainText(data.chatSummary || ''),
-          isOwner
+          sanitizeOutgoingFormalText(
+            sanitizeNonOwnerAiReply(sanitizeAssistantPlainText(data.reply), isOwner)
+          ) || 'Feito.';
+        const cleanChat = sanitizeOutgoingFormalText(
+          sanitizeNonOwnerAiReply(
+            sanitizeAssistantPlainText(data.chatSummary || ''),
+            isOwner
+          )
         );
         const spoken =
-          sanitizeNonOwnerAiReply(
-            sanitizeAssistantPlainText(data.voiceSummary || cleanReply),
-            isOwner
+          sanitizeOutgoingFormalText(
+            sanitizeNonOwnerAiReply(
+              sanitizeAssistantPlainText(data.voiceSummary || cleanReply),
+              isOwner
+            )
           ) || cleanReply;
         callbacks?.onSpeakReady?.(spoken);
         return {
@@ -1161,10 +1218,10 @@ export async function searchYouTubeTrack(
 }
 
 function mapWeatherCodeToCondition(code: number, isDay?: boolean): string {
-  if (code === 0) return isDay === false ? 'Noite limpa em Inhambane' : 'Sol limpo';
+  if (code === 0) return isDay === false ? 'Noite limpa' : 'Sol limpo';
   if (code === 1) return isDay === false ? 'Céu pouco nublado' : 'Predomínio de sol';
   if (code <= 3) return 'Parcialmente nublado';
-  if (code <= 48) return 'Neblina costeira';
+  if (code <= 48) return 'Neblina';
   if (code <= 57) return 'Chuvisco ligeiro';
   if (code <= 67) return 'Chuva moderada';
   if (code <= 77) return 'Granizo';
@@ -1208,13 +1265,32 @@ export async function fetchLiveWeather(forceRefresh = false): Promise<JarvisWeat
     !/\b(luanda|angola|matola)\b/i.test(cached.data.city) &&
     cached.data.uvIndex !== undefined;
 
-  if (!forceRefresh && cached && cacheIsValidLocation && Date.now() - cached.ts < 10 * 60 * 1000) {
+  if (!forceRefresh && cached && cacheIsValidLocation && Date.now() - cached.ts < CACHE_30_MIN_MS) {
     return cached.data;
   }
 
-  let lat = INHAMBANE_DEFAULT.lat;
-  let lon = INHAMBANE_DEFAULT.lon;
-  let city = INHAMBANE_DEFAULT.city;
+  // Em Modo Vigia, não faz pedidos de rede (0 KB/min)
+  if (!forceRefresh && isVigiaModeActive()) {
+    return (
+      cached?.data || {
+        tempC: null,
+        feelsLikeC: null,
+        humidityPct: null,
+        windKmh: null,
+        windDirectionDeg: null,
+        windDirectionLabel: null,
+        uvIndex: null,
+        hourlyForecast: [],
+        condition: 'Modo Vigia (0 KB/min)',
+        city: DEFAULT_WEATHER_COORDS.city,
+        loadedFromApi: false,
+      }
+    );
+  }
+
+  let lat = DEFAULT_WEATHER_COORDS.lat;
+  let lon = DEFAULT_WEATHER_COORDS.lon;
+  let city = DEFAULT_WEATHER_COORDS.city;
 
   if (typeof navigator !== 'undefined' && navigator.geolocation) {
     try {
@@ -1329,8 +1405,18 @@ export async function fetchLiveHudFeed(forceRefresh = false): Promise<JarvisHudL
     JARVIS_STORAGE_KEYS.hudFeed,
     null
   );
-  if (!forceRefresh && cached && Date.now() - cached.ts < 10 * 60 * 1000) {
+  if (!forceRefresh && cached && Date.now() - cached.ts < CACHE_30_MIN_MS) {
     return cached.data;
+  }
+
+  if (!forceRefresh && isVigiaModeActive()) {
+    return (
+      cached?.data || {
+        fx: null,
+        news: [],
+        loadedAt: new Date().toISOString(),
+      }
+    );
   }
 
   try {

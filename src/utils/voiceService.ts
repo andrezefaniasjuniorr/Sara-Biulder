@@ -1,5 +1,10 @@
 import type { ProjectType } from '../types/builder';
 import { extractImageGenRequest, parseImageVoiceCommand } from '../services/imageGenService';
+import {
+  getSavedSpeechStyle,
+  pickNonRepeatingOption,
+  sanitizeOutgoingFormalText,
+} from '../services/saraPrefsService';
 
 export type VoiceLevel = 'short' | 'medium' | 'full';
 
@@ -146,6 +151,17 @@ export type VoiceCommandAction =
   | { type: 'radar_ask_target_street'; raw: string }
   | { type: 'radar_show_route'; raw: string }
   | { type: 'radar_stop_tracking'; raw: string }
+  | {
+      type: 'create_alarm';
+      timeHHmm?: string;
+      offsetMinutes?: number;
+      offsetSeconds?: number;
+      label?: string;
+      invalid?: boolean;
+      raw: string;
+    }
+  | { type: 'dismiss_alarm'; raw: string }
+  | { type: 'snooze_alarm'; minutes: number; raw: string }
   | { type: 'prompt'; text: string };
 
 export type VoiceDomainTopic =
@@ -166,6 +182,7 @@ export interface VoiceParseContext {
   isPreviewFullscreen?: boolean;
   hasOpenOverlay?: boolean;
   hasPendingConfirm?: boolean;
+  hasRingingAlarm?: boolean;
   hasActiveMedia?: boolean;
   mediaSource?: 'youtube' | 'local';
   isMediaPaused?: boolean;
@@ -210,14 +227,18 @@ function getTimePeriod(): 'morning' | 'afternoon' | 'night' {
 const recentSpontaneousReplies: string[] = [];
 
 function pickNonRepeating(options: string[]): string {
-  const candidates = options.filter((opt) => !recentSpontaneousReplies.includes(opt));
-  const pool = candidates.length > 0 ? candidates : options;
-  const chosen = pool[Math.floor(Math.random() * pool.length)];
-  recentSpontaneousReplies.push(chosen);
-  if (recentSpontaneousReplies.length > 6) {
-    recentSpontaneousReplies.shift();
+  return pickNonRepeatingOption(options, 'voice_phrases');
+}
+
+function getStylePhraseSet(
+  sets: {
+    formal_simples: string[];
+    formal_profissional: string[];
+    amigavel_simples: string[];
   }
-  return chosen;
+): string {
+  const style = getSavedSpeechStyle();
+  return pickNonRepeating(sets[style] || sets.formal_simples);
 }
 
 export function getLoginGreetingSpeech(
@@ -227,28 +248,45 @@ export function getLoginGreetingSpeech(
   isGuest = false,
   isNewAccount = false
 ): string {
+  const style = getSavedSpeechStyle();
   if (isOwner) {
     if (unreadAlertsCount > 0) {
-      return `Bem-vindo de volta, chefe. Tens ${unreadAlertsCount} alerta${unreadAlertsCount > 1 ? 's' : ''} de segurança para ver no Admin.`;
+      return `Bem-vindo de volta. Tem ${unreadAlertsCount} alerta${unreadAlertsCount > 1 ? 's' : ''} para verificar no painel administrativo.`;
     }
-    return 'Bem-vindo de volta, chefe. Todos os sistemas estão prontos.';
+    return style === 'formal_profissional'
+      ? 'Sessão iniciada. Todos os sistemas estão operacionais e prontos.'
+      : style === 'amigavel_simples'
+      ? 'Olá, bem-vindo de volta! Está tudo pronto por aqui.'
+      : 'Bem-vindo de volta. Todos os sistemas estão prontos para o ajudar.';
   }
   if (isGuest) {
-    return 'Modo convidado ativo por cinco minutos. Podes conversar ou explorar à vontade.';
+    return 'Modo convidado ativo por cinco minutos. Pode conversar ou experimentar as funções normalmente.';
   }
   const cleanName = callName.trim() || 'visitante';
   if (isNewAccount) {
-    return `Olá, ${cleanName}! Conta criada. O que vamos fazer hoje?`;
+    return `Olá, ${cleanName}. A sua conta foi criada com sucesso. Como posso ajudar hoje?`;
   }
   const welcomeWord = cleanName.toLowerCase().endsWith('a') ? 'bem-vinda' : 'bem-vindo';
+  if (style === 'formal_profissional') {
+    return pickNonRepeating([
+      `Bom regresso, ${cleanName}. Como posso colaborar hoje?`,
+      `Sessão ativa, ${cleanName}. Indique o que pretende realizar.`,
+    ]);
+  }
+  if (style === 'amigavel_simples') {
+    return pickNonRepeating([
+      `Olá, ${cleanName}, ${welcomeWord} de volta! O que vamos fazer hoje?`,
+      `Que bom vê-lo novamente, ${cleanName}. Em que posso ajudar agora?`,
+    ]);
+  }
   return pickNonRepeating([
-    `Olá, ${cleanName}, ${welcomeWord} de volta!`,
-    `Olá, ${cleanName}, o que vamos fazer hoje?`,
+    `Olá, ${cleanName}, ${welcomeWord} de volta.`,
+    `Olá, ${cleanName}. Em que posso ajudar hoje?`,
   ]);
 }
 
 export function getInactivityLogoutSpeech(): string {
-  return 'Sessão encerrada por inatividade.';
+  return 'Sessão terminada.';
 }
 
 export function getGuestExpirySpeech(): string {
@@ -269,30 +307,27 @@ export function getInstantSmallTalkReply(
     .trim();
   const safeName = callName?.trim();
   const nameChunk = safeName ? `, ${safeName}` : '';
+  const ownerTitle = isOwner ? ', Senhor Júnior' : nameChunk;
 
-  // Chamamentos rápidos e alertas de presença
+  // Chamamentos rápidos
   if (
     /^(ei|pssst|psst|olha|escuta|acorda|acorda sara|sara acorda|sou eu|chefe aqui)$/i.test(clean)
   ) {
-    if (isOwner) {
-      if (clean === 'chefe aqui') {
-        return pickNonRepeating([
-          'Sempre a postos, chefe! Manda vir.',
-          'Às ordens, Senhor Júnior! Que cena vamos atacar?',
-        ]);
-      }
-      return pickNonRepeating([
-        'Estou ligada, chefe! Manda vir.',
-        'Sempre a postos, Senhor Júnior! Que cena vamos atacar?',
-        'Estou aqui a ouvir-te. Podes mandar.',
-        'Acordada e pronta! Bora lá.',
-      ]);
-    }
-    return pickNonRepeating([
-      `Estou aqui${nameChunk}! Podes falar.`,
-      `A ouvir-te${nameChunk}. Que precisas agora?`,
-      'Ligada e pronta! Manda vir.',
-    ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        `Estou aqui${ownerTitle}. Como posso ajudar?`,
+        `Estou a ouvir${nameChunk}. Pode dizer o que precisa.`,
+        `Estou disponível${nameChunk}. Qual é o pedido?`,
+      ],
+      formal_profissional: [
+        `À sua disposição${ownerTitle}. Indique a tarefa.`,
+        `Sistema atento${nameChunk}. Pode prosseguir.`,
+      ],
+      amigavel_simples: [
+        `Estou aqui${nameChunk}! O que precisa agora?`,
+        `Já estou a ouvir${nameChunk}. Em que posso ajudar?`,
+      ],
+    });
   }
 
   if (
@@ -301,84 +336,90 @@ export function getInstantSmallTalkReply(
     ) ||
     /^(bom dia|boa tarde|boa noite)(\s+sara)?(\s+(tudo bem|como estas|ta se bem))?$/i.test(clean)
   ) {
-    if (!isOwner) {
-      if (period === 'night') {
-        return pickNonRepeating([
-          `Olá${nameChunk}! Estou por aqui. O que vamos fazer esta noite?`,
-          `Boa noite${nameChunk}! Diz-me o que precisas agora.`,
-        ]);
-      }
-      if (period === 'morning') {
-        return pickNonRepeating([
-          `Bom dia${nameChunk}! O que vamos fazer hoje?`,
-          `Olá${nameChunk}! Pronta para te ajudar — por onde começamos?`,
-        ]);
-      }
-      return pickNonRepeating([
-        `Olá${nameChunk}! O que vamos fazer hoje?`,
-        `Oi${nameChunk}! Em que posso ajudar agora?`,
-      ]);
-    }
     if (period === 'night') {
-      return pickNonRepeating([
-        'Estou acordada e ligada. O que vamos criar hoje à noite?',
-        'Cá estou eu, chefe. Tens alguma ideia forte em mente?',
-        'Fala comigo! Vamos resolver algum mambo ou programar algo novo?',
-        'Chegaste na hora certa, Senhor Júnior. Qual é a missão agora?',
-        'Olá! Manda o desafio que os sistemas já estão quentes.',
-      ]);
+      return getStylePhraseSet({
+        formal_simples: [
+          `Boa noite${nameChunk}. Em que posso ajudar hoje?`,
+          `Olá${nameChunk}. Estou disponível para o ajudar esta noite.`,
+        ],
+        formal_profissional: [
+          `Boa noite${ownerTitle}. Estou preparada para auxiliar nas suas tarefas.`,
+          `Boa noite${nameChunk}. Indique o que pretende tratar.`,
+        ],
+        amigavel_simples: [
+          `Boa noite${nameChunk}! Que bom falar consigo. Em que posso ajudar?`,
+          `Olá${nameChunk}! Estou por aqui para o que precisar esta noite.`,
+        ],
+      });
     }
     if (period === 'morning') {
-      return pickNonRepeating([
-        'Bom dia! Acordei pronta — o que inventamos hoje?',
-        'Fala, chefe! Qual sistema ou ideia vai sair do papel agora?',
-        'Oi! Já estou com os motores prontos — diz-me o plano.',
-        'Estou por aqui. Hoje vamos construir algo fora da caixa?',
-        'Bom dia, Senhor Júnior! Por onde queres arrancar nesta manhã?',
-      ]);
+      return getStylePhraseSet({
+        formal_simples: [
+          `Bom dia${nameChunk}. Como posso ajudar nesta manhã?`,
+          `Olá${nameChunk}. Por onde gostaria de começar hoje?`,
+        ],
+        formal_profissional: [
+          `Bom dia${ownerTitle}. Os sistemas estão prontos para o trabalho de hoje.`,
+          `Bom dia${nameChunk}. Qual é a prioridade para agora?`,
+        ],
+        amigavel_simples: [
+          `Bom dia${nameChunk}! Desejo um ótimo dia. O que vamos fazer hoje?`,
+          `Olá${nameChunk}! Pronta para ajudar nesta manhã.`,
+        ],
+      });
     }
-    return pickNonRepeating([
-      'Oi! Já estava à tua espera — o que vamos fazer agora?',
-      'Fala comigo! Manda o próximo desafio que eu entro logo em ação.',
-      'Estou ligada! Queres música, estudo ou construir algum projeto?',
-      'E aí, chefe! Alguma cena nova a ferver?',
-      'Pronta para a ação. Diz-me o que tens em mente.',
-      'Sempre a postos, Senhor Júnior! Vamos surpreender hoje com quê?',
-    ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        `Boa tarde${nameChunk}. Em que posso ajudar agora?`,
+        `Olá${nameChunk}. Diga-me o que precisa de fazer.`,
+      ],
+      formal_profissional: [
+        `Boa tarde${ownerTitle}. Estou ao dispor para a próxima tarefa.`,
+        `Olá${nameChunk}. Indique o assunto em que posso ajudar.`,
+      ],
+      amigavel_simples: [
+        `Olá${nameChunk}! Como tem passado? Em que posso ajudar agora?`,
+        `Boa tarde${nameChunk}! Estou pronta para o acompanhar no que precisar.`,
+      ],
+    });
   }
 
-  // Gírias moçambicanas / expressões de confirmação casual / energia
+  // Expressões casuais / confirmações (compreende se o utilizador usar, mas responde SEM gírias)
   if (
     /^(sara\s+)?(ya|yeah|pode ser|exato|isso mesmo|e isso|dale|bora|bora la|manda vir|toca a fazer|ta se bem|ta-se bem|tasse bem|tasse|esta bem|na boa|fixe|nice|top|dope|ta a bater|bater maningue|maningue fixe|bue fixe)$/i.test(
       clean
     )
   ) {
-    if (isOwner) {
-      return pickNonRepeating([
-        'Tá-se bem, chefe! Manda o próximo comando.',
-        'Fixe! É mesmo esse o espírito — estou a postos.',
-        'Bora lá! O que queres atacar agora?',
-        'Top! Diz-me só a próxima cena que eu executo já.',
-      ]);
-    }
-    return pickNonRepeating([
-      `Fixe${nameChunk}! O que fazemos a seguir?`,
-      'Tá-se bem! Manda o próximo pedido.',
-      'Bora lá! Estou pronta para ajudar.',
-    ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        'Muito bem. O que gostaria de fazer a seguir?',
+        'Certo. Estou pronta para o próximo pedido.',
+        'Combinado. Diga-me qual é o próximo passo.',
+      ],
+      formal_profissional: [
+        'Compreendido. Aguardo a sua próxima instrução.',
+        'Registado. Indique como pretende avançar.',
+      ],
+      amigavel_simples: [
+        'Muito bem! O que fazemos a seguir?',
+        'Combinado! Estou pronta para continuar consigo.',
+      ],
+    });
   }
 
   if (/^(epa|ih|jura|serio|estas a ver|tas a ver)(\s+sara)?$/i.test(clean)) {
-    return isOwner
-      ? pickNonRepeating([
-          'Juro mesmo, chefe! Estou aqui ligada contigo.',
-          'Epa, conta-me lá essa cena!',
-          'Estou a ver, sim! Continua.',
-        ])
-      : pickNonRepeating([
-          'Estou a acompanhar-te! Conta-me mais.',
-          'Epa, diz-me o que aconteceu!',
-        ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        'Estou a acompanhar com atenção. Pode continuar.',
+        'Compreendo. Conte-me mais detalhes, por favor.',
+      ],
+      formal_profissional: [
+        'Estou a acompanhar. Prossiga com os detalhes, por favor.',
+      ],
+      amigavel_simples: [
+        'Estou a acompanhar tudo! Pode contar-me o resto.',
+      ],
+    });
   }
 
   if (
@@ -386,79 +427,116 @@ export function getInstantSmallTalkReply(
       clean
     )
   ) {
-    return pickNonRepeating([
-      'Tranquilo, deixei isso para lá.',
-      'Sem stress, parei por aqui. Manda outra cena quando quiseres.',
-      'Na boa, esquecido! O que fazemos agora?',
-    ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        'Está bem, cancelei esse ponto. O que prefere fazer agora?',
+        'Sem problema, deixamos isso de lado. Como posso ajudar?',
+      ],
+      formal_profissional: [
+        'Ação cancelada. Indique a nova orientação, por favor.',
+      ],
+      amigavel_simples: [
+        'Não faz mal, deixamos isso de lado. O que gostaria de tentar agora?',
+      ],
+    });
   }
 
   if (/^(vou bazar|bazar|estou a bazar|to a bazar)(\s+sara)?$/i.test(clean)) {
-    return isOwner
-      ? pickNonRepeating([
-          'Vai lá tranquilo, chefe! Quando voltares, é só chamar.',
-          'Fica bem, Senhor Júnior! Deixo tudo guardado por aqui.',
-        ])
-      : pickNonRepeating([
-          `Vai na boa${nameChunk}! Até já.`,
-          'Fica bem! Quando voltares, chama.',
-        ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        `Até breve${nameChunk}. Fico por aqui caso precise.`,
+        'Vá com calma. Quando voltar, basta chamar.',
+      ],
+      formal_profissional: [
+        `Até breve${nameChunk}. Tudo ficará guardado com segurança.`,
+      ],
+      amigavel_simples: [
+        `Até já${nameChunk}! Bom descanso e até ao regresso.`,
+      ],
+    });
   }
 
   if (/^(nao ta a dar|nao esta a dar|ta dificil|esta dificil)(\s+sara)?$/i.test(clean)) {
-    return isOwner
-      ? pickNonRepeating([
-          'Epa, não stressa chefe — diz-me qual é o mambo que a gente resolve já.',
-          'Calma! Mostra-me onde trancou que eu ajudo-te a destravar isso agora.',
-        ])
-      : pickNonRepeating([
-          'Calma, diz-me o que não está a dar que eu ajudo a resolver agora.',
-          'Sem stress — explica-me onde encravou e vamos desbloquear isso.',
-        ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        'Com calma. Diga-me exatamente onde parou para tentarmos resolver juntos.',
+        'Não se preocupe. Explique-me a dificuldade que eu ajudo a ultrapassar.',
+      ],
+      formal_profissional: [
+        'Descreva o obstáculo encontrado para analisarmos a melhor solução.',
+      ],
+      amigavel_simples: [
+        'Respire fundo, vamos resolver isto juntos. O que está a falhar neste momento?',
+      ],
+    });
   }
 
   if (
     /^(sara\s+)?(estas ai|tas ai|ouves me|esta me a ouvir|me ouves|sara)$/i.test(clean) ||
     /^(sara\s+)?(como estas|tudo bem|como vai|esta tudo bem|como tas)(\s+sara)?$/i.test(clean)
   ) {
-    return isOwner
-      ? pickNonRepeating([
-          'Por aqui está tudo a bater forte! E desse lado, tudo fixe?',
-          'Estou impecável e cheia de ideias. O que trazes hoje?',
-          'A funcionar sem nenhum erro! Conta-me lá o que precisas.',
-          'Tudo ótimo, chefe! Manda voz ou texto que eu respondo já.',
-        ])
-      : pickNonRepeating([
-          `Estou aqui${nameChunk}! O que precisas agora?`,
-          'Tudo ótimo por aqui! Conta-me o que queres fazer.',
-        ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        `Estou aqui${nameChunk}, tudo ótimo por aqui. Em que posso ajudar?`,
+        'Estou a funcionar perfeitamente e atenta. O que deseja tratar?',
+        `Sim, estou a ouvir bem${nameChunk}. Como posso ser útil?`,
+      ],
+      formal_profissional: [
+        'Operacional e atenta. Indique o que pretende realizar.',
+        'Todos os módulos estão estáveis. Em que posso assistir?',
+      ],
+      amigavel_simples: [
+        `Estou por aqui${nameChunk}! Tudo corre bem desse lado? Como posso ajudar?`,
+        'Sim, estou a ouvir muito bem! O que vamos preparar hoje?',
+      ],
+    });
   }
 
   if (/^(obrigado|obrigada|valeu|muito obrigado|brigad[oa])(\s+sara)?$/i.test(clean)) {
-    return pickNonRepeating([
-      'Sempre às ordens!',
-      'De nada! Precisando de mais alguma cena, chama.',
-      'Não tens de quê. Bora para a próxima!',
-      'É para isso que estou cá!',
-    ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        'De nada. Sempre às ordens.',
+        'Com todo o gosto. Se precisar de mais alguma coisa, basta pedir.',
+        'Não tem de quê. Estou aqui para ajudar.',
+      ],
+      formal_profissional: [
+        'Sempre ao dispor. Indique se houver mais alguma tarefa.',
+        'Com certeza. Caso necessite de apoio adicional, estou disponível.',
+      ],
+      amigavel_simples: [
+        'De nada! É sempre um prazer ajudar.',
+        'Com muito gosto! Sempre que precisar, estou aqui.',
+      ],
+    });
   }
 
   if (/^(tchau|ate logo|ate ja|ate amanha|adeus)(\s+sara)?$/i.test(clean)) {
-    if (!isOwner) {
-      return pickNonRepeating([
-        `Até já${nameChunk}! Quando precisares, é só chamar.`,
-        'Fica bem! Estou por aqui.',
-      ]);
+    if (period === 'night') {
+      return getStylePhraseSet({
+        formal_simples: [
+          `Boa noite e bom descanso${nameChunk}. Até amanhã.`,
+          'Até logo. Fica tudo guardado por aqui.',
+        ],
+        formal_profissional: [
+          `Votos de bom descanso${nameChunk}. Até à próxima sessão.`,
+        ],
+        amigavel_simples: [
+          `Até amanhã${nameChunk}! Descanse bem.`,
+        ],
+      });
     }
-    return period === 'night'
-      ? pickNonRepeating([
-          'Vai descansar tranquilo! Amanhã continuamos.',
-          'Até amanhã, Senhor Júnior! Fica tudo guardado por aqui.',
-        ])
-      : pickNonRepeating([
-          'Até já! Quando voltares, é só chamar.',
-          'Fica bem! Estou por aqui sempre que precisares.',
-        ]);
+    return getStylePhraseSet({
+      formal_simples: [
+        `Até já${nameChunk}. Quando precisar, é só chamar.`,
+        'Até breve. Estarei por aqui.',
+      ],
+      formal_profissional: [
+        `Até breve${nameChunk}. Permanecerei disponível.`,
+      ],
+      amigavel_simples: [
+        `Até já${nameChunk}! Tenha um excelente resto de dia.`,
+      ],
+    });
   }
 
   return null;
@@ -467,130 +545,108 @@ export function getInstantSmallTalkReply(
 export function getBuildAcceptanceSpeech(
   prompt: string,
   agentMode: 'manual' | 'automatic',
-  isOwner = false
+  _isOwner = false
 ): string {
   const lower = prompt
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 
-  let coreIdea = 'uma arquitetura modular organizada por pastas';
-  let suggestion = 'posso incluir um layout responsivo mobile-first e animações suaves para dar fluidez';
+  let coreIdea = 'uma estrutura organizada por módulos';
+  let suggestion = 'posso incluir um desenho adaptado a telemóvel e computador com transições suaves';
 
   if (/(loja|e-?commerce|mercado|venda|produtos|roupa|padaria|restaurante)/i.test(lower)) {
-    coreIdea = 'uma loja completa separada em catálogo, carrinho, checkout e serviços';
-    suggestion = 'sugiro adicionarmos filtros rápidos por categoria, carrinho persistente e resumo de encomenda por WhatsApp';
+    coreIdea = 'uma loja completa com catálogo, carrinho e finalização de pedido';
+    suggestion = 'sugiro incluir filtros por categoria, carrinho guardado e resumo do pedido';
   } else if (/(escola|aluno|turma|professor|nota|academi)/i.test(lower)) {
-    coreIdea = 'um sistema escolar estruturado por alunos, notas, presenças e relatórios';
-    suggestion = 'vale muito a pena colocar gráficos de desempenho e fichas pesquisáveis em tempo real';
+    coreIdea = 'um sistema escolar organizado por alunos, notas, presenças e relatórios';
+    suggestion = 'recomendo gráficos de desempenho e pesquisa rápida de fichas';
   } else if (/(jogo|game|arcade|corrida|tiro|puzzle|carro|nave)/i.test(lower)) {
-    coreIdea = 'um jogo modular com engine de física, áudio, cenas e sistema de recordes';
-    suggestion = 'posso colocar efeitos sonoros sintetizados, partículas no impacto e ranking local de pontuação máxima';
+    coreIdea = 'um jogo organizado com controlo de movimento, áudio e tabela de pontuação';
+    suggestion = 'posso adicionar efeitos sonoros e registo da melhor pontuação';
   } else if (/(dashboard|painel|financeir|analytics|grafico|kpi|relatorio)/i.test(lower)) {
-    coreIdea = 'um painel analítico profissional com módulos de dados, KPIs e gráficos interativos';
-    suggestion = 'recomendo gráficos interativos com alternância de tema e exportação rápida';
+    coreIdea = 'um painel com indicadores claros e gráficos interativos';
+    suggestion = 'recomendo gráficos simples de ler e opção para exportar os dados';
   } else if (/(filme|serie|stream|video|cinema|musica)/i.test(lower)) {
-    coreIdea = 'uma plataforma de streaming organizada com catálogo, pesquisa e player dinâmico';
-    suggestion = 'podemos destacar um banner principal dinâmico, filtros instantâneos e lista de favoritos';
+    coreIdea = 'uma plataforma organizada com catálogo, pesquisa e leitor integrado';
+    suggestion = 'podemos destacar os itens principais, filtros rápidos e lista de favoritos';
   } else if (/(chat|mensag|conversa|whatsapp)/i.test(lower)) {
-    coreIdea = 'uma aplicação de mensagens em tempo real dividida por contactos, bolhas e serviços';
-    suggestion = 'sugiro suporte a estados de leitura, pesquisa de conversas e atalhos rápidos de voz';
+    coreIdea = 'uma aplicação de mensagens dividida por contactos e conversas';
+    suggestion = 'sugiro estado de leitura e pesquisa rápida de mensagens';
   } else if (/(clinica|hospital|consulta|medico|saude)/i.test(lower)) {
-    coreIdea = 'um sistema clínico com agenda de marcações, fichas de pacientes e painel diário';
-    suggestion = 'posso organizar calendário visual, alertas de próximas consultas e histórico limpo';
+    coreIdea = 'um sistema clínico com agenda de consultas e fichas de pacientes';
+    suggestion = 'posso organizar um calendário visual e alertas das próximas consultas';
   }
 
   if (agentMode === 'automatic') {
-    const opts = [
-      `Aceitei o desafio! Vou montar ${coreIdea}, e ${suggestion}. Assumo tudo sozinha agora e testo no preview.`,
-      `Bora lá! Para esse projeto vamos usar ${coreIdea}, e ${suggestion}. Já entro em ação no modo automático.`,
-    ];
-    if (isOwner) {
-      opts.push(
-        `Boa ideia, chefe! Estou a estruturar ${coreIdea}, onde ${suggestion}. Fica tranquilo que construo e valido etapa por etapa.`
-      );
-    }
-    return pickNonRepeating(opts);
+    return pickNonRepeating([
+      `Vou preparar ${coreIdea}, e ${suggestion}. Inicio agora a construção e os testes no painel.`,
+      `Excelente pedido. Para este projeto vou montar ${coreIdea}, e ${suggestion}. Começo já em modo automático.`,
+    ]);
   }
 
-  const manualOpts = [
-    `Curti muito essa proposta! Pensei em ${coreIdea}, e ${suggestion}. Concordas em avançarmos com a primeira etapa ou queres ajustar algo antes?`,
-    `Vamos construir isto juntos! Proponho ${coreIdea}, e ${suggestion}. Aprovas o plano para eu codar a primeira parte?`,
-  ];
-  if (isOwner) {
-    manualOpts.push(
-      `Excelente pedido, Senhor Júnior! A minha sugestão é estruturar ${coreIdea}, além disso ${suggestion}. Posso começar pela Etapa 1 ou preferes mudar algum detalhe?`
-    );
-  }
-  return pickNonRepeating(manualOpts);
+  return pickNonRepeating([
+    `Boa proposta. Sugiro ${coreIdea}, e ${suggestion}. Concorda em avançarmos com a primeira etapa ou prefere ajustar algo antes?`,
+    `Vamos trabalhar nisto passo a passo. Proponho ${coreIdea}, e ${suggestion}. Posso iniciar a primeira parte?`,
+  ]);
 }
 
 export function getContinuationSpeech(
   projectName: string,
   agentMode: 'manual' | 'automatic' = 'automatic',
-  isOwner = false
+  _isOwner = false
 ): string {
   if (agentMode === 'manual') {
     return pickNonRepeating([
-      `Já analisei os ficheiros atuais de ${projectName}, mantendo tudo o que já funciona. Posso aplicar esta evolução por etapas contigo agora ou queres ajustar algum ponto primeiro?`,
-      `Estou por dentro da estrutura de ${projectName}! Vou integrar esta melhoria sem estragar o código existente. Aprovas avançar já?`,
+      `Já analisei os ficheiros atuais de ${projectName}, mantendo o que já funciona. Posso aplicar esta melhoria por etapas ou prefere ajustar algum detalhe primeiro?`,
+      `Já revi a estrutura de ${projectName}. Vou integrar esta melhoria sem alterar o que já está correto. Posso avançar?`,
     ]);
   }
-  const opts = [
-    `Já li os ficheiros atuais de ${projectName} e vou integrar isto mantendo toda a base intacta e responsiva. Começo já a atualizar e testar no preview!`,
-    `Mãos à obra em ${projectName}! Vou preservar o que já está bom, reforçar o visual e testar no console.`,
-  ];
-  if (isOwner) {
-    opts.push(
-      `Entendido, chefe! Analisei a estrutura de ${projectName} para encaixar esta novidade de forma limpa. Vou aplicar as mudanças e validar tudo agora.`
-    );
-  }
-  return pickNonRepeating(opts);
+  return pickNonRepeating([
+    `Já li os ficheiros atuais de ${projectName} e vou integrar esta atualização mantendo a base intacta. Começo agora e testo no painel.`,
+    `Vou trabalhar na atualização de ${projectName}, preservando o que já funciona bem e validando tudo no preview.`,
+  ]);
 }
 
-export function getManualStepApprovalSpeech(stepTitle: string, isOwner = false): string {
-  const opts = [
-    `Combinado! A construir agora a etapa ${stepTitle} no editor e preview.`,
-    `Vamos a isso! Estou a implementar ${stepTitle} passo a passo.`,
-  ];
-  if (isOwner) {
-    opts.push(`Aprovado, chefe! Já estou a gerar o código completo de ${stepTitle}.`);
-  }
-  return pickNonRepeating(opts);
+export function getManualStepApprovalSpeech(stepTitle: string, _isOwner = false): string {
+  return pickNonRepeating([
+    `Combinado. Estou a construir agora a etapa ${stepTitle} no editor e no preview.`,
+    `Muito bem. Vou implementar a etapa ${stepTitle} passo a passo.`,
+  ]);
 }
 
 export function getPlatformCommandSpeech(action: string, detail?: string): string {
   switch (action) {
     case 'open_editor':
-      return pickNonRepeating(['Editor aberto.', 'Abri o editor de código aqui ao lado.', 'Pronto, já estás no editor.']);
+      return pickNonRepeating(['Editor aberto.', 'Abri o editor de código ao lado.']);
     case 'open_editor_fullscreen':
-      return pickNonRepeating(['Editor em ecrã inteiro.', 'Expandi o editor para trabalhares à vontade.']);
+      return pickNonRepeating(['Editor em ecrã inteiro.', 'Expandi o editor para trabalhar com mais espaço.']);
     case 'open_files':
-      return pickNonRepeating(['Aqui tens os ficheiros do projeto.', 'Abri a árvore de ficheiros.']);
+      return pickNonRepeating(['Aqui estão os ficheiros do projeto.', 'Abri a lista de ficheiros.']);
     case 'open_console':
-      return pickNonRepeating(['Console aberto.', 'Mostrei o console de execução.']);
+      return pickNonRepeating(['Consola aberta.', 'Mostrei a consola de execução.']);
     case 'show_preview':
-      return pickNonRepeating(['Preview ao vivo focado.', 'Aqui está o preview atualizado.']);
+      return pickNonRepeating(['Preview focado.', 'Aqui está o preview atualizado.']);
     case 'open_preview_fullscreen':
-      return pickNonRepeating(['Preview em tela cheia.', 'Expandi o preview ao máximo.']);
+      return pickNonRepeating(['Preview em ecrã inteiro.', 'Expandi o preview ao máximo.']);
     case 'close_editor_or_back':
-      return pickNonRepeating(['Fechei e voltei para a vista principal.', 'Já recuei para o painel principal.']);
+      return pickNonRepeating(['Fechei e voltei ao painel principal.', 'Regressei à vista principal.']);
     case 'preview_mobile':
-      return pickNonRepeating(['Preview mudado para telemóvel.', 'Agora estás a ver a versão mobile.']);
+      return pickNonRepeating(['Vista alterada para telemóvel.', 'Agora está a ver a versão de telemóvel.']);
     case 'preview_tablet':
       return pickNonRepeating(['Preview ajustado para tablet.', 'Vista de tablet ativa.']);
     case 'preview_desktop':
-      return pickNonRepeating(['Voltei para a vista de computador.', 'Preview em ecrã desktop.']);
+      return pickNonRepeating(['Voltei para a vista de computador.', 'Preview em ecrã de computador.']);
     case 'save_project':
-      return pickNonRepeating(['Projeto guardado na nuvem.', 'Tudo salvo com segurança.']);
+      return pickNonRepeating(['Projeto guardado com sucesso.', 'Alterações guardadas com segurança.']);
     case 'open_projects':
-      return pickNonRepeating(['Aqui estão os teus projetos.', 'Abri a lista de projetos.']);
+      return pickNonRepeating(['Aqui estão os seus projetos.', 'Abri a lista de projetos.']);
     case 'open_settings':
-      return pickNonRepeating(['Definições abertas.', 'Aqui estão as configurações.']);
+      return pickNonRepeating(['Definições abertas.', 'Aqui estão as definições da SARA.']);
     case 'open_deploy':
-      return pickNonRepeating(['Painel de deploy aberto.', 'Abri a área de publicação.']);
+      return pickNonRepeating(['Painel de publicação aberto.', 'Abri a área de publicação.']);
     case 'refresh_preview':
-      return pickNonRepeating(['Preview atualizado.', 'Recarreguei a vista do site.']);
+      return pickNonRepeating(['Preview atualizado.', 'Recarreguei a vista do projeto.']);
     default:
       return detail || 'Feito.';
   }
@@ -600,39 +656,30 @@ export function getWorkspaceSwitchSpeech(target: 'jarvis' | 'builder', projectNa
   if (target === 'builder') {
     return pickNonRepeating([
       projectName && projectName !== 'Novo Projeto'
-        ? `Entrei no Estúdio SARA com ${projectName}. Que queres construir ou ajustar agora?`
-        : 'Estúdio SARA aberto. Diz-me o que vamos construir.',
-      'Cá estamos no Estúdio SARA. Pronta para pôr as mãos no código.',
-      'Mudei para o Estúdio SARA. Podes acompanhar tudo por aqui.',
+        ? `Entrei no Estúdio SARA com o projeto ${projectName}. O que gostaria de construir ou ajustar?`
+        : 'Estúdio SARA aberto. Diga-me o que vamos construir.',
+      'Estamos no Estúdio SARA. Estou pronta para trabalhar no projeto.',
     ]);
   }
   return pickNonRepeating([
     'Voltei para o Assistente. Em que posso ajudar?',
-    'Estamos no modo Assistente outra vez. Fala comigo.',
-    'Cá estou de volta no palco principal. Qual é a próxima?',
+    'Estamos no modo Assistente novamente. Estou atenta.',
   ]);
 }
 
 export function getBackgroundBuildAckSpeech(goal: string): string {
   const shortTopic = goal.trim().slice(0, 48);
   return pickNonRepeating([
-    `Boa ideia! Já pus o Estúdio SARA a construir isso em segundo plano (${shortTopic}) enquanto continuamos a conversar aqui.`,
-    `Aceite! O Estúdio SARA já arrancou em segundo plano para montar esse projeto — fico contigo aqui no Assistente e aviso assim que terminar.`,
-    `Bora lá! Deixei o Estúdio SARA a trabalhar em segundo plano nesse pedido. Podes continuar a falar comigo normalmente.`,
+    `Com certeza. Coloquei o Estúdio SARA a trabalhar nisso em segundo plano (${shortTopic}) enquanto continuamos a conversar aqui.`,
+    `Registado. O Estúdio SARA já iniciou a construção em segundo plano e aviso assim que terminar.`,
   ]);
 }
 
-export function getBackgroundBuildDoneSpeech(projectName: string, isOwner = false): string {
-  const opts = [
-    `Terminei! O projeto ${projectName} já está pronto no Estúdio SARA — queres ver?`,
-    `Missão cumprida em segundo plano: ${projectName} está concluído e testado. Queres dar uma olhadela?`,
-  ];
-  if (isOwner) {
-    opts.push(
-      `Chefe, o trabalho no Estúdio SARA ficou pronto (${projectName}). Queres abrir para ver como ficou?`
-    );
-  }
-  return pickNonRepeating(opts);
+export function getBackgroundBuildDoneSpeech(projectName: string, _isOwner = false): string {
+  return pickNonRepeating([
+    `Concluí o trabalho. O projeto ${projectName} já está pronto no Estúdio SARA. Gostaria de ver?`,
+    `Tarefa concluída em segundo plano: ${projectName} está pronto e verificado. Quer abrir para conferir?`,
+  ]);
 }
 
 export function getHumanChoice(options: string[]): string {
@@ -642,15 +689,13 @@ export function getHumanChoice(options: string[]): string {
 export function getModeSwitchSpeech(mode: 'manual' | 'automatic'): string {
   if (mode === 'manual') {
     return pickNonRepeating([
-      'Modo manual ligado! Vamos decidir juntos e aprovo contigo antes de construir cada etapa.',
-      'Combinado, passei para o modo manual. Eu sugiro a arquitetura, pergunto-te primeiro e avançamos passo a passo.',
-      'Modo colaborativo ativo! Diz-me o que queres construir que eu planeio e confirmo contigo.',
+      'Modo manual ativado. Vamos decidir cada passo em conjunto antes de alterar o código.',
+      'Passei para o modo manual. Eu apresento o plano e só avanço após a sua confirmação.',
     ]);
   }
   return pickNonRepeating([
-    'Modo automático ligado! Alinho as ideias contigo logo no início e depois construo, testo e corrijo sozinha.',
-    'Ativei o modo automático! Manda o objetivo que eu executo etapa por etapa até ao teste final.',
-    'Modo autónomo pronto. Manda a missão que eu assumo daqui.',
+    'Modo automático ativado. Alinho a ideia consigo no início e depois construo e testo automaticamente.',
+    'Ativei o modo automático. Indique o objetivo e eu executo etapa por etapa.',
   ]);
 }
 
@@ -1037,6 +1082,44 @@ export function parseVoiceCommand(
     ) {
       return { type: 'cancel_pending', raw: clean };
     }
+  }
+
+  // Controlo imediato de Alarme a tocar ("desligar", "adiar 5 minutos") ou pedido explícito de alarme
+  if (context?.hasRingingAlarm) {
+    if (
+      /^(?:sara[,\s]+)?(?:desliga(?:r)?|para(?:r)?|dispensa(?:r)?|silencia(?:r)?|ok\s+desliga|ta\s+bom|chega)(?:\s+(?:o\s+)?(?:alarme|despertador|som))?(?:[,\s]+sara)?$/i.test(
+        lower
+      )
+    ) {
+      return { type: 'dismiss_alarm', raw: clean };
+    }
+    const snoozeShort = lower.match(
+      /^(?:sara[,\s]+)?(?:adia(?:r)?|mais|daqui\s+a|espera|soneca)(?:\s+(?:o\s+)?(?:alarme|despertador))?(?:\s+(?:por\s+)?(\d{1,2})\s*(?:min(?:uto)?s?|m))?(?:[,\s]+sara)?$/i
+    );
+    if (snoozeShort) {
+      const mins = snoozeShort[1] ? Math.max(1, Math.min(60, Number(snoozeShort[1]))) : 5;
+      return { type: 'snooze_alarm', minutes: mins, raw: clean };
+    }
+  }
+
+  if (
+    /\b(?:desliga(?:r)?|para(?:r)?|dispensa(?:r)?|cancela(?:r)?)\s+(?:o\s+)?(?:alarme|despertador)\b/i.test(
+      lower
+    )
+  ) {
+    return { type: 'dismiss_alarm', raw: clean };
+  }
+  const explicitSnooze = lower.match(
+    /\b(?:adia(?:r)?)\s+(?:o\s+)?(?:alarme|despertador)(?:\s+(?:por\s+)?(\d{1,2})\s*(?:min(?:uto)?s?|m))?\b/i
+  );
+  if (explicitSnooze) {
+    const mins = explicitSnooze[1] ? Math.max(1, Math.min(60, Number(explicitSnooze[1]))) : 5;
+    return { type: 'snooze_alarm', minutes: mins, raw: clean };
+  }
+
+  const parsedAlarm = parseAlarmVoiceCommand(clean);
+  if (parsedAlarm) {
+    return parsedAlarm;
   }
 
   // Comandos de Admin e Logout (validados estritamente contra isOwner na camada de aplicação)
@@ -2357,6 +2440,118 @@ export function parseVoiceCommand(
   return { type: 'prompt', text: clean };
 }
 
+export function parseAlarmVoiceCommand(rawText: string): VoiceCommandAction | null {
+  const clean = String(rawText || '').trim();
+  const lower = clean
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.!?]+$/g, '')
+    .trim();
+
+  if (!lower) return null;
+
+  // Ignora pedidos de abrir a lista/módulo ou criar app de alarme
+  if (
+    /\b(abre|abrir|mostra|ver|vai\s+para)\s+(a\s+|os?\s+)?(agenda|alarmes?|despertador)\b/i.test(lower) ||
+    /\b(site|app|aplicativo|sistema|codigo)\b/i.test(lower)
+  ) {
+    return null;
+  }
+
+  const hasAlarmKeyword =
+    /\b(alarme|alarmes|despertador)\b/i.test(lower) ||
+    /\b(acorda[-\s]?me|desperta[-\s]?me)\b/i.test(lower);
+  if (!hasAlarmKeyword) return null;
+
+  // Ignora perguntas sobre alarmes ("quais alarmes tenho")
+  if (/\b(quais|quantos|tenho\s+algum|lista|mostra)\b/i.test(lower) && !/\b(coloca|cria|marca|poe|mete|define|ativa|agenda)\b/i.test(lower)) {
+    return null;
+  }
+
+  // 1. Relativo: "daqui a 5 minutos" / "em 1 minuto" / "daqui a 30 segundos" / "em 2 horas"
+  const relMatch = lower.match(
+    /\b(?:daqui\s+a|em|para\s+daqui\s+a|dentro\s+de)\s+(\d+|um|uma|dois|duas|tres|quatro|cinco|dez|quinze|vinte|trinta)\s*(seg(?:undo)?s?|min(?:uto)?s?|horas?|h|m|s)\b/i
+  );
+  if (relMatch) {
+    const wordMap: Record<string, number> = {
+      um: 1,
+      uma: 1,
+      dois: 2,
+      duas: 2,
+      tres: 3,
+      quatro: 4,
+      cinco: 5,
+      dez: 10,
+      quinze: 15,
+      vinte: 20,
+      trinta: 30,
+    };
+    const num = /^\d+$/.test(relMatch[1]) ? Number(relMatch[1]) : wordMap[relMatch[1]] || 0;
+    const unit = relMatch[2].toLowerCase();
+    if (num > 0) {
+      if (unit.startsWith('s')) {
+        return {
+          type: 'create_alarm',
+          offsetSeconds: num,
+          label: 'Alarme',
+          raw: clean,
+        };
+      }
+      const offsetMinutes = unit.startsWith('h') ? num * 60 : num;
+      return {
+        type: 'create_alarm',
+        offsetMinutes,
+        label: 'Alarme',
+        raw: clean,
+      };
+    }
+  }
+
+  // 2. Meio-dia / meia-noite
+  if (/\bmeio[-\s]?dia\b/i.test(lower)) {
+    return { type: 'create_alarm', timeHHmm: '12:00', label: 'Alarme', raw: clean };
+  }
+  if (/\bmeia[-\s]?noite\b/i.test(lower)) {
+    return { type: 'create_alarm', timeHHmm: '00:00', label: 'Alarme', raw: clean };
+  }
+
+  // 3. Hora exata: "7h", "07:30", "7h30", "7 horas e meia", "às 7 da noite", "para as 19 horas"
+  const timeMatch = lower.match(
+    /(?:para\s+(?:as\s+)?|[aà]s\s+|pelas\s+)?(\d{1,2})\s*(?::(\d{2})|h(?:\s*(\d{1,2}))?|horas?(?:\s+e\s+(meia|\d{1,2}))?)?(?:\s+da\s+(manha|tarde|noite))?/i
+  );
+  // Procura especificamente um padrão numérico de hora depois dos verbos ou preposições
+  const strictTimeMatch =
+    lower.match(/(?:para\s+(?:as\s+)?|[aà]s\s+|pelas\s+)(\d{1,2})(?:\s*[:h]\s*(\d{1,2})|\s+horas?(?:\s+e\s+(meia|\d{1,2}))?)?(?:\s+da\s+(manha|tarde|noite))?/i) ||
+    lower.match(/\b(\d{1,2})\s*(?::|h)\s*(\d{2})?(?:\s+da\s+(manha|tarde|noite))?/i) ||
+    lower.match(/\b(\d{1,2})\s+horas?(?:\s+e\s+(meia|\d{1,2}))?(?:\s+da\s+(manha|tarde|noite))?/i);
+
+  const chosenMatch = strictTimeMatch || (/\b(?:para|as|pelas)\s+\d{1,2}\b/i.test(lower) ? timeMatch : null);
+  if (chosenMatch) {
+    let h = Number(chosenMatch[1]);
+    const rawMin = chosenMatch[2] || '';
+    let m = rawMin === 'meia' ? 30 : rawMin ? Number(rawMin) : 0;
+    const period = (chosenMatch[3] || chosenMatch[4] || '').toLowerCase();
+
+    if (period === 'tarde' && h >= 1 && h <= 11) h += 12;
+    else if (period === 'noite' && h >= 1 && h <= 11) h += 12;
+    else if (period === 'manha' && h === 12) h = 0;
+
+    if (Number.isInteger(h) && h >= 0 && h <= 23 && Number.isInteger(m) && m >= 0 && m <= 59) {
+      const timeHHmm = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+      return {
+        type: 'create_alarm',
+        timeHHmm,
+        label: 'Alarme',
+        raw: clean,
+      };
+    }
+    return { type: 'create_alarm', invalid: true, raw: clean };
+  }
+
+  return { type: 'create_alarm', invalid: true, raw: clean };
+}
+
 export function isSpeechRecognitionSupported(): boolean {
   if (typeof window === 'undefined') return false;
   return Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition);
@@ -2380,18 +2575,32 @@ let lastBargeInAt = 0;
 let bargeInAckActive = false;
 let bargeInAckNormalized = '';
 let stopCooldownUntil = 0;
+let vigiaModeVoiceOnly = false;
+let vigiaWakeHandler: (() => void) | null = null;
+let vigiaModeToggleNotifier: ((active: boolean) => void) | null = null;
+
+export function setVoiceVigiaMode(active: boolean, onWake?: () => void): void {
+  if (onWake) vigiaWakeHandler = onWake;
+  if (vigiaModeVoiceOnly === active) return;
+  vigiaModeVoiceOnly = active;
+  vigiaModeToggleNotifier?.(active);
+}
+
+export function isVoiceVigiaMode(): boolean {
+  return vigiaModeVoiceOnly;
+}
 
 const POST_TTS_SILENCE_COOLDOWN_MS = 800;
 const STOP_COOLDOWN_LOCK_MS = 3000;
 const MIN_VOICE_CONFIDENCE = 0.6;
 
 const BARGE_IN_STOP_VARIATIONS = [
-  'Ok, parei. Estou aqui.',
-  'Pronto, já parei. Diz-me.',
-  'Entendido, fiquei calada. O que precisas?',
-  'Ok ok, parei. Fala.',
-  'Feito, parei. Estou a ouvir.',
-  'Certo, parei por aqui. Conta-me.',
+  'Parei. Estou a ouvir.',
+  'Pronto, já parei. Diga-me.',
+  'Compreendido, aguardo o seu pedido.',
+  'Parei por aqui. Pode falar.',
+  'Feito, parei. Estou atenta.',
+  'Certo, estou a escutar.',
 ];
 let lastStopAckIndex = -1;
 
@@ -3015,11 +3224,13 @@ export function resumirParaVoz(
       .trim();
   }
 
-  const normalizedText = cleaned
-    .replace(/Eletro-Jr\b/gi, 'Eletro-Júnior')
-    .replace(/\s+/g, ' ')
-    .replace(/\s+([!?,.;:])/g, '$1')
-    .trim();
+  const normalizedText = sanitizeOutgoingFormalText(
+    cleaned
+      .replace(/Eletro-Jr\b/gi, 'Eletro-Júnior')
+      .replace(/\s+/g, ' ')
+      .replace(/\s+([!?,.;:])/g, '$1')
+      .trim()
+  );
 
   if (!normalizedText) return '';
 
@@ -3452,7 +3663,7 @@ export function startContinuousVoiceRecognition(options: {
     activeRecognition = recognition;
     recognition.lang = 'pt-PT';
     recognition.continuous = true;
-    recognition.interimResults = false;
+    recognition.interimResults = vigiaModeVoiceOnly;
     recognition.maxAlternatives = 5;
 
     const processedFinalIndices = new Set<number>();
@@ -3496,6 +3707,38 @@ export function startContinuousVoiceRecognition(options: {
         clearSentenceBuffer();
         for (let i = event.resultIndex; i < event.results.length; i++) {
           if (event.results[i]?.isFinal) processedFinalIndices.add(i);
+        }
+        return;
+      }
+
+      // MODO VIGIA: escuta LOCAL no PC apenas pela palavra "SARA" (< 1s ao acordar). Ignora tudo o resto sem sair do PC.
+      if (vigiaModeVoiceOnly) {
+        let wakeDetected = false;
+        let finalWakeCommand = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const res = event.results[i];
+          const alt0 = String(res?.[0]?.transcript || '').trim();
+          if (!alt0) continue;
+          const normalized = normalizePhoneticVoiceTranscript(alt0)
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '');
+          if (/\bsara\b/i.test(normalized)) {
+            wakeDetected = true;
+            if (res?.isFinal) {
+              processedFinalIndices.add(i);
+              finalWakeCommand = normalizePhoneticVoiceTranscript(alt0);
+            }
+          } else if (res?.isFinal) {
+            processedFinalIndices.add(i);
+          }
+        }
+        if (wakeDetected) {
+          vigiaModeVoiceOnly = false;
+          vigiaWakeHandler?.();
+          if (finalWakeCommand) {
+            options.onResult(finalWakeCommand);
+          }
         }
         return;
       }
@@ -3692,6 +3935,28 @@ export function startContinuousVoiceRecognition(options: {
     window.addEventListener('focus', handleTabWake);
   }
 
+  vigiaModeToggleNotifier = () => {
+    if (manuallyStopped || !micShouldBeActive || !options.shouldKeepListening()) return;
+    clearSentenceBuffer();
+    const rec = activeRecognition;
+    activeRecognition = null;
+    if (rec) {
+      try {
+        rec.onstart = null;
+        rec.onresult = null;
+        rec.onerror = null;
+        rec.onend = null;
+        rec.abort?.();
+        rec.stop?.();
+      } catch {
+        // ignore
+      }
+    }
+    if (!isTtsRecognitionOff && !isSaraActivelySpeaking()) {
+      scheduleRestart(60);
+    }
+  };
+
   if (!isTtsRecognitionOff) {
     startSession();
   }
@@ -3703,6 +3968,7 @@ export function startContinuousVoiceRecognition(options: {
     pauseRecognitionForTtsFn = null;
     resumeMicFn = null;
     clearActiveVoiceBufferFn = null;
+    vigiaModeToggleNotifier = null;
     clearSentenceBuffer();
     stopHumanVoiceVad();
     clearInterval(watchdogId);

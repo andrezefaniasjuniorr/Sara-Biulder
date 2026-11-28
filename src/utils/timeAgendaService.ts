@@ -576,3 +576,37 @@ export function toSafeCoreOfflineMessage(rawError?: string): string {
   }
   return sanitizeInfraText(txt);
 }
+
+export function normalizeAlarmHHmm(rawTime?: string): string | null {
+  const clean = String(rawTime || '').trim();
+  const match = clean.match(/^(\d{1,2})\s*[:h]\s*(\d{0,2})$/i);
+  if (!match) return null;
+  const h = Number(match[1]);
+  const m = match[2] ? Number(match[2]) : 0;
+  if (!Number.isInteger(h) || h < 0 || h > 23 || !Number.isInteger(m) || m < 0 || m > 59) {
+    return null;
+  }
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+export function computeAlarmTargetFromOffset(params: {
+  offsetMinutes?: number;
+  offsetSeconds?: number;
+  now?: Date;
+}): { timeHHmm: string; targetMs: number } {
+  const nowDate = params.now || new Date();
+  const deltaMs =
+    (typeof params.offsetSeconds === 'number' && params.offsetSeconds > 0
+      ? params.offsetSeconds * 1000
+      : 0) +
+    (typeof params.offsetMinutes === 'number' && params.offsetMinutes > 0
+      ? params.offsetMinutes * 60 * 1000
+      : 0);
+  const targetDate = new Date(nowDate.getTime() + Math.max(1000, deltaMs));
+  const parts = getMaputoNowParts(targetDate);
+  return {
+    timeHHmm: parts.timeHHmm,
+    targetMs: targetDate.getTime(),
+  };
+}
+

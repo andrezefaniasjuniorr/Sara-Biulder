@@ -10,6 +10,7 @@ export type ActivityCategory =
   | 'idle';
 
 export interface SaraUserIdentityPayload {
+  userId?: string;
   callName: string;
   isOwner: boolean;
   isGuest: boolean;

@@ -8,6 +8,8 @@ import {
   Loader2,
   LogOut,
   FileText,
+  MessageSquareText,
+  Briefcase,
 } from 'lucide-react';
 import type { FirebaseUserProfile } from '../types/builder';
 import {
@@ -22,10 +24,21 @@ import {
   getSavedGeminiKey,
   saveGeminiKey,
 } from '../services/saraAiService';
+import {
+  SARA_PREFS_EVENT,
+  SARA_SPEECH_STYLE_OPTIONS,
+  getSavedSpeechStyle,
+  getSavedUserAreaProfile,
+  saveSpeechStyle,
+  saveUserAreaProfile,
+  type SaraSpeechStyle,
+} from '../services/saraPrefsService';
 import { toSafeCoreOfflineMessage } from '../utils/timeAgendaService';
 
 interface SettingsModalProps {
   isOpen: boolean;
+  isOwner?: boolean;
+  userId?: string;
   firebaseUser: FirebaseUserProfile | null;
   onClose: () => void;
   onNotify: (msg: string) => void;
@@ -35,10 +48,14 @@ const MASKED_SECRET = '••••••••';
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
+  isOwner = true,
+  userId,
   firebaseUser,
   onClose,
   onNotify,
 }) => {
+  const [speechStyle, setSpeechStyle] = useState<SaraSpeechStyle>(() => getSavedSpeechStyle());
+  const [userArea, setUserArea] = useState(() => getSavedUserAreaProfile(userId).area);
   const [hasCoreKey, setHasCoreKey] = useState(() => Boolean(getSavedGeminiKey()));
   const [coreKeyInput, setCoreKeyInput] = useState(() => (getSavedGeminiKey() ? MASKED_SECRET : ''));
   const [coreKeyTouched, setCoreKeyTouched] = useState(false);
@@ -71,7 +88,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const txtFileRef = useRef<HTMLInputElement | null>(null);
 
+  React.useEffect(() => {
+    if (!isOpen) return;
+    setSpeechStyle(getSavedSpeechStyle());
+    setUserArea(getSavedUserAreaProfile(userId).area);
+    const syncPrefs = () => {
+      setSpeechStyle(getSavedSpeechStyle());
+      setUserArea(getSavedUserAreaProfile(userId).area);
+    };
+    window.addEventListener(SARA_PREFS_EVENT, syncPrefs);
+    return () => window.removeEventListener(SARA_PREFS_EVENT, syncPrefs);
+  }, [isOpen, userId]);
+
   if (!isOpen) return null;
+
+  const handleSelectSpeechStyle = (style: SaraSpeechStyle) => {
+    setSpeechStyle(style);
+    saveSpeechStyle(style);
+    const chosen = SARA_SPEECH_STYLE_OPTIONS.find((o) => o.id === style)?.label || 'Formal Simples';
+    setSavedNotice(`Forma de falar definida para: ${chosen}.`);
+    onNotify(`Forma de falar da SARA: ${chosen}`);
+    setTimeout(() => setSavedNotice(''), 2500);
+  };
+
+  const handleSaveUserArea = (e: React.FormEvent) => {
+    e.preventDefault();
+    saveUserAreaProfile({ asked: true, area: userArea.trim() }, userId);
+    setSavedNotice(
+      userArea.trim()
+        ? `Área guardada: ${userArea.trim()}.`
+        : 'Área limpa. A SARA mantém atendimento universal.'
+    );
+    onNotify('Área de ajuda atualizada.');
+    setTimeout(() => setSavedNotice(''), 2500);
+  };
 
   const handleSaveKeys = (e: React.FormEvent) => {
     e.preventDefault();
@@ -183,20 +233,105 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       <div className="w-full max-w-2xl max-h-[88vh] bg-[#12121A] border border-[#1F1F2E] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         <div className="px-5 py-4 border-b border-[#1F1F2E] flex items-center justify-between gap-4 shrink-0">
           <div>
-            <h2 className="text-base font-bold text-white">Configurações do Sistema</h2>
-            <p className="text-xs text-[#A1A1AA]">Núcleo SARA, Motor Inteligente e Cofre de Projetos</p>
+            <h2 className="text-base font-bold text-white">Definições da SARA</h2>
+            <p className="text-xs text-[#A1A1AA]">
+              {isOwner
+                ? 'Forma de falar, área de apoio, Núcleo SARA e Cofre'
+                : 'Forma de falar e área de ajuda personalizada'}
+            </p>
           </div>
           <button
             type="button"
             onClick={onClose}
             className="p-2 rounded-lg bg-[#0A0A0F] border border-[#1F1F2E] text-[#A1A1AA] hover:text-white cursor-pointer"
-            aria-label="Fechar configurações"
+            aria-label="Fechar definições"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         <div className="p-5 overflow-y-auto space-y-5 sara-scroll">
+          {/* 0. Definições da SARA (visível para TODOS os utilizadores) */}
+          <div className="p-4 rounded-xl bg-[#0A0A0F] border border-cyan-500/30 space-y-4">
+            <div className="space-y-2.5">
+              <div className="flex items-center gap-2">
+                <MessageSquareText className="w-4 h-4 text-[#00E5FF]" />
+                <span className="text-sm font-bold text-white">Como queres que eu fale?</span>
+              </div>
+              <p className="text-[11px] text-[#A1A1AA]">
+                Escolhe o tom das minhas respostas. Fica guardado apenas para ti e nunca mudo sem pedires.
+              </p>
+              <div className="grid sm:grid-cols-3 gap-2">
+                {SARA_SPEECH_STYLE_OPTIONS.map((opt) => {
+                  const active = speechStyle === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => handleSelectSpeechStyle(opt.id)}
+                      className={`p-3 rounded-xl border text-left transition cursor-pointer ${
+                        active
+                          ? 'bg-cyan-500/15 border-[#00E5FF] text-white shadow-[0_0_12px_rgba(0,229,255,0.2)]'
+                          : 'bg-[#12121A] border-[#1F1F2E] text-[#A1A1AA] hover:border-cyan-500/40 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="text-xs font-bold">{opt.label}</span>
+                        {active && <Check className="w-3.5 h-3.5 text-[#00E5FF] shrink-0" />}
+                      </div>
+                      <p className="text-[10px] opacity-80 mt-1 leading-snug">{opt.description}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveUserArea} className="pt-3 border-t border-[#1F1F2E] space-y-2">
+              <div className="flex items-center gap-2">
+                <Briefcase className="w-4 h-4 text-[#3B82F6]" />
+                <span className="text-xs font-bold text-white">
+                  Em que área trabalhas ou o que queres que eu te ajude?
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={userArea}
+                  onChange={(e) => setUserArea(e.target.value)}
+                  placeholder="Ex: Loja, restaurante, escola, escritório, casa, programação..."
+                  className="flex-1 bg-[#12121A] border border-[#1F1F2E] focus:border-[#00E5FF] rounded-lg px-3 py-2 text-xs text-white outline-none"
+                />
+                <button
+                  type="submit"
+                  className="px-3.5 py-2 rounded-lg bg-[#3B82F6]/25 border border-[#3B82F6]/60 text-blue-200 text-xs font-semibold hover:bg-[#3B82F6]/35 cursor-pointer shrink-0"
+                >
+                  Guardar
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {!isOwner && savedNotice && (
+            <div className="px-3 py-2 rounded-lg bg-emerald-950/30 border border-emerald-500/40 text-emerald-300 text-xs flex items-center gap-2">
+              <Check className="w-4 h-4" />
+              <span>{savedNotice}</span>
+            </div>
+          )}
+
+          {!isOwner && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] text-white text-xs font-semibold cursor-pointer"
+              >
+                Concluir
+              </button>
+            </div>
+          )}
+
+          {isOwner && (
+            <>
           {/* 1. Núcleo SARA */}
           <div className="p-4 rounded-xl bg-[#0A0A0F] border border-[#1F1F2E] space-y-3">
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -394,6 +529,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             </div>
           </form>
+            </>
+          )}
         </div>
       </div>
     </div>

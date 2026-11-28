@@ -38,6 +38,7 @@ interface TopBarProps {
   isSaraSpeaking: boolean;
   isSaraSilenced: boolean;
   isCallMode?: boolean;
+  isVigiaMode?: boolean;
   isThinking: boolean;
   firebaseUser: FirebaseUserProfile | null;
   isSyncingFirebase?: boolean;
@@ -78,6 +79,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   isSaraSpeaking,
   isSaraSilenced,
   isCallMode = false,
+  isVigiaMode = false,
   isThinking,
   isSyncingFirebase = false,
   isJarvisPanelOpen = false,
@@ -256,8 +258,13 @@ export const TopBar: React.FC<TopBarProps> = ({
           </div>
         )}
 
-        {/* Indicadores ao vivo: A falar / A ouvir com onda / A pensar */}
-        {isSaraSpeaking ? (
+        {/* Indicadores ao vivo: Modo Vigia Económico / A falar / A ouvir / A pensar */}
+        {isVigiaMode ? (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-400/45 text-[11px] font-mono font-bold text-emerald-200 whitespace-nowrap shrink-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <span>SARA em Vigia - 0 KB/min</span>
+          </div>
+        ) : isSaraSpeaking ? (
           <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-[#8B5CF6]/15 border border-[#8B5CF6]/40 text-[11px] font-medium text-[#C4B5FD] whitespace-nowrap">
             <Volume2 className="w-3.5 h-3.5" />
             <span>Sara a falar</span>
@@ -444,16 +451,14 @@ export const TopBar: React.FC<TopBarProps> = ({
               <span className="hidden sm:inline">Projetos</span>
             </button>
 
-            {isOwner && (
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#8B5CF6]/50 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
-                title="Configurações"
-              >
-                <Settings className="w-3.5 h-3.5 text-[#8B5CF6]" />
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={onOpenSettings}
+              className="px-2 py-1.5 rounded-lg text-xs font-medium bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#8B5CF6]/50 transition flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+              title="Definições da SARA"
+            >
+              <Settings className="w-3.5 h-3.5 text-[#8B5CF6]" />
+            </button>
 
             <button
               type="button"

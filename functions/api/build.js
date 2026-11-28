@@ -143,7 +143,7 @@ ${prompt || 'Constrói o sistema pedido.'}`;
     const { text, modelUsed } = await callGeminiRestWithFailover(
       apiKeys,
       (model) => ({
-        system_instruction: { parts: [{ text: getSaraCorePrompt(userIdentity) || SARA_CORE_SYSTEM_PROMPT }] },
+        system_instruction: { parts: [{ text: getSaraCorePrompt(userIdentity, body) || SARA_CORE_SYSTEM_PROMPT }] },
         contents: [{ role: 'user', parts }],
         generationConfig: {
           ...(model.startsWith('gemini-4') ? { thinkingConfig: { thinkingLevel: 'LOW' } } : {}),

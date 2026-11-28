@@ -20,6 +20,7 @@ export interface JarvisAlarmItem {
   label: string;
   enabled: boolean;
   triggeredTodayDate?: string;
+  targetMs?: number;
 }
 
 export interface JarvisTaskItem {

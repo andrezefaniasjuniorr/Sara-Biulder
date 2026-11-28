@@ -61,7 +61,7 @@ export default async function handler(req, res) {
               model,
               contents: { parts },
               config: {
-                systemInstruction: getSaraStreamPrompt(body?.userIdentity) || SARA_STREAM_PROTOCOL,
+                systemInstruction: getSaraStreamPrompt(body?.userIdentity, body) || SARA_STREAM_PROTOCOL,
                 ...(model.startsWith('gemini-4')
                   ? { thinkingConfig: { thinkingLevel: ThinkingLevel.LOW } }
                   : {}),

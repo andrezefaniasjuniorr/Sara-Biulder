@@ -21,6 +21,7 @@ import {
   Check,
   X,
   Phone,
+  AlarmClock,
 } from 'lucide-react';
 import type {
   AgentMode,
@@ -48,6 +49,7 @@ import type {
   VoiceLevel,
 } from './types/builder';
 import type {
+  JarvisAlarmItem,
   JarvisMediaStateContext,
   JarvisModuleTab,
   WorkspaceMode,
@@ -200,6 +202,7 @@ import {
   setSaraCallMode,
   setSaraSilenced,
   setSpeakingStateListener,
+  setVoiceVigiaMode,
   speakAsSara,
   speakAsSaraAndWait,
   startContinuousVoiceRecognition,
@@ -211,6 +214,31 @@ import {
   type VoiceParseContext,
   type VoiceReadingStatus,
 } from './utils/voiceService';
+import {
+  loadJarvisAlarms,
+  saveJarvisAlarms,
+} from './services/jarvisService';
+import {
+  computeAlarmTargetFromOffset,
+  getMaputoNowParts,
+  normalizeAlarmHHmm,
+} from './utils/timeAgendaService';
+import {
+  ECONOMIC_TELEMETRY_INTERVAL_MS,
+  SARA_ALARMS_SYNC_EVENT,
+  SARA_VIGIA_EVENT,
+  VIGIA_IDLE_MS,
+  computeTelemetryDeltaEvaluation,
+  getLastInteractiveActivityMs,
+  isVigiaModeActive,
+  queueTelemetryPacketLocally,
+  readLastSentTelemetry,
+  readPendingTelemetryQueue,
+  setVigiaModeActive,
+  touchInteractiveActivity,
+  writeLastSentTelemetry,
+  writePendingTelemetryQueue,
+} from './services/saraPrefsService';
 import {
   isProjectBlank,
   loadActiveProjectState,
@@ -635,6 +663,7 @@ export default function App() {
   const callerName = isOwner ? 'Eletro-Júnior' : session?.callName || 'Utilizador';
   const userIdentity = useMemo<SaraUserIdentityPayload>(
     () => ({
+      userId: session?.userId,
       callName: session?.callName || 'Utilizador',
       isOwner: Boolean(session?.isOwner),
       isGuest: Boolean(session?.isGuest),
@@ -727,6 +756,18 @@ export default function App() {
   );
   const [isSaraSilenced, setIsSaraSilencedState] = useState(false);
   const [isCallMode, setIsCallModeState] = useState(false);
+  const [isVigiaMode, setIsVigiaMode] = useState<boolean>(() => isVigiaModeActive());
+  const [ringingDeviceAlarm, setRingingDeviceAlarm] = useState<JarvisAlarmItem | null>(null);
+  const ringingDeviceAlarmRef = useRef<JarvisAlarmItem | null>(null);
+  ringingDeviceAlarmRef.current = ringingDeviceAlarm;
+  const sessionAlarmsRef = useRef<JarvisAlarmItem[]>(
+    loadJarvisAlarms(
+      getSavedActiveSession() && !getSavedActiveSession()?.isGuest
+        ? getSavedActiveSession()?.userId
+        : undefined,
+      Boolean(getSavedActiveSession()?.isGuest)
+    )
+  );
   const isSaraSilencedRef = useRef(false);
   const isCallModeRef = useRef(false);
   const [isListening, setIsListening] = useState(false);
@@ -901,6 +942,7 @@ export default function App() {
           isPresentationMode
       ),
       hasPendingConfirm: Boolean(pendingConfirmation),
+      hasRingingAlarm: Boolean(ringingDeviceAlarm),
       projectFiles: Object.keys(currentProject?.files || {}),
       availableProjects: projects.map((p) => p.name),
       isMissionActive: mission.active,
@@ -932,6 +974,7 @@ export default function App() {
   }, [
     workspaceMode,
     pendingConfirmation,
+    ringingDeviceAlarm,
     rightTab,
     previewDevice,
     isEditorFullscreen,
@@ -1338,8 +1381,10 @@ export default function App() {
       const sess = sessionRef.current;
       if (!hidden && sess) {
         refreshActiveSessionKeepAlive(sess);
-        updatePresenceHeartbeat(sess, 'Online');
-        fetch('/api/keepalive', { method: 'GET', keepalive: true }).catch(() => {});
+        if (!isVigiaModeActive()) {
+          updatePresenceHeartbeat(sess, 'Online');
+          fetch('/api/keepalive', { method: 'GET', keepalive: true }).catch(() => {});
+        }
         if (bgSettingsRef.current.backgroundAllowed) {
           void requestScreenWakeLock();
         }
@@ -1351,7 +1396,16 @@ export default function App() {
       const sess = sessionRef.current;
       if (sess) {
         refreshActiveSessionKeepAlive(sess);
-        updatePresenceHeartbeat(sess, 'Online');
+        if (!isVigiaModeActive()) {
+          updatePresenceHeartbeat(sess, 'Online');
+          if (!sess.isOwner && !sess.isGuest) {
+            void checkSessionStillValid(sess).then((res) => {
+              if (!res.valid) {
+                void handleLogout('A tua sessão foi encerrada pelo sistema.');
+              }
+            });
+          }
+        }
       }
     };
     const handleUnload = () => {
@@ -1519,17 +1573,172 @@ export default function App() {
     };
   }, [session, myCoords, showToast, handleLogout]);
 
-  // Telemetria inicial + Bateria Fraca (< 10%) + Ciclo de 5 minutos + Lembretes em Segundo Plano + SMS 1h offline
+  // Sincroniza lista de alarmes com o JarvisWorkspace e verifica alarmes locais em TODOS os modos e em Vigia
+  useEffect(() => {
+    sessionAlarmsRef.current = loadJarvisAlarms(
+      session && !session.isGuest ? session.userId : undefined,
+      Boolean(session?.isGuest)
+    );
+    const onAlarmsSync = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ userId?: string; items?: JarvisAlarmItem[] }>).detail;
+      if (detail && Array.isArray(detail.items)) {
+        sessionAlarmsRef.current = detail.items;
+      } else {
+        sessionAlarmsRef.current = loadJarvisAlarms(
+          session && !session.isGuest ? session.userId : undefined,
+          Boolean(session?.isGuest)
+        );
+      }
+    };
+    window.addEventListener(SARA_ALARMS_SYNC_EVENT, onAlarmsSync);
+    return () => window.removeEventListener(SARA_ALARMS_SYNC_EVENT, onAlarmsSync);
+  }, [session?.userId, session?.isGuest]);
+
+  const checkGlobalAlarmsNow = useCallback(
+    (nowMs = Date.now()) => {
+      const activeSess = sessionRef.current;
+      if (!activeSess) return;
+      const uid = !activeSess.isGuest ? activeSess.userId : undefined;
+      const currentList =
+        sessionAlarmsRef.current.length > 0
+          ? sessionAlarmsRef.current
+          : loadJarvisAlarms(uid, activeSess.isGuest);
+      if (currentList.length === 0) return;
+
+      const nowDate = new Date(nowMs);
+      const nowParts = getMaputoNowParts(nowDate);
+      let firedItem: JarvisAlarmItem | null = null;
+
+      const updated = currentList.map((al) => {
+        if (!al.enabled) return al;
+        const hitByTimestamp = typeof al.targetMs === 'number' && al.targetMs <= nowMs;
+        const hitByClock =
+          typeof al.targetMs !== 'number' &&
+          al.time === nowParts.timeHHmm &&
+          al.triggeredTodayDate !== nowParts.isoDate;
+
+        if (!firedItem && (hitByTimestamp || hitByClock)) {
+          firedItem = al;
+          if (typeof al.targetMs === 'number') {
+            return {
+              ...al,
+              enabled: false,
+              targetMs: undefined,
+              triggeredTodayDate: nowParts.isoDate,
+            };
+          }
+          return {
+            ...al,
+            triggeredTodayDate: nowParts.isoDate,
+          };
+        }
+        return al;
+      });
+
+      if (firedItem) {
+        const triggered: JarvisAlarmItem = firedItem;
+        sessionAlarmsRef.current = updated;
+        saveJarvisAlarms(updated, uid, activeSess.isGuest);
+        touchInteractiveActivity('alarm_ring');
+        setRingingDeviceAlarm(triggered);
+        startLoudDeviceAlarmLoop();
+        showToast(`Alarme SARA: ${triggered.time} — ${triggered.label}`);
+        void showSaraSystemNotification({
+          title: `Alarme SARA (${triggered.time})`,
+          body: triggered.label || 'Está na hora.',
+          tag: `sara-alarm-${triggered.id}`,
+        });
+        speakAsSara(
+          'Está na hora. Queres desligar ou adiar 5 minutos?',
+          voiceEnabledRef.current,
+          {
+            level: 'short',
+            forceSpeak: true,
+          }
+        );
+      }
+    },
+    [showToast]
+  );
+
+  // Verificador local de alarmes a cada 2s (0 KB/min de rede; funciona em Builder, Assistente e Modo Vigia)
+  useEffect(() => {
+    if (!session) return;
+    checkGlobalAlarmsNow();
+    const alarmTimer = window.setInterval(() => {
+      checkGlobalAlarmsNow();
+    }, 2000);
+    return () => window.clearInterval(alarmTimer);
+  }, [session, checkGlobalAlarmsNow]);
+
+  // Telemetria Económica (1 pacote cada 10 min só se >10% ou alerta, fila offline) + Segundo Plano + SOS
   useEffect(() => {
     if (!session || session.isGuest) return;
 
-    const syncOnce = async () => {
+    let batteryObj: any = null;
+    const readBatteryPct = (): number | null =>
+      batteryObj && typeof batteryObj.level === 'number'
+        ? Math.round(batteryObj.level * 100)
+        : null;
+
+    const sendEconomicTelemetryIfNeeded = async (opts: {
+      isAlert?: boolean;
+      forceInitial?: boolean;
+    }) => {
+      const activeSess = sessionRef.current;
+      if (!activeSess || activeSess.isGuest) return;
+      if (!opts.isAlert && isVigiaModeActive()) return;
+
+      const bg = bgSettingsRef.current;
       const coords = await requestCurrentCoordinates();
       if (coords) handleUpdateMyCoords(coords);
-      const bg = bgSettingsRef.current;
-      await syncCurrentDeviceTelemetry({
-        session,
+
+      const snapshotBase = {
+        batteryPct: readBatteryPct(),
+        batteryCharging:
+          batteryObj && typeof batteryObj.charging === 'boolean' ? batteryObj.charging : null,
+        online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+        lat: coords?.lat ?? myCoordsRef.current?.lat ?? null,
+        lng: coords?.lng ?? myCoordsRef.current?.lng ?? null,
         findPhoneEnabled: bg.findPhoneEnabled,
+      };
+
+      const prevSnap = readLastSentTelemetry(activeSess.userId);
+      const evalRes = computeTelemetryDeltaEvaluation(
+        opts.forceInitial ? null : prevSnap,
+        snapshotBase,
+        Boolean(opts.isAlert)
+      );
+
+      if (!evalRes.shouldSend) {
+        return;
+      }
+
+      const fullSnapshot = { ...snapshotBase, sentAtMs: Date.now() };
+      const reason: 'delta_gt_10' | 'alert' | 'initial' =
+        evalRes.reason === 'no_significant_change' ? 'delta_gt_10' : evalRes.reason;
+
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        queueTelemetryPacketLocally({
+          id: `pkt_${Date.now()}`,
+          reason,
+          createdAtMs: Date.now(),
+          snapshot: fullSnapshot,
+          params: {
+            userId: activeSess.userId,
+            findPhoneEnabled: opts.isAlert ? true : bg.findPhoneEnabled,
+            lowBatteryAutoLocate: bg.lowBatteryAutoLocate,
+            sosSmsEnabled: bg.sosSmsEnabled,
+            sosPhoneNumber: bg.sosPhoneNumber,
+            includeGpsLocation: true,
+          },
+        });
+        return;
+      }
+
+      await syncCurrentDeviceTelemetry({
+        session: activeSess,
+        findPhoneEnabled: opts.isAlert ? true : bg.findPhoneEnabled,
         lowBatteryAutoLocate: bg.lowBatteryAutoLocate,
         sosSmsEnabled: bg.sosSmsEnabled,
         sosPhoneNumber: bg.sosPhoneNumber,
@@ -1537,35 +1746,48 @@ export default function App() {
       });
       if (appearOnMapRef.current && !ghostModeRef.current) {
         await publishCurrentRadarPresence({
-          session,
+          session: activeSess,
           visible: true,
           ghostMode: false,
           coords: coords || myCoordsRef.current,
         });
       }
+      writeLastSentTelemetry(activeSess.userId, fullSnapshot);
       lastTelemetrySyncAtRef.current = Date.now();
     };
 
-    void syncOnce();
+    const flushOfflineTelemetryQueue = async () => {
+      const activeSess = sessionRef.current;
+      if (!activeSess || activeSess.isGuest) return;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
+      if (isVigiaModeActive()) return;
 
-    // Bateria abaixo de 10% envia última localização imediatamente
-    let batteryObj: any = null;
+      const queue = readPendingTelemetryQueue(activeSess.userId);
+      if (queue.length === 0) return;
+
+      const latest = queue[queue.length - 1];
+      await syncCurrentDeviceTelemetry({
+        session: activeSess,
+        findPhoneEnabled: latest.params.findPhoneEnabled,
+        lowBatteryAutoLocate: latest.params.lowBatteryAutoLocate,
+        sosSmsEnabled: latest.params.sosSmsEnabled,
+        sosPhoneNumber: latest.params.sosPhoneNumber,
+        includeGpsLocation: latest.params.includeGpsLocation,
+      });
+      writeLastSentTelemetry(activeSess.userId, latest.snapshot);
+      writePendingTelemetryQueue(activeSess.userId, []);
+      lastTelemetrySyncAtRef.current = Date.now();
+    };
+
+    void sendEconomicTelemetryIfNeeded({ forceInitial: !readLastSentTelemetry(session.userId) });
+
+    // Bateria abaixo de 10% é ALERTA: envia imediatamente
     const onBatteryChange = () => {
       if (!batteryObj || !bgSettingsRef.current.lowBatteryAutoLocate) return;
       const pct = Math.round((batteryObj.level || 1) * 100);
       if (pct > 0 && pct < 10) {
-        void requestCurrentCoordinates().then((coords) => {
-          if (coords) handleUpdateMyCoords(coords);
-          const bg = bgSettingsRef.current;
-          void syncCurrentDeviceTelemetry({
-            session,
-            findPhoneEnabled: true,
-            lowBatteryAutoLocate: bg.lowBatteryAutoLocate,
-            sosSmsEnabled: bg.sosSmsEnabled,
-            sosPhoneNumber: bg.sosPhoneNumber,
-            includeGpsLocation: true,
-          });
-          showToast(`Bateria a ${pct}% — última localização enviada automaticamente.`);
+        void sendEconomicTelemetryIfNeeded({ isAlert: true }).then(() => {
+          showToast(`Bateria a ${pct}% — última localização guardada.`);
         });
       }
     };
@@ -1580,12 +1802,29 @@ export default function App() {
         .catch(() => {});
     }
 
+    const handleOnlineFlush = () => {
+      void flushOfflineTelemetryQueue();
+      const activeSess = sessionRef.current;
+      if (activeSess && !activeSess.isOwner && !activeSess.isGuest && !isVigiaModeActive()) {
+        void checkSessionStillValid(activeSess).then((res) => {
+          if (!res.valid) {
+            void handleLogout('A tua sessão foi encerrada pelo sistema.');
+          }
+        });
+      }
+    };
+    window.addEventListener('online', handleOnlineFlush);
+
     const runBackgroundOrPeriodicTick = () => {
       const activeSess = sessionRef.current;
       if (!activeSess || activeSess.isGuest) return;
 
-      // 1. Lembretes em Segundo Plano devidos
       const now = Date.now();
+
+      // 0. Verificar alarmes globais mesmo em segundo plano / Vigia (100% local)
+      checkGlobalAlarmsNow(now);
+
+      // 1. Lembretes em Segundo Plano devidos (100% local)
       const dueList = remindersRef.current.filter((r) => !r.fired && r.targetMs <= now);
       if (dueList.length > 0) {
         const updated = remindersRef.current.map((r) =>
@@ -1595,6 +1834,7 @@ export default function App() {
         setReminders(updated);
         saveBackgroundReminders(activeSess.userId, updated);
         for (const rem of dueList) {
+          touchInteractiveActivity('reminder_fire');
           playReminderBellChime();
           showToast(`Lembrete SARA: ${rem.title}`);
           void showSaraSystemNotification({
@@ -1609,30 +1849,11 @@ export default function App() {
         }
       }
 
-      // 2. Enviar localização de 5 em 5 minutos se GPS e internet ativos
+      // 2. Telemetria Económica: no máximo 1 pacote cada 10 minutos, só se >10% de variação e NÃO em Vigia
       const elapsed = now - lastTelemetrySyncAtRef.current;
-      if (elapsed >= 5 * 60 * 1000 && navigator.onLine) {
+      if (!isVigiaModeActive() && elapsed >= ECONOMIC_TELEMETRY_INTERVAL_MS) {
         lastTelemetrySyncAtRef.current = now;
-        const bg = bgSettingsRef.current;
-        void requestCurrentCoordinates().then((coords) => {
-          if (coords) handleUpdateMyCoords(coords);
-          void syncCurrentDeviceTelemetry({
-            session: activeSess,
-            findPhoneEnabled: bg.findPhoneEnabled,
-            lowBatteryAutoLocate: bg.lowBatteryAutoLocate,
-            sosSmsEnabled: bg.sosSmsEnabled,
-            sosPhoneNumber: bg.sosPhoneNumber,
-            includeGpsLocation: true,
-          });
-          if (appearOnMapRef.current && !ghostModeRef.current) {
-            void publishCurrentRadarPresence({
-              session: activeSess,
-              visible: true,
-              ghostMode: false,
-              coords: coords || myCoordsRef.current,
-            });
-          }
-        });
+        void sendEconomicTelemetryIfNeeded({ isAlert: false });
       }
 
       // 3. Verificar SMS de Socorro se aparelho ficar 1 hora sem internet
@@ -1683,6 +1904,7 @@ export default function App() {
 
     return () => {
       window.clearInterval(fallbackInterval);
+      window.removeEventListener('online', handleOnlineFlush);
       stopBackgroundWorkerLoop();
       batteryObj?.removeEventListener?.('levelchange', onBatteryChange);
     };
@@ -1693,6 +1915,8 @@ export default function App() {
     bgSettings.continuousVoiceBg,
     handleUpdateMyCoords,
     showToast,
+    checkGlobalAlarmsNow,
+    handleLogout,
   ]);
 
   // Saudação falada automática ao entrar (também na reabertura de sessão já guardada após 1.º gesto)
@@ -1771,6 +1995,7 @@ export default function App() {
   const markUserActivity = useCallback(
     (category?: ActivityCategory) => {
       lastInteractionRef.current = Date.now();
+      touchInteractiveActivity(category || 'activity');
       if (!session) return;
       if (category) {
         recordActivityEvent(session, category);
@@ -1779,24 +2004,43 @@ export default function App() {
     [session]
   );
 
-  // Keep-Alive silencioso a cada 25 segundos (SEM logout por inatividade) + Modo Convidado 5m + Kick/Block check
+  // Modo Vigia Económico (2 min sem fala/interação -> 0 KB/min + escuta local só para "SARA") + Keep-Alive quando ativo
+  useEffect(() => {
+    const onVigiaChange = (ev: Event) => {
+      const active = Boolean((ev as CustomEvent<{ active?: boolean }>).detail?.active);
+      setIsVigiaMode(active);
+      setVoiceVigiaMode(active, () => {
+        touchInteractiveActivity('wake_word_sara');
+      });
+    };
+    window.addEventListener(SARA_VIGIA_EVENT, onVigiaChange);
+    return () => {
+      window.removeEventListener(SARA_VIGIA_EVENT, onVigiaChange);
+    };
+  }, []);
+
   useEffect(() => {
     if (!session) return;
     lastInteractionRef.current = Date.now();
+    touchInteractiveActivity('session_init');
     refreshActiveSessionKeepAlive(session);
-    updatePresenceHeartbeat(session, 'Online');
-    fetch('/api/keepalive', { method: 'GET', keepalive: true }).catch(() => {});
+    if (!isVigiaModeActive()) {
+      updatePresenceHeartbeat(session, 'Online');
+      fetch('/api/keepalive', { method: 'GET', keepalive: true }).catch(() => {});
+    }
 
     const onActivity = () => {
       lastInteractionRef.current = Date.now();
+      touchInteractiveActivity('user_input');
     };
     window.addEventListener('pointerdown', onActivity);
     window.addEventListener('keydown', onActivity);
     window.addEventListener('touchstart', onActivity);
-    window.addEventListener('wheel', onActivity);
 
+    // Keep-alive só envia rede quando NÃO está em Modo Vigia (0 KB/min em Vigia)
     const heartbeatTimer = setInterval(() => {
       refreshActiveSessionKeepAlive(session);
+      if (isVigiaModeActive()) return;
       updatePresenceHeartbeat(session, 'Online');
       fetch('/api/keepalive', { method: 'GET', keepalive: true }).catch(() => {});
       if (session.isOwner) {
@@ -1804,16 +2048,19 @@ export default function App() {
       }
     }, 25000);
 
-    const validityTimer =
-      !session.isOwner && !session.isGuest
-        ? setInterval(() => {
-            void checkSessionStillValid(session).then((res) => {
-              if (!res.valid) {
-                void handleLogout('A tua sessão foi encerrada pelo sistema.');
-              }
-            });
-          }, 6000)
-        : null;
+    // Verifica inatividade de 2 minutos no PC -> entra em Modo Vigia (totalmente local)
+    const vigiaIdleTimer = setInterval(() => {
+      if (
+        !isVigiaModeActive() &&
+        !isThinking &&
+        !liveBuild.isBuilding &&
+        !isSaraSpeakingRef.current &&
+        !ringingDeviceAlarmRef.current &&
+        Date.now() - getLastInteractiveActivityMs() >= VIGIA_IDLE_MS
+      ) {
+        setVigiaModeActive(true, 'idle_2min');
+      }
+    }, 15000);
 
     const guestTimer =
       session.isGuest && session.expiresAt
@@ -1833,12 +2080,11 @@ export default function App() {
       window.removeEventListener('pointerdown', onActivity);
       window.removeEventListener('keydown', onActivity);
       window.removeEventListener('touchstart', onActivity);
-      window.removeEventListener('wheel', onActivity);
       clearInterval(heartbeatTimer);
-      if (validityTimer) clearInterval(validityTimer);
+      clearInterval(vigiaIdleTimer);
       if (guestTimer) clearInterval(guestTimer);
     };
-  }, [session, handleLogout]);
+  }, [session, handleLogout, isThinking, liveBuild.isBuilding]);
 
   // Cronómetro ao vivo durante construção
   useEffect(() => {
@@ -3787,7 +4033,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         if (isOwner) {
           setShowAdminModal(true);
           showToast('Painel Admin aberto');
-          speakAsSara('Painel Admin aberto, chefe.', voiceEnabledRef.current, {
+          speakAsSara('Painel Admin aberto.', voiceEnabledRef.current, {
             level: 'short',
             forceSpeak: true,
           });
@@ -4871,17 +5117,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       }
 
       if (cmd.type === 'open_settings') {
-        if (!isOwner) {
-          showToast('Não tens acesso a isso.');
-          speakAsSara('Não tens acesso a isso.', voiceEnabledRef.current, {
-            level: 'short',
-            forceSpeak: true,
-          });
-          return true;
-        }
         setShowSettingsModal(true);
-        showToast('Configurações abertas');
-        speakAsSara(`Configurações abertas${callerShortVoc}.`, voiceEnabledRef.current, {
+        showToast('Definições da SARA abertas');
+        speakAsSara(`Definições abertas${callerShortVoc}.`, voiceEnabledRef.current, {
           level: 'short',
           forceSpeak: true,
         });
@@ -5080,6 +5318,107 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         return true;
       }
 
+      if (cmd.type === 'create_alarm') {
+        markUserActivity('agenda');
+        let resolvedHHmm: string | null = null;
+        let targetMs: number | undefined;
+        if (
+          (typeof cmd.offsetMinutes === 'number' && cmd.offsetMinutes > 0) ||
+          (typeof cmd.offsetSeconds === 'number' && cmd.offsetSeconds > 0)
+        ) {
+          const offsetCalc = computeAlarmTargetFromOffset({
+            offsetMinutes: cmd.offsetMinutes,
+            offsetSeconds: cmd.offsetSeconds,
+          });
+          resolvedHHmm = offsetCalc.timeHHmm;
+          targetMs = offsetCalc.targetMs;
+        } else if (!cmd.invalid && cmd.timeHHmm) {
+          resolvedHHmm = normalizeAlarmHHmm(cmd.timeHHmm);
+        }
+
+        if (!resolvedHHmm) {
+          const errMsg = 'Não consegui criar, tenta de novo.';
+          showToast(errMsg);
+          speakAsSara(errMsg, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return true;
+        }
+
+        const uid = session && !session.isGuest ? session.userId : undefined;
+        const currentList =
+          sessionAlarmsRef.current.length > 0
+            ? sessionAlarmsRef.current
+            : loadJarvisAlarms(uid, Boolean(session?.isGuest));
+        const newAlarm: JarvisAlarmItem = {
+          id: `al_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+          time: resolvedHHmm,
+          label: cmd.label || 'Alarme SARA',
+          enabled: true,
+          ...(typeof targetMs === 'number' ? { targetMs } : {}),
+        };
+        const nextList = [newAlarm, ...currentList];
+        const savedOk = saveJarvisAlarms(nextList, uid, Boolean(session?.isGuest));
+        if (!savedOk) {
+          const errMsg = 'Não consegui criar, tenta de novo.';
+          showToast(errMsg);
+          speakAsSara(errMsg, voiceEnabledRef.current, {
+            level: 'short',
+            forceSpeak: true,
+          });
+          return true;
+        }
+        sessionAlarmsRef.current = nextList;
+        const okMsg = `Alarme criado para ${resolvedHHmm}`;
+        showToast(okMsg);
+        speakAsSara(okMsg, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'dismiss_alarm') {
+        stopLoudDeviceAlarmLoop();
+        setRingingDeviceAlarm(null);
+        showToast('Alarme desligado.');
+        speakAsSara('Alarme desligado.', voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
+      if (cmd.type === 'snooze_alarm') {
+        stopLoudDeviceAlarmLoop();
+        const mins = Math.max(1, cmd.minutes || 5);
+        const offsetCalc = computeAlarmTargetFromOffset({ offsetMinutes: mins });
+        const uid = session && !session.isGuest ? session.userId : undefined;
+        const currentList =
+          sessionAlarmsRef.current.length > 0
+            ? sessionAlarmsRef.current
+            : loadJarvisAlarms(uid, Boolean(session?.isGuest));
+        const snoozeItem: JarvisAlarmItem = {
+          id: `al_snooze_${Date.now()}`,
+          time: offsetCalc.timeHHmm,
+          targetMs: offsetCalc.targetMs,
+          label: ringingDeviceAlarmRef.current?.label || 'Alarme adiado',
+          enabled: true,
+        };
+        const nextList = [snoozeItem, ...currentList];
+        saveJarvisAlarms(nextList, uid, Boolean(session?.isGuest));
+        sessionAlarmsRef.current = nextList;
+        setRingingDeviceAlarm(null);
+        const snoozeMsg = `Alarme adiado ${mins} minutos, para as ${offsetCalc.timeHHmm}.`;
+        showToast(snoozeMsg);
+        speakAsSara(snoozeMsg, voiceEnabledRef.current, {
+          level: 'short',
+          forceSpeak: true,
+        });
+        return true;
+      }
+
       return false;
     },
     [
@@ -5249,7 +5588,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             setShowProjectsModal(true);
             break;
           case 'open_settings':
-            if (isOwner) setShowSettingsModal(true);
+            setShowSettingsModal(true);
             break;
           case 'open_deploy':
             setShowDeployModal(true);
@@ -6748,8 +7087,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           return;
         }
 
-        // Despertar automático ao dizer "SARA" ou "Ei SARA"
+        // Despertar automático ao dizer "SARA" ou "Ei SARA" (acorda de Modo Vigia em < 1s)
         if (/^sara[.!?]*$/i.test(transcript.trim())) {
+          touchInteractiveActivity('wake_word_sara');
           setBubbleDismissed(false);
           if (isSaraSilencedRef.current && !isCallModeRef.current) {
             isSaraSilencedRef.current = false;
@@ -6768,6 +7108,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
         // Comando de despertar "Ei SARA" configurável nas definições de Segundo Plano
         if (bgSettingsRef.current.eiSaraEnabled && isEiSaraWakePhrase(transcript)) {
+          touchInteractiveActivity('wake_word_sara');
           setBubbleDismissed(false);
           if (isSaraSilencedRef.current && !isCallModeRef.current) {
             isSaraSilencedRef.current = false;
@@ -6777,7 +7118,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           const stripped = transcript.replace(/^(ei|hey|eh|oi)\s+sara[\s,.:!?-]*/i, '').trim();
           if (!stripped) {
             setIsListeningAfterBargeIn(true);
-            speakAsSara('Estou a ouvir, diz lá', voiceEnabledRef.current, {
+            speakAsSara('Estou a ouvir.', voiceEnabledRef.current, {
               level: 'short',
               forceSpeak: true,
               isBargeInAck: true,
@@ -6791,6 +7132,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           return;
         }
 
+        touchInteractiveActivity('voice_command');
         dispatchCleanVoiceInput(transcript);
       },
       onError: (errMsg, fatal) => {
@@ -7115,6 +7457,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         isSaraSpeaking={isSaraSpeaking}
         isSaraSilenced={isSaraSilenced}
         isCallMode={isCallMode}
+        isVigiaMode={isVigiaMode}
         isThinking={isThinking || liveBuild.isBuilding}
         firebaseUser={firebaseUser}
         isSyncingFirebase={isSyncingFirebase}
@@ -7129,7 +7472,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         onTogglePresentation={() => setIsPresentationMode((v) => !v)}
         onSaveProject={handleSaveProjectToFirebase}
         onOpenProjects={() => setShowProjectsModal(true)}
-        onOpenSettings={() => session.isOwner && setShowSettingsModal(true)}
+        onOpenSettings={() => setShowSettingsModal(true)}
         onOpenDeploy={() => setShowDeployModal(true)}
         onOpenAdmin={() => session.isOwner && setShowAdminModal(true)}
         onLogout={() => void handleLogout('Sessão encerrada.')}
@@ -7186,8 +7529,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
           micErrorMsg={micErrorMsg}
           isMicAllowedSaved={isMicAllowedSaved}
           onSwitchMode={handleChangeWorkspaceMode}
-          onOpenSettings={() => session.isOwner && setShowSettingsModal(true)}
+          onOpenSettings={() => setShowSettingsModal(true)}
           onNotify={showToast}
+          hasRingingAlarm={Boolean(ringingDeviceAlarm)}
           onExecuteSystemCommand={executePlatformCommand}
           onStageStateChange={handleJarvisStageStateChange}
           onPanelOpenChange={setIsJarvisPanelOpen}
@@ -7496,17 +7840,17 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         onLoadFromFirebase={handleLoadFromFirebase}
       />
 
-      {session.isOwner && (
-        <SettingsModal
-          isOpen={showSettingsModal}
-          firebaseUser={firebaseUser}
-          onClose={() => setShowSettingsModal(false)}
-          onNotify={(msg) => {
-            addConsoleLog('info', msg);
-            showToast(msg);
-          }}
-        />
-      )}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        isOwner={session.isOwner}
+        userId={session.userId}
+        firebaseUser={firebaseUser}
+        onClose={() => setShowSettingsModal(false)}
+        onNotify={(msg) => {
+          addConsoleLog('info', msg);
+          showToast(msg);
+        }}
+      />
 
       {session.isOwner && showAdminModal && (
         <AdminPanelModal
@@ -7522,7 +7866,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
         files={currentProject.files}
         isOwner={session.isOwner}
         onClose={() => setShowDeployModal(false)}
-        onOpenSettings={() => session.isOwner && setShowSettingsModal(true)}
+        onOpenSettings={() => setShowSettingsModal(true)}
         onNotify={(msg) => {
           addConsoleLog('success', msg);
           showToast(msg);
@@ -7687,6 +8031,71 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               <Phone className="w-3.5 h-3.5" />
               <span>Enviar SMS de Socorro</span>
             </a>
+          </div>
+        </div>
+      )}
+
+      {/* Alarme Despertador Global Ativo (Desligar / Adiar 5 minutos) */}
+      {ringingDeviceAlarm && (
+        <div className="fixed inset-x-4 top-20 z-[86] max-w-md mx-auto p-4 rounded-2xl bg-[#0B172E] border-2 border-[#00E5FF] text-white shadow-[0_0_50px_rgba(0,229,255,0.65)] space-y-3">
+          <div className="flex items-center gap-3">
+            <AlarmClock className="w-6 h-6 text-[#00E5FF] animate-bounce shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-black uppercase tracking-wider text-cyan-200">
+                Alarme SARA ({ringingDeviceAlarm.time})
+              </div>
+              <div className="text-xs text-slate-200 truncate">
+                {ringingDeviceAlarm.label || 'Está na hora.'}
+              </div>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                stopLoudDeviceAlarmLoop();
+                setRingingDeviceAlarm(null);
+                showToast('Alarme desligado.');
+                speakAsSara('Alarme desligado.', voiceEnabledRef.current, {
+                  level: 'short',
+                  forceSpeak: true,
+                });
+              }}
+              className="py-2 rounded-xl bg-rose-500 text-white font-black text-xs cursor-pointer hover:opacity-90"
+            >
+              Desligar
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                stopLoudDeviceAlarmLoop();
+                const offsetCalc = computeAlarmTargetFromOffset({ offsetMinutes: 5 });
+                const uid = session && !session.isGuest ? session.userId : undefined;
+                const currentList =
+                  sessionAlarmsRef.current.length > 0
+                    ? sessionAlarmsRef.current
+                    : loadJarvisAlarms(uid, Boolean(session?.isGuest));
+                const snoozeItem: JarvisAlarmItem = {
+                  id: `al_snooze_${Date.now()}`,
+                  time: offsetCalc.timeHHmm,
+                  targetMs: offsetCalc.targetMs,
+                  label: ringingDeviceAlarm.label || 'Alarme adiado',
+                  enabled: true,
+                };
+                const nextList = [snoozeItem, ...currentList];
+                saveJarvisAlarms(nextList, uid, Boolean(session?.isGuest));
+                sessionAlarmsRef.current = nextList;
+                setRingingDeviceAlarm(null);
+                showToast(`Adiado 5 minutos (${offsetCalc.timeHHmm}).`);
+                speakAsSara(`Adiado 5 minutos, para as ${offsetCalc.timeHHmm}.`, voiceEnabledRef.current, {
+                  level: 'short',
+                  forceSpeak: true,
+                });
+              }}
+              className="py-2 rounded-xl bg-cyan-500/25 border border-cyan-400 text-cyan-100 font-black text-xs cursor-pointer hover:bg-cyan-500/35"
+            >
+              Adiar 5 minutos
+            </button>
           </div>
         </div>
       )}

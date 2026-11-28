@@ -52,9 +52,9 @@ Projeto ativo: "${projectName || screenContext?.projectName || 'Novo Projeto'}" 
 Modo atual: ${isManual ? 'MANUAL (colaborativo passo a passo: tens de sugerir ideias e PERGUNTAR se aprova começar ou quer ajustar algo antes de codar)' : 'AUTOMÁTICO (autónomo: aceitas com energia, dás 1-2 sugestões práticas de arquitetura/UI e confirmas que vais construir, testar e corrigir tudo sozinha já a seguir)'}.
 ${contextCue === 'sleep' ? `Nota: ${callerLabel} disse que vai dormir.` : contextCue === 'leave' ? `Nota: ${callerLabel} disse que vai sair.` : ''}
 
-Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwnerUser ? 'cofundadora de Eletro-Jr' : `assistente de ${callerLabel}, PROIBIDO chamar de Eletro-Jr/chefe`}) em APENAS 2 a 3 frases diretas, naturais e prontas para VOZ ALTA (ZERO markdown, ZERO asteriscos, ZERO blocos de código, ZERO listas, PROIBIDO começar com "Boa", "Perfeito" ou "Claro"):
-1. Aceita o pedido específico citando o que vais atacar.
-2. Dá 1 ou 2 contribuições/sugestões técnicas ou visuais inteligentes para deixar o projeto de nível profissional.
+Responde como Sara (inteligente, educada, clara e profissional — ${isOwnerUser ? 'assistente de Eletro-Jr' : `assistente de ${callerLabel}, PROIBIDO chamar de Eletro-Jr/chefe`}) em APENAS 2 a 3 frases diretas, em português formal simples e prontas para VOZ ALTA (ZERO gírias, ZERO markdown, ZERO asteriscos, ZERO blocos de código, ZERO listas, PROIBIDO começar com "Boa", "Perfeito" ou "Claro"):
+1. Aceita o pedido específico citando o que vais fazer.
+2. Dá 1 ou 2 sugestões práticas visuais ou técnicas para o projeto ficar profissional.
 3. ${isManual ? `Termina com uma pergunta curta convidando ${callerLabel} a aprovar o início ou sugerir ajustes antes de mexeres no código.` : 'Termina confirmando que assumes a construção completa e os testes automáticos a partir de agora.'}`;
 
       const { text, modelUsed } = await callGeminiRestWithFailover(
@@ -63,7 +63,7 @@ Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwner
           system_instruction: {
             parts: [
               {
-                text: `És a Sara a falar por voz diretamente com ${callerLabel}. Sê rápida, humana, profissional e objetiva (máximo 3 frases faladas sem formatação markdown).${buildIdentityAndSecrecyInstruction(userIdentity)}`,
+                text: `És a Sara a falar por voz diretamente com ${callerLabel}. Sê rápida, educada, clara e objetiva (máximo 3 frases faladas sem gírias nem markdown).${buildIdentityAndSecrecyInstruction(userIdentity, body)}`,
               },
             ],
           },
@@ -124,7 +124,7 @@ Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwner
 
       const repeatHint = buildAntiRepetitionHintEdge(prompt, history);
       parts.push({
-        text: `${modePrefix}${prompt || 'Olá, Sara!'}${screenInfo}${fileList ? `\nFicheiros atuais: ${fileList}` : ''}${memInfo}${errSummary}${repeatHint}\n[Responde com naturalidade em português moçambicano fluido, entendendo a INTENÇÃO real do pedido. Varia tamanho, abertura e tom — nunca uses frases padrão nem repitas respostas anteriores. Se o utilizador pedir qualquer ação na plataforma, inclui <SARA_ACTIONS>[...]</SARA_ACTIONS>.]`,
+        text: `${modePrefix}${prompt || 'Olá, Sara!'}${screenInfo}${fileList ? `\nFicheiros atuais: ${fileList}` : ''}${memInfo}${errSummary}${repeatHint}\n[Responde em português formal simples, claro e direto, entendendo a INTENÇÃO real do pedido. ZERO gírias, ZERO repetição da pergunta, varia abertura e tom. Se o utilizador pedir qualquer ação na plataforma, inclui <SARA_ACTIONS>[...]</SARA_ACTIONS>.]`,
       });
       turns.push({ role: 'user', parts });
       finalContents = turns;
@@ -132,7 +132,7 @@ Responde como Sara (inteligente, próxima, criativa e profissional — ${isOwner
 
     const systemText =
       system_instruction?.parts?.[0]?.text ||
-      getSaraCorePrompt(userIdentity) ||
+      getSaraCorePrompt(userIdentity, body) ||
       SARA_CORE_SYSTEM_PROMPT;
 
     const { text, modelUsed } = await callGeminiRestWithFailover(

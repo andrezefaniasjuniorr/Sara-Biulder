@@ -14,6 +14,15 @@ import type { SaraProjectState } from '../utils/projectMemory';
 import type { SaraUserIdentityPayload } from '../types/auth';
 import { getBuildAcceptanceSpeech, getContinuationSpeech } from '../utils/voiceService';
 import { sanitizeNonOwnerAiReply } from './authService';
+import {
+  getSavedSpeechStyle,
+  getSavedUserAreaProfile,
+  isUserJoking,
+  isUserSadOrTired,
+  nextReplyShouldIncludeLightHumor,
+  pickNonRepeatingJoke,
+  sanitizeOutgoingFormalText,
+} from './saraPrefsService';
 
 export interface ConvertedImage {
   data: string;
@@ -648,6 +657,9 @@ export async function runSaraStream(params: {
 
     if (pureChat) {
       try {
+        const speechStyle = getSavedSpeechStyle();
+        const userArea = getSavedUserAreaProfile(userIdentity?.userId).area;
+        const includeLightHumor = nextReplyShouldIncludeLightHumor(prompt);
         const saraData = await postJsonWithFallback(
           ['/api/sara', '/api/build'],
           {
@@ -661,6 +673,14 @@ export async function runSaraStream(params: {
             pastProjects,
             screenContext,
             userIdentity,
+            speechStyle,
+            userArea,
+            humorHint: includeLightHumor ? pickNonRepeatingJoke() : null,
+            userEmotion: isUserSadOrTired(prompt)
+              ? 'sad_or_tired'
+              : isUserJoking(prompt)
+              ? 'joking'
+              : 'neutral',
             forceBuilderMode: false,
           },
           headers,
@@ -674,9 +694,11 @@ export async function runSaraStream(params: {
           ? saraData.actions.filter((a: any) => a && typeof a.type === 'string')
           : [];
         const mergedActions = [...structuredActions, ...parsedActions];
-        const finalReply = sanitizeNonOwnerAiReply(
-          cleanedText || `Estou aqui contigo${voc} — o que queres explorar agora?`,
-          isOwner
+        const finalReply = sanitizeOutgoingFormalText(
+          sanitizeNonOwnerAiReply(
+            cleanedText || `Estou aqui${voc}. Em que posso ajudar agora?`,
+            isOwner
+          )
         );
 
         return {
@@ -1003,6 +1025,8 @@ export async function fetchSaraFastKickoff(params: {
         contextCue,
         screenContext,
         userIdentity,
+        speechStyle: getSavedSpeechStyle(),
+        userArea: getSavedUserAreaProfile(userIdentity?.userId).area,
       }),
     });
 
