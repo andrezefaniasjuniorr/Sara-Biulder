@@ -1,4 +1,9 @@
-import type { ProjectFiles, ProjectRecord, ProjectType } from '../types/builder';
+import type {
+  BuilderProjectContract,
+  ProjectFiles,
+  ProjectRecord,
+  ProjectType,
+} from '../types/builder';
 
 export const SARA_PROJECT_STATE_KEY = 'sara_estado_projeto';
 export const SARA_PROJECT_STATES_MAP_KEY = 'sara_estado_projetos_map';
@@ -24,6 +29,7 @@ export interface SaraProjectState {
   nextStep: string;
   filesList: string[];
   missingFeatures: string[];
+  contract?: BuilderProjectContract | null;
   updatedAt: string;
 }
 
@@ -76,6 +82,8 @@ export function updateProjectStateFromRecord(
 ): SaraProjectState {
   const existing = loadActiveProjectState(project.id, userId);
   const filesList = Object.keys(project.files || {}).sort();
+  const resolvedContract =
+    overrides && 'contract' in overrides ? overrides.contract : existing?.contract;
   const next: SaraProjectState = {
     projectId: project.id,
     projectName: overrides?.projectName || project.name,
@@ -88,6 +96,7 @@ export function updateProjectStateFromRecord(
     nextStep: overrides?.nextStep || existing?.nextStep || 'Expandir funcionalidades e testar fluxos',
     filesList,
     missingFeatures: overrides?.missingFeatures ?? existing?.missingFeatures ?? [],
+    contract: resolvedContract,
     updatedAt: new Date().toISOString(),
   };
   saveProjectState(next, userId);

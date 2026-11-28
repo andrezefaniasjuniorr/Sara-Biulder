@@ -30,6 +30,8 @@ import {
 import type {
   AgentMode,
   AttachedFile,
+  BuilderAgentTelemetry,
+  BuilderProjectContract,
   ChatCodeBlock,
   ChatMessage,
   LiveBuildInfo,
@@ -98,6 +100,13 @@ interface SaraChatPanelProps {
     previousSeed?: number
   ) => void;
   onUseGeneratedImageAsProfile?: (imageUrl: string) => Promise<void> | void;
+  activeContract?: BuilderProjectContract | null;
+  activeAgentsTelemetry?: BuilderAgentTelemetry[];
+  onApproveContractV2?: (autoAllParts: boolean) => void;
+  onBuildNextPartV2?: () => void;
+  onScopeDriftPauseAndNew?: (pendingPrompt: string) => void;
+  onScopeDriftSameProject?: (pendingPrompt: string) => void;
+  onDownloadProjectZip?: () => void;
   callName?: string;
   isOwner?: boolean;
 }
@@ -229,6 +238,13 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
   onSelectGeneratedImageStyle,
   onTopQualityGeneratedImage,
   onUseGeneratedImageAsProfile,
+  activeContract = null,
+  activeAgentsTelemetry = [],
+  onApproveContractV2,
+  onBuildNextPartV2,
+  onScopeDriftPauseAndNew,
+  onScopeDriftSameProject,
+  onDownloadProjectZip,
 }) => {
   const [input, setInput] = useState('');
   const [selectedImage, setSelectedImage] = useState<ConvertedImage | null>(null);
@@ -519,6 +535,52 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Barra das 5 Chaves Gemini / Equipa SARA BUILDER V2 */}
+      {(activeContract || activeAgentsTelemetry.length > 0) && (
+        <div className="px-3 py-1.5 bg-[#080B12] border-b border-[#1E2433] flex items-center justify-between gap-2 overflow-x-auto sara-scroll shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
+            {[
+              { id: 'ARQUITETA', short: '1·Arquiteta' },
+              { id: 'CONSTRUTORA', short: '2·Construtora' },
+              { id: 'DESIGNER', short: '3·Designer' },
+              { id: 'TESTADORA', short: '4·Testadora' },
+              { id: 'GESTORA', short: '5·Gestora' },
+            ].map((agent) => {
+              const info = activeAgentsTelemetry.find((a) => a.role === agent.id);
+              const isWorking = info?.status === 'working';
+              const isDone = info?.status === 'done';
+              return (
+                <span
+                  key={agent.id}
+                  className={`px-2 py-0.5 rounded text-[10px] font-mono border whitespace-nowrap ${
+                    isWorking
+                      ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 animate-pulse'
+                      : isDone
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-[#0D1117] border-[#1E2433] text-[#8B949E]'
+                  }`}
+                >
+                  {agent.short}
+                </span>
+              );
+            })}
+          </div>
+          {activeContract && (
+            <span className="text-[10px] font-mono text-cyan-300 truncate">
+              {activeContract.projectName} · {activeContract.phase === 'briefing'
+                ? 'Passo 1: Briefing'
+                : activeContract.phase === 'awaiting_approval'
+                ? 'Passo 3: Aprovação'
+                : activeContract.phase === 'building_parts'
+                ? `Passo 4: Parte ${Math.min(activeContract.currentPartIndex + 1, activeContract.partsQueue.length)}/${activeContract.partsQueue.length}`
+                : activeContract.phase === 'completed'
+                ? 'Concluído'
+                : 'Pronto'}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Canal de Voz J.A.R.V.I.S. em 2.º Plano (sem transcrição de texto no chat) */}
       {(isListening || isSaraSpeaking || isVoiceProcessing) && (
@@ -951,6 +1013,194 @@ export const SaraChatPanel: React.FC<SaraChatPanelProps> = ({
                         </div>
                       );
                     })}
+                  </div>
+                )}
+
+                {/* Cartão de Contrato & Estrutura SARA BUILDER V2 (PASSO 2 / PASSO 3) */}
+                {msg.contractCard && !isUser && (
+                  <div className="mt-3 rounded-xl bg-[#070B14] border border-cyan-500/35 p-3 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2 text-[10px] font-mono uppercase tracking-wider text-cyan-300 font-bold">
+                      <span>Contrato Fixo · {msg.contractCard.projectName}</span>
+                      <span className="px-2 py-0.5 rounded bg-cyan-500/15 border border-cyan-400/30 text-cyan-200">
+                        {msg.contractCard.stack === 'android-kotlin'
+                          ? 'Android Kotlin'
+                          : msg.contractCard.stack === 'hybrid-web-android'
+                          ? 'Híbrido Web + Android'
+                          : 'Next.js + Vite + TSX'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                      <div className="p-2 rounded-lg bg-[#05080F] border border-[#1E2433]">
+                        <div className="text-[10px] font-mono text-[#8B949E]">Páginas / Ecrãs</div>
+                        <div className="text-white/95 font-medium mt-0.5">
+                          {msg.contractCard.pages.join(' · ')}
+                        </div>
+                      </div>
+                      <div className="p-2 rounded-lg bg-[#05080F] border border-[#1E2433]">
+                        <div className="text-[10px] font-mono text-[#8B949E]">Cores</div>
+                        <div className="text-white/95 font-medium mt-0.5">{msg.contractCard.colors}</div>
+                      </div>
+                    </div>
+
+                    {msg.contractCard.folderTree.length > 0 && (
+                      <div className="p-2 rounded-lg bg-[#05080F] border border-[#1E2433] space-y-1">
+                        <div className="text-[10px] font-mono text-emerald-300 font-semibold">
+                          Estrutura de Pastas e Ficheiros ({msg.contractCard.folderTree.length})
+                        </div>
+                        <div className="max-h-28 overflow-y-auto sara-scroll font-mono text-[10px] text-[#A1A1AA] space-y-0.5">
+                          {msg.contractCard.folderTree.map((p) => (
+                            <div key={p}>{p}</div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {msg.contractCard.partsQueue.length > 0 && (
+                      <div className="space-y-1">
+                        <div className="text-[10px] font-mono text-cyan-300 font-semibold">
+                          Plano por Partes ({msg.contractCard.partsQueue.length})
+                        </div>
+                        {msg.contractCard.partsQueue.map((part, idx) => (
+                          <div key={part.id} className="text-[11px] text-white/90 flex items-start gap-1.5">
+                            <span className="font-mono text-cyan-400">{idx + 1}.</span>
+                            <span>
+                              <strong>{part.title}</strong> — {part.description}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {activeContract?.phase === 'awaiting_approval' &&
+                      msg.mode === 'contract-proposal' &&
+                      onApproveContractV2 && (
+                        <div className="pt-2 border-t border-cyan-500/20 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onApproveContractV2(false)}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/50 text-emerald-100 text-xs font-semibold cursor-pointer transition"
+                          >
+                            Aprovar Estrutura (Construir Parte a Parte)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onApproveContractV2(true)}
+                            className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] text-white text-xs font-semibold cursor-pointer transition hover:opacity-95"
+                          >
+                            Aprovar e Construir Tudo
+                          </button>
+                        </div>
+                      )}
+                  </div>
+                )}
+
+                {/* Proteção de Projeto / Escopo (Chave 5 Memória/Gestora) */}
+                {msg.scopeDriftPrompt && !isUser && (
+                  <div className="mt-3 rounded-xl bg-amber-950/35 border border-amber-400/50 p-3 space-y-2">
+                    <div className="text-[10px] font-mono uppercase tracking-wider text-amber-300 font-bold">
+                      Memória / Gestora · Proteção de Projeto
+                    </div>
+                    <p className="text-xs text-amber-100">{msg.scopeDriftPrompt.summary}</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {onScopeDriftPauseAndNew && (
+                        <button
+                          type="button"
+                          onClick={() => onScopeDriftPauseAndNew(msg.scopeDriftPrompt!.pendingUserRequest)}
+                          className="px-3 py-1.5 rounded-lg bg-purple-500/25 hover:bg-purple-500/35 border border-purple-400/50 text-purple-100 text-xs font-semibold cursor-pointer"
+                        >
+                          Pausar e Começar Outro
+                        </button>
+                      )}
+                      {onScopeDriftSameProject && (
+                        <button
+                          type="button"
+                          onClick={() => onScopeDriftSameProject(msg.scopeDriftPrompt!.pendingUserRequest)}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/50 text-emerald-100 text-xs font-semibold cursor-pointer"
+                        >
+                          Mesmo Projeto
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Relatório de Entrega por Parte: O que foi feito, o que falta, ficheiros criados */}
+                {msg.deliveryReport && !isUser && (
+                  <div className="mt-3 rounded-xl bg-[#05080F] border border-emerald-500/30 p-3 space-y-2 text-[11px]">
+                    <div className="flex items-center justify-between gap-2 font-mono text-[10px] uppercase tracking-wider">
+                      <span className="text-emerald-300 font-bold">
+                        {msg.deliveryReport.testPassed ? 'Testadora OK · Entrega Validada' : 'Revisão Aplicada'}
+                      </span>
+                      <span className="text-cyan-300">
+                        {msg.deliveryReport.createdFiles.length} ficheiro(s)
+                      </span>
+                    </div>
+
+                    {msg.deliveryReport.simplifiedNotice && (
+                      <div className="px-2.5 py-1.5 rounded-lg bg-amber-500/15 border border-amber-400/40 text-amber-200">
+                        {msg.deliveryReport.simplifiedNotice}
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="font-semibold text-emerald-300">O que foi feito:</div>
+                      <ul className="list-disc pl-4 text-white/90 space-y-0.5">
+                        {msg.deliveryReport.doneItems.map((item, idx) => (
+                          <li key={idx}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+
+                    <div>
+                      <div className="font-semibold text-amber-300">O que falta:</div>
+                      {msg.deliveryReport.missingItems.length > 0 ? (
+                        <ul className="list-disc pl-4 text-[#A1A1AA] space-y-0.5">
+                          {msg.deliveryReport.missingItems.map((item, idx) => (
+                            <li key={idx}>{item}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-emerald-300/90">Todas as partes do contrato concluídas.</p>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="font-semibold text-cyan-300 mb-1">Que ficheiros foram criados:</div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {msg.deliveryReport.createdFiles.map((filePath) => (
+                          <button
+                            key={filePath}
+                            type="button"
+                            onClick={() => onSelectProjectFile(filePath)}
+                            className="px-2 py-0.5 rounded bg-[#0D1322] hover:bg-cyan-500/15 border border-cyan-500/30 text-[10px] font-mono text-cyan-200 cursor-pointer"
+                          >
+                            {filePath}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-[#1E2433] flex flex-wrap items-center gap-2">
+                      {msg.deliveryReport.hasNextPart && onBuildNextPartV2 && (
+                        <button
+                          type="button"
+                          onClick={onBuildNextPartV2}
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/25 hover:bg-emerald-500/35 border border-emerald-400/50 text-emerald-100 text-xs font-semibold cursor-pointer"
+                        >
+                          Construir Próxima Parte ({msg.deliveryReport.nextPartTitle})
+                        </button>
+                      )}
+                      {onDownloadProjectZip && (
+                        <button
+                          type="button"
+                          onClick={onDownloadProjectZip}
+                          className="px-3 py-1.5 rounded-lg bg-[#0D1117] hover:bg-[#161B26] border border-[#1E2433] text-white text-xs font-medium cursor-pointer"
+                        >
+                          Descarregar Projeto
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )}
 

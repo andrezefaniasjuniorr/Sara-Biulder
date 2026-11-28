@@ -52,6 +52,13 @@ function parsePackageImportsAndStrip(
     uuid: '__saraMods.uuid',
     'chart.js': '__saraMods.chartJs',
     'chart.js/auto': '__saraMods.chartJs',
+    'next/link': '__saraMods.nextLink',
+    'next/image': '__saraMods.nextImage',
+    'next/navigation': '__saraMods.nextNav',
+    'firebase/app': '__saraMods.firebaseStub',
+    'firebase/auth': '__saraMods.firebaseStub',
+    'firebase/firestore': '__saraMods.firebaseStub',
+    '@google/generative-ai': '__saraMods.geminiStub',
   };
 
   let detectedPkgImport = false;
@@ -145,8 +152,9 @@ function processScriptsForPreview(files: ProjectFiles, scriptPaths: string[]): {
 
     // Remove importações locais relativas ou absolutas entre pastas e declarações export
     code = code
-      .replace(/^\s*import\s+(?:type\s+)?[\s\S]*?\sfrom\s+['"](?:\.\.?\/|\/|@\/|src\/)[^'"]+['"];?[ \t]*/gm, '')
-      .replace(/^\s*import\s+['"](?:\.\.?\/|\/|@\/|src\/)[^'"]+['"];?[ \t]*/gm, '')
+      .replace(/^\s*['"]use client['"];?\s*$/gm, '')
+      .replace(/^\s*import\s+(?:type\s+)?[\s\S]*?\sfrom\s+['"](?:\.\.?\/|\/|@\/|src\/|web\/)[^'"]+['"];?[ \t]*/gm, '')
+      .replace(/^\s*import\s+['"](?:\.\.?\/|\/|@\/|src\/|web\/)[^'"]+['"];?[ \t]*/gm, '')
       .replace(/^\s*export\s+\{[^}]*\};?[ \t]*/gm, '')
       .replace(/^\s*export\s+default\s+/gm, '')
       .replace(/^\s*export\s+(?=(async\s+)?function|const|let|var|class|interface|type|enum)/gm, '');
@@ -188,6 +196,8 @@ export function buildPreviewSrcDoc(files: ProjectFiles, options: PreviewBuildOpt
   const htmlEntry =
     files['index.html'] !== undefined
       ? files['index.html']
+      : files['web/index.html'] !== undefined
+      ? files['web/index.html']
       : entries.find(([p]) => p.toLowerCase().endsWith('.html'))?.[1] || '';
 
   const cssEntries = entries
@@ -210,12 +220,17 @@ export function buildPreviewSrcDoc(files: ProjectFiles, options: PreviewBuildOpt
     ([p, content]) => p.toLowerCase().endsWith('.py') && Boolean(content?.trim())
   );
 
+  const kotlinFiles = entries.filter(
+    ([p, content]) => /\.(kt|kts|xml)$/i.test(p) && Boolean(content?.trim())
+  );
+
   const rawHtml = (htmlEntry || '').trim();
   const isBlank =
     !rawHtml &&
     cssEntries.every((c) => !c.trim()) &&
     scriptPaths.length === 0 &&
-    pythonFiles.length === 0;
+    pythonFiles.length === 0 &&
+    kotlinFiles.length === 0;
 
   let extraHeadTags = '';
   let bodyContent = rawHtml;
@@ -228,8 +243,40 @@ export function buildPreviewSrcDoc(files: ProjectFiles, options: PreviewBuildOpt
         </div>
         <h1 class="text-base font-bold text-white mb-1.5">Projeto pronto para construir</h1>
         <p class="text-xs text-[#A1A1AA] max-w-xs leading-relaxed">
-          Pede à Sara por voz ou chat. Suporte total a Web, Dashboards (ApexCharts, ECharts, Chart.js, D3), 3D (Three.js), React JSX/TS e Python.
+          Pede à Sara por voz ou chat. Suporte total a Next.js + Vite + TSX, Android Kotlin Compose e projetos híbridos com múltiplas pastas.
         </p>
+      </div>
+    `;
+  } else if (!rawHtml && scriptPaths.length === 0 && kotlinFiles.length > 0) {
+    const ktScreens = kotlinFiles
+      .filter(([p]) => p.endsWith('.kt'))
+      .map(([p]) => p.split('/').pop() || p);
+    bodyContent = `
+      <div class="min-h-screen bg-[#070B13] text-white p-6 flex items-center justify-center">
+        <div class="w-full max-w-sm rounded-[2rem] border-4 border-slate-700 bg-[#0D1322] p-5 shadow-2xl space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div>
+              <div class="text-[10px] font-mono uppercase tracking-wider text-violet-300">Android Jetpack Compose</div>
+              <h1 class="text-sm font-bold text-white">${escapeHtmlAttr(title)}</h1>
+            </div>
+            <span class="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-400/30 text-[10px] font-mono text-emerald-300">Kotlin</span>
+          </div>
+          <div class="space-y-2">
+            <div class="text-[11px] font-semibold text-slate-300">Ecrãs e Módulos (.kt / .xml)</div>
+            <div class="grid grid-cols-1 gap-1.5 max-h-64 overflow-y-auto">
+              ${ktScreens
+                .slice(0, 10)
+                .map(
+                  (name) =>
+                    `<div class="px-3 py-2 rounded-xl bg-[#070A12] border border-violet-500/25 text-xs font-mono text-violet-200 flex items-center justify-between"><span>${escapeHtmlAttr(name)}</span><span class="text-[10px] text-emerald-400">Compose UI</span></div>`
+                )
+                .join('')}
+            </div>
+          </div>
+          <p class="text-[11px] text-slate-400 leading-relaxed">
+            Código Kotlin + Jetpack Compose completo em <code class="text-cyan-300">android-app/</code> pronto para descarregar e compilar no Android Studio.
+          </p>
+        </div>
       </div>
     `;
   } else if (!rawHtml && pythonFiles.length > 0) {
@@ -431,7 +478,12 @@ export function buildPreviewSrcDoc(files: ProjectFiles, options: PreviewBuildOpt
       tailwindMerge: { twMerge: clsxFn },
       dateFns: { format: formatDateFns, formatDistanceToNow: function() { return 'agora mesmo'; }, addDays: function(d, n) { var x = new Date(d); x.setDate(x.getDate() + n); return x; }, subDays: function(d, n) { var x = new Date(d); x.setDate(x.getDate() - n); return x; } },
       uuid: { v4: uuidV4 },
-      chartJs: window.Chart || {}
+      chartJs: window.Chart || {},
+      nextLink: function NextLink(p) { return R.createElement('a', { href: (p && p.href) || '#', className: p && p.className, onClick: function(e) { e.preventDefault(); if (p && p.onClick) p.onClick(e); } }, p && p.children); },
+      nextImage: function NextImage(p) { return R.createElement('img', { src: p && p.src, alt: (p && p.alt) || '', className: p && p.className, width: p && p.width, height: p && p.height }); },
+      nextNav: { useRouter: function() { return { push: function() {}, back: function() {} }; }, usePathname: function() { return '/'; } },
+      firebaseStub: { initializeApp: function() { return {}; }, getAuth: function() { return {}; }, getFirestore: function() { return {}; } },
+      geminiStub: { GoogleGenerativeAI: function() { return {}; } }
     };
   })();
 </script>`

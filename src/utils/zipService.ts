@@ -27,14 +27,17 @@ export async function downloadProjectZip(files: ProjectFiles, projectName: strin
     }
   }
 
-  if (!hasIndexHtml) {
+  const hasWebFiles = entries.some(
+    ([p, c]) => /\.(html|htm|tsx|jsx|js|mjs|css)$/i.test(p) && Boolean(c?.trim())
+  );
+  if (!hasIndexHtml && hasWebFiles) {
     zip.file('index.html', buildStandaloneHtml(files, projectName));
   }
 
   if (!files['README.md']) {
     zip.file('README.md', `# ${projectName}\nCriado na Estúdio SARA por Eletro-Jr.`);
   }
-  if (!files['_redirects']) {
+  if (hasWebFiles && !files['_redirects']) {
     zip.file('_redirects', '/* /index.html 200\n');
   }
 
@@ -52,7 +55,7 @@ export async function downloadProjectZip(files: ProjectFiles, projectName: strin
 export async function importProjectZip(file: File): Promise<{ name: string; files: ProjectFiles }> {
   const zip = await JSZip.loadAsync(file);
   const importedFiles: ProjectFiles = {};
-  const allowedExt = /\.(html|css|js|jsx|ts|tsx|py|sql|json|md|txt|svg|csv)$/i;
+  const allowedExt = /\.(html|css|js|jsx|ts|tsx|py|sql|json|md|txt|svg|csv|kt|kts|xml|yml|yaml)$/i;
 
   for (const [entryPath, zipObj] of Object.entries(zip.files)) {
     if (zipObj.dir) continue;

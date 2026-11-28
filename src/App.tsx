@@ -26,6 +26,9 @@ import {
 import type {
   AgentMode,
   AttachedFile,
+  BuilderAgentTelemetry,
+  BuilderProjectContract,
+  BuilderV2DeliveryReport,
   BuildStep,
   ChatCodeBlock,
   ChatMessage,
@@ -81,6 +84,12 @@ import {
   runSaraStream,
   type ConvertedImage,
 } from './services/saraAiService';
+import {
+  runBuilderV2Briefing,
+  runBuilderV2BuildPart,
+  runBuilderV2ScopeCheck,
+  runBuilderV2Structure,
+} from './services/builderV2Service';
 import {
   apagarProjetoNoFirebase,
   buscarEstadosProjetosFirebase,
@@ -808,6 +817,17 @@ export default function App() {
   );
   const [lastCompletedReport, setLastCompletedReport] = useState<MissionReport | null>(null);
   const [manualProposal, setManualProposal] = useState<ManualProposalState>(EMPTY_MANUAL_PROPOSAL);
+  const [activeContract, setActiveContract] = useState<BuilderProjectContract | null>(() => {
+    const initSess = getSavedActiveSession();
+    const initUid = initSess && !initSess.isGuest ? initSess.userId : undefined;
+    return loadActiveProjectState(currentProjectId, initUid)?.contract || null;
+  });
+  const activeContractRef = useRef<BuilderProjectContract | null>(activeContract);
+  activeContractRef.current = activeContract;
+  const [activeAgentsTelemetry, setActiveAgentsTelemetry] = useState<BuilderAgentTelemetry[]>([]);
+  const pendingBriefingPromptRef = useRef<string>('');
+  const currentProjectRef = useRef<ProjectRecord>(currentProject);
+  currentProjectRef.current = currentProject;
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const latestErrorsRef = useRef<string[]>([]);
@@ -1057,6 +1077,9 @@ export default function App() {
       setShowSettingsModal(false);
       setShowDeployModal(false);
       setManualProposal(EMPTY_MANUAL_PROPOSAL);
+      setActiveContract(null);
+      setActiveAgentsTelemetry([]);
+      pendingBriefingPromptRef.current = '';
       setMission(EMPTY_MISSION);
       setSession(null);
       setGuestSecondsLeft(null);
@@ -1089,6 +1112,12 @@ export default function App() {
       const nextActiveId = loadInitialActiveProjectId(newSession, nextProjects);
       setProjects(nextProjects);
       setCurrentProjectId(nextActiveId);
+      setActiveContract(
+        loadActiveProjectState(nextActiveId, newSession.isGuest ? undefined : newSession.userId)
+          ?.contract || null
+      );
+      setActiveAgentsTelemetry([]);
+      pendingBriefingPromptRef.current = '';
       setMessages(loadInitialChat(newSession));
       setWorkspaceMode(loadInitialWorkspaceMode(newSession));
       setAgentMode(loadInitialAgentMode(newSession));
@@ -2538,6 +2567,10 @@ export default function App() {
       const keys = Object.keys(target.files || {});
       setActiveFile(keys.includes('index.html') ? 'index.html' : keys[0] || 'index.html');
       setRefreshSeed((s) => s + 1);
+      const savedState = loadActiveProjectState(target.id, effectiveStorageUid || undefined);
+      setActiveContract(savedState?.contract || null);
+      setActiveAgentsTelemetry([]);
+      pendingBriefingPromptRef.current = '';
       if (effectiveStorageUid) {
         updateProjectStateFromRecord(target, undefined, effectiveStorageUid);
       }
@@ -2569,12 +2602,19 @@ export default function App() {
       const newProj = createStarterProject(cleanName, type);
       setProjects((prev) => [newProj, ...prev]);
       setCurrentProjectId(newProj.id);
+      setActiveContract(null);
+      setActiveAgentsTelemetry([]);
+      pendingBriefingPromptRef.current = '';
       setMessages([]);
       setActiveFile('index.html');
       setRefreshSeed((s) => s + 1);
       addConsoleLog('success', `Novo projeto "${cleanName}" (${type}) criado.`);
       if (effectiveStorageUid) {
-        const state = updateProjectStateFromRecord(newProj, undefined, effectiveStorageUid);
+        const state = updateProjectStateFromRecord(
+          newProj,
+          { contract: null },
+          effectiveStorageUid
+        );
         salvarProjetoNoFirebase(newProj, effectiveStorageUid, callerName).catch(() => {});
         salvarEstadoProjetoFirebase(state, effectiveStorageUid).catch(() => {});
       }
@@ -6118,6 +6158,420 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
     [runBuilderImageGeneration, session?.userId, showToast]
   );
 
+  // ==================== SARA BUILDER V2 (5 Chaves Gemini + Contrato Fixo + Construção por Partes) ====================
+  useEffect(() => {
+    const saved = loadActiveProjectState(currentProjectId, effectiveStorageUid || undefined);
+    setActiveContract(saved?.contract || null);
+  }, [currentProjectId, effectiveStorageUid]);
+
+  const persistContractForProject = useCallback(
+    (
+      nextContract: BuilderProjectContract | null,
+      overrideFiles?: ProjectFiles,
+      overrideName?: string,
+      overrideType?: ProjectType
+    ) => {
+      activeContractRef.current = nextContract;
+      setActiveContract(nextContract);
+      const baseProj = currentProjectRef.current;
+      if (!effectiveStorageUid || !baseProj) return;
+      const updated = updateProjectStateFromRecord(
+        {
+          ...baseProj,
+          name: overrideName || baseProj.name,
+          type: overrideType || baseProj.type,
+          files: overrideFiles || baseProj.files,
+        },
+        {
+          goal: nextContract?.purpose || nextContract?.initialPrompt || baseProj.name,
+          lastStepDone: nextContract?.completedParts?.slice(-1)[0] || 'Contrato atualizado',
+          nextStep:
+            nextContract?.partsQueue?.[nextContract.currentPartIndex]?.title ||
+            'Estrutura definida',
+          missingFeatures: nextContract
+            ? nextContract.partsQueue
+                .filter((p) => p.status !== 'done')
+                .map((p) => p.title)
+            : [],
+          contract: nextContract,
+        },
+        effectiveStorageUid
+      );
+      salvarEstadoProjetoFirebase(updated, effectiveStorageUid).catch(() => {});
+    },
+    [effectiveStorageUid]
+  );
+
+  const executeBuilderV2Part = useCallback(
+    async (
+      contractInput: BuilderProjectContract,
+      startPartIndex: number,
+      opts?: { autoContinueAll?: boolean; userAdjustment?: string; baseFiles?: ProjectFiles }
+    ) => {
+      let workingContract: BuilderProjectContract = { ...contractInput, locked: true };
+      let accumulatedFiles: ProjectFiles = {
+        ...(opts?.baseFiles || currentProjectRef.current.files),
+      };
+      const targetProjectType: ProjectType =
+        workingContract.stack === 'android-kotlin' || workingContract.stack === 'hybrid-web-android'
+          ? 'App'
+          : 'Site';
+
+      const maxIdx = opts?.autoContinueAll
+        ? workingContract.partsQueue.length - 1
+        : Math.min(startPartIndex, workingContract.partsQueue.length - 1);
+
+      for (let idx = startPartIndex; idx <= maxIdx; idx++) {
+        const part = workingContract.partsQueue[idx];
+        if (!part) break;
+
+        markUserActivity('builder');
+        setActiveAgentsTelemetry([
+          { role: 'GESTORA', keySlot: 5, status: 'done' },
+          { role: 'ARQUITETA', keySlot: 1, status: 'done' },
+          { role: 'CONSTRUTORA', keySlot: 2, status: 'working' },
+          { role: 'DESIGNER', keySlot: 3, status: 'working' },
+          { role: 'TESTADORA', keySlot: 4, status: 'idle' },
+        ]);
+        setIsThinking(true);
+        setLiveBuild({
+          isBuilding: true,
+          phase: 'building',
+          elapsedSeconds: 0,
+          planSentence: `Parte ${idx + 1}/${workingContract.partsQueue.length}: ${part.title}`,
+          currentStepLabel: `5 motores em paralelo a construir "${part.title}"...`,
+          steps: workingContract.partsQueue.map((p, i) => ({
+            id: i + 1,
+            label: p.title,
+            status: i < idx ? 'done' : i === idx ? 'running' : 'pending',
+          })),
+          createdFiles: Object.keys(accumulatedFiles),
+          completedFiles: Object.keys(accumulatedFiles),
+        });
+
+        let partRes: Awaited<ReturnType<typeof runBuilderV2BuildPart>> | null = null;
+        let lastErr: unknown = null;
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            if (attempt >= 3) {
+              setLiveBuild((prev) => ({
+                ...prev,
+                phase: 'fixing',
+                currentStepLabel:
+                  'Esta parte é complexa, a Arquiteta está a simplificar para funcionar...',
+              }));
+            }
+            const candidate = await runBuilderV2BuildPart({
+              contract: workingContract,
+              partIndex: idx,
+              existingFiles: accumulatedFiles,
+              attemptNumber: attempt,
+              userAdjustment: idx === startPartIndex ? opts?.userAdjustment : undefined,
+            });
+            partRes = candidate;
+            if (candidate.testReport.passed || attempt >= 2) {
+              break;
+            }
+          } catch (err) {
+            lastErr = err;
+            if (attempt === 3) {
+              throw err;
+            }
+          }
+        }
+
+        if (!partRes) {
+          throw lastErr || new Error('Falha ao construir parte do projeto.');
+        }
+
+        accumulatedFiles = { ...accumulatedFiles, ...partRes.files };
+        const createdKeys = Object.keys(partRes.files || {});
+        const preferredFocusFile =
+          createdKeys.find((k) => /\.(tsx|ts|kt|jsx|html)$/i.test(k)) || createdKeys[0];
+
+        replaceCurrentProjectFiles(
+          accumulatedFiles,
+          workingContract.projectName,
+          targetProjectType,
+          false,
+          `Builder V2 · Parte ${idx + 1}: ${part.title}`
+        );
+        if (preferredFocusFile) {
+          setActiveFile(preferredFocusFile);
+        }
+        setRefreshSeed((s) => s + 1);
+
+        const updatedPartsQueue = workingContract.partsQueue.map((p, i) =>
+          i === idx ? { ...p, status: 'done' as const, attempts: (p.attempts || 0) + 1 } : p
+        );
+        const nextIdx = idx + 1;
+        const hasNext = nextIdx < updatedPartsQueue.length;
+        const nextPart = hasNext ? updatedPartsQueue[nextIdx] : undefined;
+
+        workingContract = {
+          ...workingContract,
+          partsQueue: updatedPartsQueue,
+          currentPartIndex: hasNext ? nextIdx : idx,
+          completedParts: Array.from(new Set([...(workingContract.completedParts || []), part.title])),
+          phase: hasNext ? 'building_parts' : 'completed',
+          locked: true,
+          updatedAt: new Date().toISOString(),
+          lastAuditSummary: partRes.testReport.summary,
+        };
+
+        persistContractForProject(
+          workingContract,
+          accumulatedFiles,
+          workingContract.projectName,
+          targetProjectType
+        );
+        setActiveAgentsTelemetry(partRes.agentTelemetry || []);
+
+        const deliveryReport: BuilderV2DeliveryReport = {
+          doneItems: [partRes.summaryDone || part.title, ...(partRes.designNotes || []).slice(0, 2)],
+          missingItems: updatedPartsQueue.slice(nextIdx).map((p) => p.title),
+          createdFiles: createdKeys,
+          testPassed: partRes.testReport.passed,
+          testSummary: partRes.testReport.summary,
+          simplifiedNotice: partRes.simplifiedNotice,
+          addedDependencies: partRes.addedDependencies,
+          hasNextPart: hasNext,
+          nextPartTitle: nextPart?.title,
+        };
+
+        const nowLabel = new Date().toLocaleTimeString('pt-PT', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        const partMsg: ChatMessage = {
+          id: `sara_v2_part_${Date.now()}_${idx}`,
+          sender: 'sara',
+          text: `${partRes.simplifiedNotice ? `${partRes.simplifiedNotice}\n\n` : ''}**Parte ${idx + 1}/${updatedPartsQueue.length} (${part.title})** construída e validada pela equipa de 5 motores.`,
+          timestamp: nowLabel,
+          mode: 'builder',
+          hasCodeUpdate: true,
+          engineLabel: 'SARA BUILDER V2 (5 Chaves)',
+          deliveryReport,
+          codeBlocks: filesToCodeBlocks(partRes.files).slice(0, 8),
+          agentTelemetry: partRes.agentTelemetry,
+          buildSummary: {
+            elapsedSeconds: 0,
+            filesCreated: createdKeys,
+            steps: updatedPartsQueue.map((p, i) => ({
+              id: i + 1,
+              label: p.title,
+              status: p.status === 'done' ? 'done' : 'pending',
+            })),
+          },
+        };
+
+        setMessages((prev) => [...prev, partMsg]);
+        if (effectiveStorageUid) {
+          salvarMensagemChatFirebase(partMsg, currentProjectRef.current.id, effectiveStorageUid);
+        }
+
+        addConsoleLog(
+          'success',
+          `Builder V2 Parte ${idx + 1}/${updatedPartsQueue.length}: ${createdKeys.length} ficheiro(s) criados (${partRes.testReport.summary}).`
+        );
+
+        if (!opts?.autoContinueAll || !hasNext) {
+          setIsThinking(false);
+          setLiveBuild({
+            isBuilding: false,
+            phase: 'idle',
+            elapsedSeconds: 0,
+            steps: [],
+            createdFiles: [],
+          });
+          showToast(
+            hasNext
+              ? `Parte ${idx + 1} concluída! Pronta para "${nextPart?.title}".`
+              : `Projeto "${workingContract.projectName}" concluído e testado!`
+          );
+          speakAsSara(
+            hasNext
+              ? `Parte ${idx + 1} de ${workingContract.projectName} pronta e testada${callerVoc}. Queres avançar para ${nextPart?.title}?`
+              : `Projeto ${workingContract.projectName} concluído e validado${callerVoc}. Já podes testar no preview ou descarregar.`,
+            voiceEnabledRef.current,
+            { level: 'medium', forceSpeak: true }
+          );
+        }
+      }
+    },
+    [
+      markUserActivity,
+      replaceCurrentProjectFiles,
+      persistContractForProject,
+      effectiveStorageUid,
+      addConsoleLog,
+      showToast,
+      callerVoc,
+    ]
+  );
+
+  const handleApproveContractV2 = useCallback(
+    async (autoAllParts: boolean, userMessageText?: string) => {
+      const contract = activeContractRef.current;
+      if (!contract) return;
+      if (userMessageText) {
+        const usrMsg: ChatMessage = {
+          id: `usr_${Date.now()}`,
+          sender: 'user',
+          text: userMessageText,
+          timestamp: new Date().toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' }),
+        };
+        setMessages((prev) => [...prev, usrMsg]);
+        if (effectiveStorageUid) {
+          salvarMensagemChatFirebase(usrMsg, currentProjectRef.current.id, effectiveStorageUid);
+        }
+      }
+      const lockedContract: BuilderProjectContract = {
+        ...contract,
+        phase: 'building_parts',
+        locked: true,
+        updatedAt: new Date().toISOString(),
+      };
+      persistContractForProject(lockedContract);
+      try {
+        await executeBuilderV2Part(lockedContract, lockedContract.currentPartIndex || 0, {
+          autoContinueAll: autoAllParts,
+        });
+      } catch (err: unknown) {
+        setIsThinking(false);
+        setLiveBuild({
+          isBuilding: false,
+          phase: 'idle',
+          elapsedSeconds: 0,
+          steps: [],
+          createdFiles: [],
+        });
+        const errMsg = err instanceof Error ? err.message : String(err || '');
+        if (errMsg.includes('CHAVE_NUCLEO_MISSING') && isOwner) {
+          setShowSettingsModal(true);
+        }
+        showToast('A tentar rota alternativa para continuar a construção.');
+      }
+    },
+    [effectiveStorageUid, persistContractForProject, executeBuilderV2Part, isOwner, showToast]
+  );
+
+  const handleBuildNextPartV2 = useCallback(async () => {
+    const contract = activeContractRef.current;
+    if (!contract || contract.phase === 'completed') return;
+    try {
+      await executeBuilderV2Part(contract, contract.currentPartIndex || 0, {
+        autoContinueAll: agentModeRef.current === 'automatic',
+      });
+    } catch {
+      setIsThinking(false);
+      setLiveBuild({
+        isBuilding: false,
+        phase: 'idle',
+        elapsedSeconds: 0,
+        steps: [],
+        createdFiles: [],
+      });
+      showToast('A preparar nova tentativa silenciosa para a próxima parte.');
+    }
+  }, [executeBuilderV2Part, showToast]);
+
+  const handleScopeDriftPauseAndNew = useCallback(
+    async (pendingPrompt: string) => {
+      handleCreateNewProject('Novo Projeto', 'Site');
+      pendingBriefingPromptRef.current = pendingPrompt;
+      setIsThinking(true);
+      setActiveAgentsTelemetry([
+        { role: 'GESTORA', keySlot: 5, status: 'done' },
+        { role: 'ARQUITETA', keySlot: 1, status: 'working' },
+        { role: 'CONSTRUTORA', keySlot: 2, status: 'idle' },
+        { role: 'DESIGNER', keySlot: 3, status: 'idle' },
+        { role: 'TESTADORA', keySlot: 4, status: 'idle' },
+      ]);
+      try {
+        const res = await runBuilderV2Briefing({
+          prompt: pendingPrompt,
+          history: [],
+          activeContract: null,
+          hasExistingCode: false,
+        });
+        const briefingContract: BuilderProjectContract = {
+          projectName: 'Novo Projeto',
+          stack: 'nextjs-vite-tsx',
+          audience: res.detectedAudience || '',
+          purpose: pendingPrompt,
+          colors: res.detectedColors || '',
+          pages: [],
+          functions: [],
+          folderTree: [],
+          partsQueue: [],
+          currentPartIndex: 0,
+          completedParts: [],
+          phase: 'briefing',
+          locked: false,
+          initialPrompt: pendingPrompt,
+          updatedAt: new Date().toISOString(),
+        };
+        persistContractForProject(briefingContract);
+        setActiveAgentsTelemetry(res.agentTelemetry || []);
+        const nowLabel = new Date().toLocaleTimeString('pt-PT', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        setMessages([
+          { id: `usr_${Date.now()}`, sender: 'user', text: pendingPrompt, timestamp: nowLabel },
+          {
+            id: `sara_v2_brief_${Date.now()}`,
+            sender: 'sara',
+            text: res.reply,
+            timestamp: nowLabel,
+            mode: 'briefing',
+            engineLabel: 'SARA BUILDER V2 · Arquiteta',
+            agentTelemetry: res.agentTelemetry,
+          },
+        ]);
+        speakAsSara(res.voiceSummary || res.reply, voiceEnabledRef.current, {
+          level: 'medium',
+          forceSpeak: true,
+        });
+      } finally {
+        setIsThinking(false);
+      }
+    },
+    [handleCreateNewProject, persistContractForProject]
+  );
+
+  const handleScopeDriftSameProject = useCallback(
+    async (pendingPrompt: string) => {
+      const contract = activeContractRef.current;
+      if (!contract) return;
+      const nextPartId = (contract.partsQueue?.length || 0) + 1;
+      const updatedContract: BuilderProjectContract = {
+        ...contract,
+        phase: 'building_parts',
+        partsQueue: [
+          ...contract.partsQueue,
+          {
+            id: nextPartId,
+            title: pendingPrompt.slice(0, 54),
+            description: pendingPrompt,
+            targetFiles: [],
+            status: 'pending',
+            attempts: 0,
+          },
+        ],
+        currentPartIndex: contract.partsQueue.length,
+        updatedAt: new Date().toISOString(),
+      };
+      persistContractForProject(updatedContract);
+      await executeBuilderV2Part(updatedContract, updatedContract.currentPartIndex, {
+        userAdjustment: pendingPrompt,
+      });
+    },
+    [persistContractForProject, executeBuilderV2Part]
+  );
+
   const handleSendMessage = useCallback(
     async (
       text: string,
@@ -6323,7 +6777,399 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
 
       markUserActivity(isPureChatRequest ? 'chat' : 'builder');
 
-      // No MODO MANUAL: se já há uma proposta aguardando aprovação/colaboração
+      // ========== FLUXO OBRIGATÓRIO SARA BUILDER V2 (PASSO 1 Briefing -> PASSO 2 Estrutura -> PASSO 3 Aprovação -> PASSO 4 Construir por Partes) ==========
+      const isExplicitBugFixOnCode =
+        hasExistingCode &&
+        /\b(corrige|corrigir|conserta|consertar|repara|resolve)\b.*\b(erro|bug|falha|console|preview)\b/i.test(
+          trimmed
+        );
+      const wantsSwitchProjectCmd = /^(sara[,\s]+)?(muda|mudar|troca|trocar)\s+de\s+projeto\b/i.test(
+        trimmed
+      );
+
+      if (!isPlatformOnly && !isPureChatRequest && !hasMediaOrFiles && !isExplicitBugFixOnCode) {
+        let contractNow = activeContractRef.current;
+
+        if (wantsSwitchProjectCmd) {
+          persistContractForProject(null);
+          contractNow = null;
+          const afterSwitch = trimmed
+            .replace(/^(sara[,\s]+)?(muda|mudar|troca|trocar)\s+de\s+projeto[\s,:\-]*/i, '')
+            .trim();
+          if (!afterSwitch) {
+            const switchMsg: ChatMessage = {
+              id: `sara_v2_switch_${Date.now()}`,
+              sender: 'sara',
+              text: `Projeto anterior desbloqueado${callerShortVoc}. O que queres criar agora? Diz-me o nome, o objetivo, as páginas, as cores ou se queres Site/App/Android.`,
+              timestamp: nowTime,
+              mode: 'briefing',
+              engineLabel: 'SARA BUILDER V2 · Gestora',
+            };
+            if (!isVoice) {
+              setMessages((prev) => [
+                ...prev,
+                { id: `usr_${Date.now()}`, sender: 'user', text: trimmed, timestamp: nowTime },
+                switchMsg,
+              ]);
+            } else {
+              setMessages((prev) => [...prev, switchMsg]);
+            }
+            speakAsSara(
+              `Projeto anterior desbloqueado${callerVoc}. O que queres criar agora?`,
+              voiceEnabledRef.current,
+              { level: 'short', forceSpeak: true }
+            );
+            return;
+          }
+        }
+
+        // PASSO 1 -> PASSO 2: utilizador respondeu ao Briefing -> Chave 1 Arquiteta + Chave 3 Designer desenham ESTRUTURA (sem código)
+        if (contractNow?.phase === 'briefing') {
+          if (!isVoice) {
+            const usrMsg: ChatMessage = {
+              id: `usr_${Date.now()}`,
+              sender: 'user',
+              text: trimmed,
+              timestamp: nowTime,
+            };
+            setMessages((prev) => [...prev, usrMsg]);
+            if (effectiveStorageUid) {
+              salvarMensagemChatFirebase(usrMsg, currentProject.id, effectiveStorageUid);
+            }
+          }
+          setIsThinking(true);
+          setActiveAgentsTelemetry([
+            { role: 'GESTORA', keySlot: 5, status: 'done' },
+            { role: 'ARQUITETA', keySlot: 1, status: 'working' },
+            { role: 'DESIGNER', keySlot: 3, status: 'working' },
+            { role: 'CONSTRUTORA', keySlot: 2, status: 'idle' },
+            { role: 'TESTADORA', keySlot: 4, status: 'idle' },
+          ]);
+          try {
+            const structRes = await runBuilderV2Structure({
+              prompt: trimmed,
+              briefingPrompt: pendingBriefingPromptRef.current || contractNow.initialPrompt || '',
+            });
+            persistContractForProject(
+              structRes.contract,
+              undefined,
+              structRes.contract.projectName,
+              structRes.contract.stack === 'android-kotlin' ||
+                structRes.contract.stack === 'hybrid-web-android'
+                ? 'App'
+                : 'Site'
+            );
+            setActiveAgentsTelemetry(structRes.agentTelemetry || []);
+            const propMsg: ChatMessage = {
+              id: `sara_v2_struct_${Date.now()}`,
+              sender: 'sara',
+              text: structRes.reply,
+              timestamp: nowTime,
+              mode: 'contract-proposal',
+              contractCard: structRes.contract,
+              engineLabel: 'SARA BUILDER V2 · Arquiteta & Designer',
+              agentTelemetry: structRes.agentTelemetry,
+            };
+            setMessages((prev) => [...prev, propMsg]);
+            if (effectiveStorageUid) {
+              salvarMensagemChatFirebase(propMsg, currentProject.id, effectiveStorageUid);
+            }
+            speakAsSara(structRes.voiceSummary || structRes.reply, voiceEnabledRef.current, {
+              level: 'medium',
+              forceSpeak: true,
+            });
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err || '');
+            if (errMsg.includes('CHAVE_NUCLEO_MISSING') && isOwner) {
+              setShowSettingsModal(true);
+            }
+            showToast('Não foi possível gerar a estrutura agora; tenta novamente.');
+          } finally {
+            setIsThinking(false);
+          }
+          return;
+        }
+
+        // PASSO 3: aguardando SIM ou correções na ESTRUTURA (ainda SEM gerar código)
+        if (contractNow?.phase === 'awaiting_approval') {
+          if (isRejectionOrCancelMessage(trimmed)) {
+            persistContractForProject(null);
+            const cancelReply = `Combinado${callerShortVoc}! Cancelei esta proposta antes de gerar código. Diz-me o novo rumo quando quiseres.`;
+            if (!isVoice) {
+              setMessages((prev) => [
+                ...prev,
+                { id: `usr_${Date.now()}`, sender: 'user', text: trimmed, timestamp: nowTime },
+                {
+                  id: `sara_v2_cancel_${Date.now()}`,
+                  sender: 'sara',
+                  text: cancelReply,
+                  timestamp: nowTime,
+                  mode: 'conversation',
+                },
+              ]);
+            }
+            speakAsSara(cancelReply, voiceEnabledRef.current, { level: 'short', forceSpeak: true });
+            return;
+          }
+
+          if (isApprovalMessage(trimmed)) {
+            await handleApproveContractV2(
+              agentModeRef.current === 'automatic',
+              isVoice ? undefined : trimmed
+            );
+            return;
+          }
+
+          // Utilizador pediu alterações na estrutura antes de aprovar
+          if (!isVoice) {
+            const usrMsg: ChatMessage = {
+              id: `usr_${Date.now()}`,
+              sender: 'user',
+              text: trimmed,
+              timestamp: nowTime,
+            };
+            setMessages((prev) => [...prev, usrMsg]);
+            if (effectiveStorageUid) {
+              salvarMensagemChatFirebase(usrMsg, currentProject.id, effectiveStorageUid);
+            }
+          }
+          setIsThinking(true);
+          setActiveAgentsTelemetry([
+            { role: 'GESTORA', keySlot: 5, status: 'done' },
+            { role: 'ARQUITETA', keySlot: 1, status: 'working' },
+            { role: 'DESIGNER', keySlot: 3, status: 'working' },
+            { role: 'CONSTRUTORA', keySlot: 2, status: 'idle' },
+            { role: 'TESTADORA', keySlot: 4, status: 'idle' },
+          ]);
+          try {
+            const refined = await runBuilderV2Structure({
+              prompt: trimmed,
+              existingContract: contractNow,
+              isRefinement: true,
+            });
+            persistContractForProject(refined.contract);
+            setActiveAgentsTelemetry(refined.agentTelemetry || []);
+            const propMsg: ChatMessage = {
+              id: `sara_v2_refstruct_${Date.now()}`,
+              sender: 'sara',
+              text: refined.reply,
+              timestamp: nowTime,
+              mode: 'contract-proposal',
+              contractCard: refined.contract,
+              engineLabel: 'SARA BUILDER V2 · Arquiteta',
+              agentTelemetry: refined.agentTelemetry,
+            };
+            setMessages((prev) => [...prev, propMsg]);
+            if (effectiveStorageUid) {
+              salvarMensagemChatFirebase(propMsg, currentProject.id, effectiveStorageUid);
+            }
+            speakAsSara(refined.voiceSummary || refined.reply, voiceEnabledRef.current, {
+              level: 'medium',
+              forceSpeak: true,
+            });
+          } catch {
+            showToast('Não consegui atualizar a estrutura agora; tenta novamente.');
+          } finally {
+            setIsThinking(false);
+          }
+          return;
+        }
+
+        // PASSO 4 / CONTRATO TRANCADO: verifica se o pedido pertence ao mesmo projeto (Chave 5 Memória/Gestora)
+        if (contractNow?.locked && (contractNow.phase === 'building_parts' || contractNow.phase === 'completed')) {
+          if (contractNow.phase === 'building_parts' && isApprovalMessage(trimmed)) {
+            if (!isVoice) {
+              const usrMsg: ChatMessage = {
+                id: `usr_${Date.now()}`,
+                sender: 'user',
+                text: trimmed,
+                timestamp: nowTime,
+              };
+              setMessages((prev) => [...prev, usrMsg]);
+              if (effectiveStorageUid) {
+                salvarMensagemChatFirebase(usrMsg, currentProject.id, effectiveStorageUid);
+              }
+            }
+            try {
+              await executeBuilderV2Part(contractNow, contractNow.currentPartIndex || 0, {
+                autoContinueAll: agentModeRef.current === 'automatic',
+              });
+            } catch {
+              setIsThinking(false);
+              setLiveBuild({
+                isBuilding: false,
+                phase: 'idle',
+                elapsedSeconds: 0,
+                steps: [],
+                createdFiles: [],
+              });
+              showToast('Falha ao avançar para a próxima parte; tenta novamente.');
+            }
+            return;
+          }
+
+          if (!isVoice) {
+            const usrMsg: ChatMessage = {
+              id: `usr_${Date.now()}`,
+              sender: 'user',
+              text: trimmed,
+              timestamp: nowTime,
+            };
+            setMessages((prev) => [...prev, usrMsg]);
+            if (effectiveStorageUid) {
+              salvarMensagemChatFirebase(usrMsg, currentProject.id, effectiveStorageUid);
+            }
+          }
+
+          setIsThinking(true);
+          try {
+            const scopeRes = await runBuilderV2ScopeCheck({
+              prompt: trimmed,
+              contract: contractNow,
+            });
+            setActiveAgentsTelemetry(scopeRes.agentTelemetry || []);
+
+            if (!scopeRes.sameProject) {
+              const guardMsg: ChatMessage = {
+                id: `sara_v2_scope_${Date.now()}`,
+                sender: 'sara',
+                text: `O projeto **${contractNow.projectName}** está ativo e trancado no contrato.\n\n**Queres pausar este projeto e começar outro, ou é dentro do mesmo?**`,
+                timestamp: nowTime,
+                mode: 'scope-guard',
+                engineLabel: 'SARA BUILDER V2 · Memória/Gestora',
+                agentTelemetry: scopeRes.agentTelemetry,
+                scopeDriftPrompt: {
+                  pendingUserRequest: trimmed,
+                  summary: 'Queres pausar este projeto e começar outro, ou é dentro do mesmo?',
+                },
+              };
+              setMessages((prev) => [...prev, guardMsg]);
+              if (effectiveStorageUid) {
+                salvarMensagemChatFirebase(guardMsg, currentProject.id, effectiveStorageUid);
+              }
+              speakAsSara(
+                'Queres pausar este projeto e começar outro, ou é dentro do mesmo?',
+                voiceEnabledRef.current,
+                { level: 'short', forceSpeak: true }
+              );
+              setIsThinking(false);
+              return;
+            }
+
+            // É dentro do mesmo projeto: acrescenta parte ao contrato trancado e constrói mantendo nome/cores/stack
+            const updatedContract: BuilderProjectContract = {
+              ...contractNow,
+              phase: 'building_parts',
+              partsQueue: [
+                ...contractNow.partsQueue,
+                {
+                  id: (contractNow.partsQueue?.length || 0) + 1,
+                  title: trimmed.slice(0, 54),
+                  description: trimmed,
+                  targetFiles: [],
+                  status: 'pending',
+                  attempts: 0,
+                },
+              ],
+              currentPartIndex: contractNow.partsQueue.length,
+              updatedAt: new Date().toISOString(),
+            };
+            persistContractForProject(updatedContract);
+            await executeBuilderV2Part(updatedContract, updatedContract.currentPartIndex, {
+              userAdjustment: trimmed,
+            });
+          } catch {
+            setIsThinking(false);
+            setLiveBuild({
+              isBuilding: false,
+              phase: 'idle',
+              elapsedSeconds: 0,
+              steps: [],
+              createdFiles: [],
+            });
+            showToast('A ajustar os motores para processar o pedido.');
+          }
+          return;
+        }
+
+        // SEM CONTRATO ATIVO (Novo projeto ou novo pedido de app/site) -> PASSO 1 BRIEFING obrigatório (NUNCA gera código direto!)
+        if (!isVoice) {
+          const usrMsg: ChatMessage = {
+            id: `usr_${Date.now()}`,
+            sender: 'user',
+            text: trimmed,
+            timestamp: nowTime,
+          };
+          setMessages((prev) => [...prev, usrMsg]);
+          if (effectiveStorageUid) {
+            salvarMensagemChatFirebase(usrMsg, currentProject.id, effectiveStorageUid);
+          }
+        }
+        pendingBriefingPromptRef.current = trimmed;
+        setIsThinking(true);
+        setActiveAgentsTelemetry([
+          { role: 'GESTORA', keySlot: 5, status: 'working' },
+          { role: 'ARQUITETA', keySlot: 1, status: 'working' },
+          { role: 'CONSTRUTORA', keySlot: 2, status: 'idle' },
+          { role: 'DESIGNER', keySlot: 3, status: 'idle' },
+          { role: 'TESTADORA', keySlot: 4, status: 'idle' },
+        ]);
+        try {
+          const briefRes = await runBuilderV2Briefing({
+            prompt: trimmed,
+            history: messagesRef.current,
+            activeContract: null,
+            hasExistingCode,
+          });
+          const briefingContract: BuilderProjectContract = {
+            projectName: currentProject.name !== 'Novo Projeto' ? currentProject.name : 'Novo Projeto',
+            stack: 'nextjs-vite-tsx',
+            audience: briefRes.detectedAudience || '',
+            purpose: trimmed,
+            colors: briefRes.detectedColors || '',
+            pages: [],
+            functions: [],
+            folderTree: [],
+            partsQueue: [],
+            currentPartIndex: 0,
+            completedParts: [],
+            phase: 'briefing',
+            locked: false,
+            initialPrompt: trimmed,
+            updatedAt: new Date().toISOString(),
+          };
+          persistContractForProject(briefingContract);
+          setActiveAgentsTelemetry(briefRes.agentTelemetry || []);
+          const briefMsg: ChatMessage = {
+            id: `sara_v2_brief_${Date.now()}`,
+            sender: 'sara',
+            text: briefRes.reply,
+            timestamp: nowTime,
+            mode: 'briefing',
+            engineLabel: 'SARA BUILDER V2 · Arquiteta',
+            agentTelemetry: briefRes.agentTelemetry,
+          };
+          setMessages((prev) => [...prev, briefMsg]);
+          if (effectiveStorageUid) {
+            salvarMensagemChatFirebase(briefMsg, currentProject.id, effectiveStorageUid);
+          }
+          speakAsSara(briefRes.voiceSummary || briefRes.reply, voiceEnabledRef.current, {
+            level: 'medium',
+            forceSpeak: true,
+          });
+        } catch (err: unknown) {
+          const errMsg = err instanceof Error ? err.message : String(err || '');
+          if (errMsg.includes('CHAVE_NUCLEO_MISSING') && isOwner) {
+            setShowSettingsModal(true);
+          }
+          showToast('Não foi possível iniciar o briefing agora; verifica a tua ligação ou chaves.');
+        } finally {
+          setIsThinking(false);
+        }
+        return;
+      }
+
+      // No MODO MANUAL: se já há uma proposta aguardando aprovação/colaboração (mantido para fluxos com anexos/legado)
       if (!isPlatformOnly && agentModeRef.current === 'manual' && manualProposal.active && !hasMediaOrFiles) {
         if (isRejectionOrCancelMessage(trimmed)) {
           setManualProposal(EMPTY_MANUAL_PROPOSAL);
@@ -6899,6 +7745,9 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
       askBuilderImageStyle,
       runBuilderImageGeneration,
       handleBuilderImageVoiceAction,
+      persistContractForProject,
+      executeBuilderV2Part,
+      handleApproveContractV2,
     ]
   );
 
@@ -7719,6 +8568,13 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
               await saveUserProfilePhoto(session.userId, imgUrl);
               showToast('Foto de perfil atualizada!');
             }}
+            activeContract={activeContract}
+            activeAgentsTelemetry={activeAgentsTelemetry}
+            onApproveContractV2={(autoAll) => void handleApproveContractV2(autoAll)}
+            onBuildNextPartV2={() => void handleBuildNextPartV2()}
+            onScopeDriftPauseAndNew={(pending) => void handleScopeDriftPauseAndNew(pending)}
+            onScopeDriftSameProject={(pending) => void handleScopeDriftSameProject(pending)}
+            onDownloadProjectZip={() => void handleDownloadZip()}
           />
         </div>
 
@@ -7746,6 +8602,7 @@ Código 100% real, completo, zero mocks, mantendo o código anterior intacto.`,
             onDownloadZip={handleDownloadZip}
             onPushGitHub={() => setShowDeployModal(true)}
             onPublish={() => setShowDeployModal(true)}
+            activeContract={activeContract}
             generatedImage={previewGeneratedImage}
             onCloseGeneratedImage={() => setPreviewGeneratedImage(null)}
             onSelectGeneratedImageStyle={(msgId, prompt, style) => {

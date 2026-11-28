@@ -12,9 +12,14 @@ import {
   Loader2,
   FileCode2,
   X,
+  Sparkles,
+  Copy,
+  Check,
+  ExternalLink,
 } from 'lucide-react';
-import type { PreviewDevice, ProjectFiles } from '../types/builder';
+import type { BuilderProjectContract, PreviewDevice, ProjectFiles } from '../types/builder';
 import { buildPreviewSrcDoc } from '../utils/previewBuilder';
+import { buildAiStudioExportPrompt } from '../utils/builderScaffolder';
 import { GeneratedChatImageCard } from './GeneratedChatImageCard';
 import { downloadImageDataUrl, type SaraImageStyle } from '../services/imageGenService';
 
@@ -49,6 +54,7 @@ interface LivePreviewPanelProps {
   onDownloadZip: () => void;
   onPushGitHub: () => void;
   onPublish: () => void;
+  activeContract?: BuilderProjectContract | null;
   generatedImage?: GeneratedPreviewImageState | null;
   onCloseGeneratedImage?: () => void;
   onSelectGeneratedImageStyle?: (messageId: string, prompt: string, style: SaraImageStyle) => void;
@@ -86,6 +92,7 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
   onDownloadZip,
   onPushGitHub,
   onPublish,
+  activeContract = null,
   generatedImage = null,
   onCloseGeneratedImage,
   onSelectGeneratedImageStyle,
@@ -94,10 +101,16 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
   onUseGeneratedImageAsProfile,
 }) => {
   const [internalFullscreen, setInternalFullscreen] = useState(false);
+  const [showAiStudioModal, setShowAiStudioModal] = useState(false);
+  const [copiedAiPrompt, setCopiedAiPrompt] = useState(false);
   const isFullscreen =
     controlledFullscreen !== undefined ? controlledFullscreen : internalFullscreen;
   const toggleFullscreen = onToggleFullscreen || (() => setInternalFullscreen((v) => !v));
   const [debouncedFiles, setDebouncedFiles] = useState<ProjectFiles>(files);
+  const aiStudioPromptText = useMemo(
+    () => buildAiStudioExportPrompt(projectName, activeContract, files),
+    [projectName, activeContract, files]
+  );
 
   useEffect(() => {
     if (isBuilding) return;
@@ -211,12 +224,22 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
 
           <button
             type="button"
+            onClick={() => setShowAiStudioModal(true)}
+            className="px-2.5 py-1.5 rounded-lg bg-[#0A0A0F] border border-cyan-500/40 text-cyan-200 hover:bg-cyan-500/15 text-xs font-medium flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
+            title="Gerar prompt completo para abrir no Google AI Studio"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-cyan-300" />
+            <span className="hidden md:inline">Abrir no Google AI Studio</span>
+          </button>
+
+          <button
+            type="button"
             onClick={onDownloadZip}
             className="px-2.5 py-1.5 rounded-lg bg-[#0A0A0F] border border-[#1F1F2E] text-white hover:border-[#3B82F6]/50 text-xs font-medium flex items-center gap-1 transition cursor-pointer whitespace-nowrap"
-            title="Baixar projeto em ZIP"
+            title="Descarregar projeto completo em ZIP"
           >
             <Download className="w-3.5 h-3.5 text-[#3B82F6]" />
-            <span className="hidden sm:inline">Baixar ZIP</span>
+            <span className="hidden sm:inline">Descarregar Projeto</span>
           </button>
 
           <button
@@ -240,6 +263,60 @@ export const LivePreviewPanel: React.FC<LivePreviewPanelProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Modal Abrir no Google AI Studio */}
+      {showAiStudioModal && (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-2xl rounded-2xl bg-[#0D1117] border border-cyan-500/40 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+            <div className="px-4 py-3 border-b border-[#1E2433] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-sm font-bold text-white">
+                <Sparkles className="w-4 h-4 text-cyan-400" />
+                <span>Abrir no Google AI Studio</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAiStudioModal(false)}
+                className="p-1 rounded-lg text-[#A1A1AA] hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-3 overflow-y-auto sara-scroll">
+              <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                Copia o prompt estruturado abaixo e cola no Google AI Studio para continuar ou expandir este projeto com toda a arquitetura, stack e pastas preservadas.
+              </p>
+              <textarea
+                readOnly
+                value={aiStudioPromptText}
+                className="w-full h-64 rounded-xl bg-[#05080F] border border-[#1E2433] p-3 text-xs font-mono text-emerald-300 outline-none resize-none sara-scroll"
+              />
+            </div>
+            <div className="px-4 py-3 border-t border-[#1E2433] flex flex-wrap items-center justify-end gap-2 bg-[#090D16]">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(aiStudioPromptText).catch(() => {});
+                  setCopiedAiPrompt(true);
+                  setTimeout(() => setCopiedAiPrompt(false), 2000);
+                }}
+                className="px-3.5 py-2 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/50 text-cyan-100 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+              >
+                {copiedAiPrompt ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedAiPrompt ? 'Prompt Copiado!' : 'Copiar Prompt Completo'}</span>
+              </button>
+              <a
+                href="https://aistudio.google.com/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#3B82F6] to-[#8B5CF6] text-white text-xs font-semibold flex items-center gap-1.5 hover:opacity-95"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Ir para Google AI Studio</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Área do Iframe */}
       <div className="relative flex-1 p-2 sm:p-3 flex items-center justify-center bg-[#07070B] overflow-hidden">

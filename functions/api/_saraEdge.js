@@ -233,8 +233,10 @@ export function parseEdgeKeyList(rawValue) {
 export function resolveEdgeApiKeys(request, env) {
   const headerKeys = parseEdgeKeyList(request?.headers?.get('x-gemini-api-key') || '');
   const envRaw =
+    env?.['VITE-GEMINI-API-KEY'] ||
     env?.GEMINI_API_KEY ||
     env?.VITE_GEMINI_API_KEY ||
+    env?.GEMINI_API_KEYS ||
     env?.GOOGLE_API_KEY ||
     '';
   const envKeys = parseEdgeKeyList(envRaw);

@@ -26,6 +26,7 @@ import {
   searchYouTubeTrackNode,
   withTimeout,
 } from './api/_saraCore.js';
+import { runBuilderV2Stage } from './api/_builderV2.js';
 import {
   OWNER_EMAIL,
   clearBackendImageError,
@@ -207,6 +208,20 @@ async function startServer() {
 
   app.post('/api/final-test', handleFinalTest);
   app.post('/api/sara/final-test', handleFinalTest);
+
+  app.post('/api/builder-v2', async (req, res) => {
+    try {
+      const headerKey = req.headers['x-gemini-api-key'];
+      const customKey = typeof headerKey === 'string' ? headerKey : undefined;
+      const result = await runBuilderV2Stage(req.body, customKey);
+      res.json(result);
+    } catch (err: any) {
+      console.error('Erro /api/builder-v2:', err);
+      res.status(err?.status === 503 ? 503 : 500).json({
+        error: formatFriendlyAiError(err),
+      });
+    }
+  });
 
   const handleJarvisStream = async (req: express.Request, res: express.Response) => {
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');

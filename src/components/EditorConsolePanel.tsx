@@ -74,6 +74,9 @@ function getFileVisualMeta(filePath: string): { label: string; colorClass: strin
   if (lower.endsWith('.ts')) return { label: 'TS', colorClass: 'text-blue-400' };
   if (lower.endsWith('.jsx')) return { label: 'JSX', colorClass: 'text-amber-300' };
   if (lower.endsWith('.js') || lower.endsWith('.mjs')) return { label: 'JS', colorClass: 'text-yellow-300' };
+  if (lower.endsWith('.kts')) return { label: 'KTS', colorClass: 'text-indigo-400' };
+  if (lower.endsWith('.kt')) return { label: 'KT', colorClass: 'text-violet-400' };
+  if (lower.endsWith('.xml')) return { label: 'XML', colorClass: 'text-orange-300' };
   if (lower.endsWith('.py')) return { label: 'PY', colorClass: 'text-emerald-400' };
   if (lower.endsWith('.sql')) return { label: 'SQL', colorClass: 'text-purple-400' };
   if (lower.endsWith('.json')) return { label: 'JSON', colorClass: 'text-amber-400' };
@@ -502,7 +505,7 @@ export const EditorConsolePanel: React.FC<EditorConsolePanelProps> = ({
                 ref={uploadInputRef}
                 type="file"
                 multiple
-                accept=".html,.css,.js,.jsx,.ts,.tsx,.json,.txt,.md,.svg,.csv,.py,.sql"
+                accept=".html,.css,.js,.jsx,.ts,.tsx,.json,.txt,.md,.svg,.csv,.py,.sql,.kt,.kts,.xml"
                 onChange={handleUploadProjectFiles}
                 className="hidden"
               />

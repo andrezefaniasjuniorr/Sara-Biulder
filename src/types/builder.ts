@@ -124,6 +124,66 @@ export interface PendingVoiceConfirmation {
     | { type: 'destructive_prompt'; prompt: string; source: 'text' | 'voice' };
 }
 
+export type BuilderStackType = 'nextjs-vite-tsx' | 'android-kotlin' | 'hybrid-web-android';
+
+export type BuilderAgentRole = 'ARQUITETA' | 'CONSTRUTORA' | 'DESIGNER' | 'TESTADORA' | 'GESTORA';
+
+export interface BuilderAgentTelemetry {
+  role: BuilderAgentRole;
+  keySlot: number;
+  modelUsed?: string;
+  status: 'idle' | 'working' | 'done' | 'failover';
+}
+
+export type BuilderV2Phase =
+  | 'idle'
+  | 'briefing'
+  | 'awaiting_approval'
+  | 'building_parts'
+  | 'completed';
+
+export interface BuilderProjectPart {
+  id: number;
+  title: string;
+  description: string;
+  targetFiles: string[];
+  status: 'pending' | 'running' | 'done' | 'error';
+  attempts: number;
+}
+
+export interface BuilderProjectContract {
+  projectName: string;
+  stack: BuilderStackType;
+  audience: string;
+  purpose: string;
+  colors: string;
+  designTokens?: Record<string, string>;
+  pages: string[];
+  functions: string[];
+  userFlow?: string[];
+  folderTree: string[];
+  partsQueue: BuilderProjectPart[];
+  currentPartIndex: number;
+  completedParts: string[];
+  phase: BuilderV2Phase;
+  locked: boolean;
+  initialPrompt?: string;
+  updatedAt: string;
+  lastAuditSummary?: string;
+}
+
+export interface BuilderV2DeliveryReport {
+  doneItems: string[];
+  missingItems: string[];
+  createdFiles: string[];
+  testPassed: boolean;
+  testSummary: string;
+  simplifiedNotice?: string;
+  addedDependencies?: string[];
+  hasNextPart: boolean;
+  nextPartTitle?: string;
+}
+
 export interface ChatCodeBlock {
   path: string;
   code: string;
@@ -143,7 +203,7 @@ export interface ChatMessage {
   isGeneratingImage?: boolean;
   attachedFileName?: string;
   timestamp: string;
-  mode?: 'conversation' | 'builder' | 'mission' | 'error-fix' | 'manual-proposal';
+  mode?: 'conversation' | 'builder' | 'mission' | 'error-fix' | 'manual-proposal' | 'contract-proposal' | 'briefing' | 'scope-guard';
   suggestion?: string;
   architectureSummary?: string;
   strategicImprovements?: string[];
@@ -152,6 +212,13 @@ export interface ChatMessage {
   engineLabel?: string;
   errorContext?: string;
   codeBlocks?: ChatCodeBlock[];
+  contractCard?: BuilderProjectContract;
+  deliveryReport?: BuilderV2DeliveryReport;
+  agentTelemetry?: BuilderAgentTelemetry[];
+  scopeDriftPrompt?: {
+    pendingUserRequest: string;
+    summary: string;
+  };
   buildSummary?: {
     elapsedSeconds: number;
     filesCreated: string[];

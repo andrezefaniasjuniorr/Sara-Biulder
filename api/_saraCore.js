@@ -215,8 +215,10 @@ export function parseCoreKeyList(rawValue) {
 export function resolveApiKeys(overrideKey) {
   const overrideList = parseCoreKeyList(overrideKey);
   const envRaw =
+    process.env['VITE-GEMINI-API-KEY'] ||
     process.env.GEMINI_API_KEY ||
     process.env.VITE_GEMINI_API_KEY ||
+    process.env.GEMINI_API_KEYS ||
     process.env.GOOGLE_API_KEY ||
     '';
   const envKeys = parseCoreKeyList(envRaw);
